@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useBranding } from "../context/BrandingContext";
 import { api } from "../api";
 import { navGroups, isNavVisible, type NavGroup } from "../data/navItems";
 
@@ -91,6 +92,7 @@ export interface LayoutState {
 
 export function useLayoutState(): LayoutState {
   const { user, logout, loading } = useAuth();
+  const branding = useBranding();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [firingCount, setFiringCount] = useState(0);
   const [incidentCount, setIncidentCount] = useState(0);
@@ -231,9 +233,11 @@ export function useLayoutState(): LayoutState {
       ...g,
       // Extracted to `navItems.ts` so the command palette can read the same
       // decision instead of having its own (it had none at all).
-      items: g.items.filter(item => isNavVisible(item, user.role)),
+      // The lite flag comes from /api/branding via BrandingContext, so
+      // sidebar and palette narrow by the same value.
+      items: g.items.filter(item => isNavVisible(item, user.role, branding.lite)),
     })).filter(g => g.items.length > 0);
-  }, [user]);
+  }, [user, branding.lite]);
 
   return {
     user: user || { email: "", role: "" },

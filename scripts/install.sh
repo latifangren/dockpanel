@@ -38,8 +38,14 @@ elif command -v dnf &> /dev/null; then
 elif command -v yum &> /dev/null; then
     PKG_INSTALL="yum install -y"
     PKG_UPDATE="yum check-update || true"
+elif command -v apk &> /dev/null; then
+    # Alpine Linux / postmarketOS (DockPanel Lite). --no-cache keeps the
+    # package cache off disk on small devices; the update step is a no-op
+    # with --no-cache installs, so it is kept as a plain refresh here.
+    PKG_INSTALL="apk add --no-cache"
+    PKG_UPDATE="apk update"
 else
-    echo -e "${RED}Error: No supported package manager found (apt/dnf/yum)${NC}"
+    echo -e "${RED}Error: No supported package manager found (apt/dnf/yum/apk)${NC}"
     exit 1
 fi
 

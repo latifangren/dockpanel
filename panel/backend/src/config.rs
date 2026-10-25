@@ -87,6 +87,11 @@ pub struct Config {
     pub db_max_connections: u32,
     pub base_url: String,
     pub cors_origins: Vec<String>,
+    /// DockPanel Lite profile (Alpine / postmarketOS): when the
+    /// DOCKPANEL_LITE env var is "1", /api/branding reports lite:true and
+    /// the frontend hides the hosting menus. A UX profile only — routes
+    /// stay reachable and the backend enforces nothing extra on it.
+    pub lite: bool,
 }
 
 impl Config {
@@ -129,6 +134,9 @@ impl Config {
                 .unwrap_or(20),
             base_url,
             cors_origins,
+            lite: std::env::var("DOCKPANEL_LITE")
+                .map(|v| v == "1")
+                .unwrap_or(false),
         }
     }
 }

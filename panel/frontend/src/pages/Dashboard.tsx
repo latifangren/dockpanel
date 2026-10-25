@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useServer } from "../context/ServerContext";
 import { useAuth } from "../context/AuthContext";
+import { useBranding } from "../context/BrandingContext";
 import { isNavVisible, navFlagsFor } from "../data/navItems";
 import { formatSize, formatRate, formatUptime, timeAgo } from "../utils/format";
 
@@ -275,6 +276,7 @@ export default function Dashboard() {
   // indistinguishable from having no access to their own site. Reported that
   // way on #51, twice, by an operator who was testing a client account.
   const { user } = useAuth();
+  const branding = useBranding();
   const isAdmin = user?.role === "admin";
 
   const [system, setSystem] = useState<SystemInfo | null>(null);
@@ -1489,7 +1491,7 @@ export default function Dashboard() {
                   // whose destination is not for this caller keeps the message
                   // and loses the link.
                   const target = REC_ACTION_ROUTES[rec.action];
-                  const route = target && isNavVisible(navFlagsFor(target), user?.role ?? "") ? target : undefined;
+                  const route = target && isNavVisible(navFlagsFor(target), user?.role ?? "", branding.lite) ? target : undefined;
                   const inner = (
                     <>
                       <div className={`w-2 h-2 rounded-full mt-0.5 flex-shrink-0 ${

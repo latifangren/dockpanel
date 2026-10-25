@@ -6,6 +6,13 @@ export interface Branding {
   accentColor: string;
   hideBranding: boolean;
   oauthProviders: string[];
+  /**
+   * DockPanel Lite profile, from /api/branding's `lite` field (backend
+   * DOCKPANEL_LITE=1). Defaults false so a branding fetch that predates
+   * the field — or any fetch failure — never hides menus by accident.
+   * UX profile only, not a security boundary: routes stay reachable.
+   */
+  lite: boolean;
 }
 
 const defaultBranding: Branding = {
@@ -14,6 +21,7 @@ const defaultBranding: Branding = {
   accentColor: "",
   hideBranding: false,
   oauthProviders: [],
+  lite: false,
 };
 
 const BrandingContext = createContext<Branding>(defaultBranding);
@@ -31,6 +39,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
           accentColor: data.accent_color || "",
           hideBranding: data.hide_branding || false,
           oauthProviders: data.oauth_providers || [],
+          lite: data.lite === true,
         });
       })
       .catch(() => {});

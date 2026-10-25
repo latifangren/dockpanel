@@ -29,33 +29,105 @@ ter-fork, sementara DockPanel menyatakan tidak ada premium tier.
 
 ## Yang diubah (dan yang belum)
 
-**Sudah ada di branch ini (dokumen saja):**
+**Sudah ada di branch ini (M1–M3, belum diuji di HP — lihat batas di bawah):**
 
-- `docs/lite-pmos-blueprint.md` — blueprint lengkap DockPanel Lite
-  (installer apk, service OpenRC, mode lite, katalog template allowlist,
-  anggaran RAM, milestone M0–M5, checklist uji).
-- `FORK.md` (file ini) — pernyataan fork, tujuan, dan daftar dokumen terkait.
+- **M1 — installer apk.** `scripts/install.sh` mendeteksi `apk`
+  (`apk add --no-cache`); `scripts/setup.sh` menambah cabang apk di
+  `detect_pkg_manager` / `pkg_install` / `pkg_update`, melewati EPEL/CRB,
+  memakai nama paket Alpine untuk paket dasar
+  (`curl openssl ca-certificates openssh-client gnupg`), Docker via apk
+  (`docker` + `docker-cli-compose`, `rc-update`/`rc-service` — **tidak
+  pernah** `get.docker.com` di Alpine), Node via apk (`nodejs npm`,
+  hanya untuk `BUILD_FROM_SOURCE=1`; mode release tetap melewati Node),
+  firewall `FW_MGR=none` di Alpine (UFW bukan paket Alpine), SELinux
+  tetap no-op, dan direktori khusus Debian (`/var/lib/dpkg`,
+  `/var/cache/apt`) dijaga di balik cabang apt. Mode lite
+  (`DOCKPANEL_LITE=1`) melewati `install_php` dan layanan host mail/DNS
+  di `install_recommended_services`; `install_php` sendiri juga menolak
+  berjalan di apk dengan pesan jelas. Certbot di apk memakai
+  `certbot certbot-nginx` (bukan nama Debian `python3-certbot-nginx`);
+  timer renewal systemd tidak ada di OpenRC — operator menambahkan
+  entri cron sendiri untuk `certbot renew`.
+- **M2 — OpenRC + nginx Alpine.** Skrip init baru di `scripts/openrc/`
+  untuk `dockpanel-agent` (`need docker net`, `use nginx`, grup socket
+  diperbaiki di `start_post`) dan `dockpanel-api` (`need docker net
+  dockpanel-agent`, env di-`source` dari `/etc/dockpanel/api.env` di
+  `start_pre` karena OpenRC tidak punya EnvironmentFile).
+  `create_services_openrc()` memasang skrip itu + `rc-update add`;
+  `detect_init_system()` memilih systemd bila `/run/systemd/system` +
+  `systemctl` ada, selain itu OpenRC; `create_services()` mendispatch
+  ke keduanya dan jalur systemd lama tidak diubah. `configure_nginx()`
+  mengutamakan `/etc/nginx/http.d/` di Alpine (dan `main()` menghapus
+  `http.d/default.conf`), lalu `sites-enabled`, lalu `conf.d`;
+  fallback grup `www-data` -> `nginx` dipertahankan; `nginx -t` selalu
+  jalan sebelum restart. Postgres tetap container `postgres:16-alpine`,
+  ditambah `--memory=256m --memory-swap=512m` pada mode lite.
+- **M3 — flag lite UI.** Backend: `DOCKPANEL_LITE=1` dibaca di
+  `panel/backend/src/config.rs` (`Config.lite`) dan disalurkan ke
+  frontend sebagai `lite:true` di `GET /api/branding`
+  (`panel/backend/src/routes/settings.rs`, kedua cabang return).
+  `setup.sh` menulis `DOCKPANEL_LITE` ke `/etc/dockpanel/api.env` di
+  kedua jalur (systemd dan OpenRC) supaya backend benar-benar melihatnya.
+  Frontend: `panel/frontend/src/data/navItems.ts` menambah
+  `liteVisible` di `NavItem`; `isNavVisible(item, role, lite)` menyaring
+  dulu pada mode lite (hanya baris berflag yang tampil, lalu aturan role
+  biasa tetap berlaku), sehingga **sidebar (semua layout, lewat
+  `visibleGroups` di `useLayoutState.ts`) dan palette Ctrl+K
+  (`CommandPalette.tsx`)** menyembunyikan item non-lite yang sama —
+  plus tautan rekomendasi di `Dashboard.tsx` yang memakai predikat yang
+  sama. Terlihat di lite: Dashboard, Docker Apps, Databases, Terminal,
+  Monitoring, Backup Manager, Settings, Notifications, dan My Account.
+  Tersembunyi di lite: Sites, WP Toolkit, Git Deploy, Migration,
+  Reseller/Resellers, DNS, CDN, Mail, dan semua baris admin lain yang
+  tidak berflag (Servers, Users, Logs, …). Files tidak punya baris nav
+  (dijangkau lewat route detail site), jadi tidak ada yang disembunyikan
+  — konsisten dengan prinsip di bawah.
 
-**Belum diubah (kode upstream masih utuh):**
+**Lite adalah profil UX, bukan batas keamanan.** Route tetap bisa
+dijangkau langsung lewat URL, dan backend tidak menegakkan apa pun
+berdasarkan flag ini — halaman yang dibuka langsung tetap menjalankan
+otorisasi rolenya sendiri seperti biasa. Jangan mengandalkan lite
+untuk menyembunyikan kemampuan dari operator yang tahu URL-nya.
 
-- Belum ada perubahan ke `scripts/install.sh`, `scripts/setup.sh`,
-  unit systemd, maupun frontend. Jadi branch ini saat ini **belum bisa
-  diinstal di postmarketOS** — itu pekerjaan milestone M1 di blueprint.
-- Jangan menganggap branch ini sudah jadi hanya karena dokumennya ada.
+**Belum diubah / batas yang diketahui (jujur, bukan TODO diam-diam):**
 
-**Rencana modifikasi (dari blueprint, urut):**
+- **Belum diuji di HP maupun di container Alpine.** VM ini tidak punya
+  Docker, jadi tidak ada uji runtime sama sekali; yang terverifikasi
+  hanya `bash -n` semua skrip, `tsc --strict` + uji logika filter untuk
+  `navItems.ts`, dan pemeriksaan nama paket lewat referensi Alpine
+  (lihat catatan nama paket di bawah). Jangan klaim instalasi Alpine
+  sudah jalan sebelum uji perangkat M0 selesai.
+- Dashboard seksi "Aplikasi saya" dan field allowlist template
+  (milestone berikutnya) **sengaja belum dikerjakan** supaya kiriman
+  M1–M3 tetap bisa direview.
+- **Agent tidak mengenal apk.** `panel/agent/src/services/pkg.rs`
+  hanya tahu dpkg/rpm; di Alpine, halaman Services panel akan
+  melaporkan paket sebagai tidak terinstal (Unknown) meskipun sudah
+  terinstal. Ini di luar M1–M3 dan perlu patch agent tersendiri.
+- **OpenRC tidak punya padanan MemoryMax.** Unit systemd API membatasi
+  1G; skrip OpenRC tidak memasang batas memori apa pun (tidak ada
+  `ulimit -v` palsu — itu bukan padanan cgroup dan bisa merusak Rust).
+  Cerita memori lite di OpenRC saat ini hanya cap container Postgres.
+- **Nama paket yang belum terverifikasi langsung ke indeks Alpine:**
+  `sshpass` (dipakai best-effort — gagal instal hanya memberi warning,
+  SFTP password-auth tidak jalan, key auth tidak terpengaruh),
+  `fail2ban`, dan nama paket build-source apk (`build-base cmake
+  openssl-dev pkgconf`). Nama yang sudah terverifikasi lewat referensi
+  Alpine: `docker`, `docker-cli-compose`, `nginx`, `certbot`,
+  `certbot-nginx`, `nodejs`, `npm`, `curl`, `openssl`,
+  `ca-certificates`, `openssh-client`, `gnupg`.
+- `/account` (My Account) sengaja **tetap terlihat** di lite meskipun
+  tidak ada di daftar lite-visible blueprint: itu satu-satunya pintu
+  untuk ganti password/2FA/passkey, dan banner 2FA menunjuk ke sana.
+  Menyembunyikannya akan merusak akses akun non-admin.
 
-1. Installer: cabang `apk` di `scripts/install.sh` + `scripts/setup.sh`
-   (saat ini hanya apt/dnf/yum).
-2. Service: skrip OpenRC untuk `dockpanel-agent` dan `dockpanel-api`
-   (saat ini hanya unit systemd), plus deteksi init systemd vs OpenRC.
-3. Nginx Alpine: deteksi direktori `http.d` dan grup `nginx`.
-4. Mode lite: flag `DOCKPANEL_LITE=1` + `liteVisible` di
-   `panel/frontend/src/data/navItems.ts`; sembunyikan Sites, Mail, DNS,
-   Reseller, WP Toolkit, dan menu hosting berat lainnya dari nav.
-5. Dashboard: seksi "Aplikasi saya" di `panel/frontend/src/pages/Dashboard.tsx`.
-6. Katalog: field `lite` di `panel/agent/src/services/docker_apps.rs`
+**Rencana modifikasi berikutnya (dari blueprint, urut):**
+
+1. Dashboard: seksi "Aplikasi saya" di `panel/frontend/src/pages/Dashboard.tsx`.
+2. Katalog: field `lite` di `panel/agent/src/services/docker_apps.rs`
    + allowlist template arm64 yang sudah lolos uji.
+3. Patch agent `pkg.rs` untuk apk (lihat batas di atas).
+4. Uji perangkat M0 + instalasi lite penuh di HP target.
 
 **Yang sengaja TIDAK diubah:**
 
@@ -85,9 +157,9 @@ untuk fork ini adalah blueprint lite.
   postmarketOS-systemd opsional belakangan.
 - Arsitektur: `aarch64` saja. `armv7` 32-bit tidak didukung binary upstream.
 - RAM: 4 GB+. Panel + OS ditargetkan ~450–650 MB idle, sisanya untuk aplikasi.
-- Docker harus sudah bisa jalan di perangkat (`apk add docker
-  docker-cli-compose`, `rc-service docker start`) sebelum installer lite
-  dijalankan.
+- Docker diinstal installer lite bila belum ada (`apk add docker
+  docker-cli-compose`, `rc-service docker start`); bila sudah jalan,
+  installer memakainya apa adanya.
 
 ## Sync dengan upstream
 

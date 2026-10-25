@@ -43,6 +43,15 @@ PANEL_SSL_OK=0
 # Which firewall this box is enforcing with: firewalld | ufw | none.
 # Resolved by detect_firewall in main().
 FW_MGR="none"
+# DockPanel Lite (Alpine / postmarketOS profile): 1 skips host PHP and
+# host mail/DNS services in install_recommended_services and caps the
+# Postgres container's memory in setup_database. It is a UX/resource
+# profile, not a security boundary — see FORK.md. The frontend flag is
+# driven by the same env var in the backend (panel/backend config.rs).
+DOCKPANEL_LITE="${DOCKPANEL_LITE:-0}"
+# Init system this box boots with: systemd | openrc. Resolved by
+# detect_init_system in main(); create_services dispatches on it.
+INIT_SYSTEM="systemd"
 
 # ── Resolve repo root ───────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -318,8 +327,13 @@ APT_EOF
         PKG_MGR="dnf"
     elif command -v yum &> /dev/null; then
         PKG_MGR="yum"
+    elif command -v apk &> /dev/null; then
+        # Alpine Linux / postmarketOS (DockPanel Lite). No EPEL/CRB
+        # equivalent exists here, and none is needed: docker, nginx and
+        # certbot all live in Alpine main/community.
+        PKG_MGR="apk"
     else
-        error "No supported package manager found (apt/dnf/yum)"
+        error "No supported package manager found (apt/dnf/yum/apk)"
         exit 1
     fi
 }
@@ -332,6 +346,7 @@ pkg_install() {
         apt) apt-get install -y "$@" ;;
         dnf) dnf install -y "$@" ;;
         yum) yum install -y "$@" ;;
+        apk) apk add --no-cache "$@" ;;
     esac
 }
 
@@ -340,7 +355,26 @@ pkg_update() {
         apt) apt-get update -y ;;
         dnf) dnf check-update || true ;;
         yum) yum check-update || true ;;
+        apk) apk update ;;
     esac
+}
+
+# systemd if the box actually booted under it (the directory only exists
+# under a systemd PID 1, and systemctl must exist to drive it); anything
+# else with OpenRC tooling is treated as OpenRC. A container that has
+# neither falls through to the error below — the installer is not
+# supported inside a container, so that case must fail loudly rather
+# than silently installing services no init will ever start.
+detect_init_system() {
+    if [ -d /run/systemd/system ] && command -v systemctl &> /dev/null; then
+        INIT_SYSTEM="systemd"
+    elif command -v rc-update &> /dev/null || command -v rc-service &> /dev/null; then
+        INIT_SYSTEM="openrc"
+    else
+        error "No supported init system found (systemd or OpenRC)"
+        exit 1
+    fi
+    log "Init system: $INIT_SYSTEM"
 }
 
 # ── Firewall ─────────────────────────────────────────────────────────────
@@ -350,6 +384,14 @@ pkg_update() {
 # images ship firewalld running -> we use it. Never both (see the s265 note
 # in install_recommended_services).
 detect_firewall() {
+    if [ "$PKG_MGR" = "apk" ]; then
+        # Alpine / postmarketOS: no firewalld, and UFW is not an Alpine
+        # package. The panel must not try to install one (see the
+        # install_recommended_services guard); the operator manages
+        # nftables/iptables directly if they want a firewall.
+        FW_MGR="none"
+        return
+    fi
     if command -v firewall-cmd &> /dev/null && firewall-cmd --state &> /dev/null; then
         FW_MGR="firewalld"
     elif command -v ufw &> /dev/null; then
@@ -529,7 +571,9 @@ install_dependencies() {
     # installer died on "nothing provides …" — while a name-availability probe
     # said all four packages were available, which is how the product came to
     # claim the packages resolved here.
-    if [ "$PKG_MGR" != "apt" ]; then
+    # Alpine has no EPEL/CRB at all — its main/community repos already carry
+    # docker, nginx and certbot — so the apk branch skips this block entirely.
+    if [ "$PKG_MGR" != "apt" ] && [ "$PKG_MGR" != "apk" ]; then
         run "Enabling EPEL repository" pkg_install epel-release || true
         # The repo id is `crb` on EL9+/Rocky/Alma and `powertools` on EL8.
         # Try both; neither existing is not fatal on its own.
@@ -551,6 +595,12 @@ install_dependencies() {
         # gnupg + lsb-release only exist/matter on Debian-based
         run "Installing base packages (${BASE_PKGS}, gnupg, lsb-release)" \
             pkg_install curl openssl ca-certificates openssh-client gnupg lsb-release
+    elif [ "$PKG_MGR" = "apk" ]; then
+        # Alpine uses the same names as apt here (openssh-client, singular;
+        # gnupg is in main). lsb-release does not exist on Alpine and the
+        # panel does not need it there.
+        run "Installing base packages (${BASE_PKGS}, gnupg)" \
+            pkg_install curl openssl ca-certificates openssh-client gnupg
     else
         # RHEL-family names the ssh client package openssh-clients (plural).
         run "Installing base packages (${BASE_PKGS})" \
@@ -578,6 +628,14 @@ install_dependencies() {
         if [ "$PKG_MGR" = "apt" ]; then
             run "Installing build tools (build-essential, cmake, pkg-config, libssl-dev)" \
                 pkg_install build-essential cmake pkg-config libssl-dev
+        elif [ "$PKG_MGR" = "apk" ]; then
+            # Alpine: build-base is the gcc/g++/make/libc-dev meta-package;
+            # openssl-dev is the -dev split of openssl, pkgconf provides
+            # pkg-config. (Source builds on a 3.5 GiB phone are not the
+            # Lite path — release binaries are — but the branch must at
+            # least name real Alpine packages if BUILD_FROM_SOURCE=1.)
+            run "Installing build tools (build-base, cmake, openssl-dev, pkgconf)" \
+                pkg_install build-base cmake openssl-dev pkgconf
         else
             run "Installing build tools (gcc, cmake, make, pkg-config, openssl-devel)" \
                 pkg_install gcc gcc-c++ cmake make pkg-config openssl-devel
@@ -617,6 +675,22 @@ install_docker() {
 
     if command -v docker &> /dev/null; then
         log "Docker already installed: $(docker --version | head -1)"
+    elif [ "$PKG_MGR" = "apk" ]; then
+        # Alpine / postmarketOS: NEVER get.docker.com here — that script
+        # detects Alpine as an unsupported distro and aborts. Alpine ships
+        # Docker itself (community: docker, docker-cli-compose since 3.15),
+        # started via OpenRC, not systemd.
+        run "Installing Docker (apk: docker, docker-cli-compose)" \
+            pkg_install docker docker-cli-compose
+        if command -v rc-update &> /dev/null; then
+            rc-update add docker default > /dev/null 2>&1 || true
+            rc-service docker start > /dev/null 2>&1 || true
+        fi
+        if ! command -v docker &> /dev/null; then
+            error "Docker installation failed — see $INSTALL_LOG"
+            exit 1
+        fi
+        log "Docker installed: $(docker --version | head -1)"
     else
         local DOCKER_OS_ID=""
         [ -f /etc/os-release ] && DOCKER_OS_ID=$(. /etc/os-release && echo "${ID:-}")
@@ -657,7 +731,14 @@ install_nginx() {
         log "Nginx already installed"
     else
         run "Installing Nginx" pkg_install nginx
-        systemctl enable --now nginx > /dev/null 2>&1
+        if [ "$INIT_SYSTEM" = "openrc" ]; then
+            if command -v rc-update &> /dev/null; then
+                rc-update add nginx default > /dev/null 2>&1 || true
+                rc-service nginx start > /dev/null 2>&1 || true
+            fi
+        else
+            systemctl enable --now nginx > /dev/null 2>&1
+        fi
         if ! command -v nginx &> /dev/null; then
             error "Nginx installation failed — see $INSTALL_LOG"
             exit 1
@@ -688,6 +769,13 @@ install_node() {
         if [ "$PKG_MGR" = "apt" ]; then
             run "Installing Node.js 20 LTS (nodesource)" \
                 bash -c 'set -o pipefail; curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs'
+        elif [ "$PKG_MGR" = "apk" ]; then
+            # Alpine: no nodesource script exists for musl. Use the distro
+            # Node LTS + npm from main (apk add nodejs npm). This branch
+            # only runs for BUILD_FROM_SOURCE=1; release installs skip
+            # Node entirely (frontend arrives as a tarball).
+            run "Installing Node.js LTS (apk: nodejs, npm)" \
+                pkg_install nodejs npm
         else
             run "Installing Node.js 20 LTS (nodesource)" \
                 bash -c "set -o pipefail; curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - && $PKG_MGR install -y nodejs"
@@ -710,8 +798,12 @@ create_directories() {
     mkdir -p /var/backups/dockpanel
     mkdir -p /var/www/acme
 
-    # Ensure socket directory persists across tmpfiles cleanup/reboot
-    echo "d /run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
+    # Ensure socket directory persists across tmpfiles cleanup/reboot.
+    # tmpfiles is a systemd concept; on OpenRC the /run tree is recreated
+    # by the init script's start_pre instead, so this file is systemd-only.
+    if [ "$INIT_SYSTEM" != "openrc" ]; then
+        echo "d /run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
+    fi
 
     # Create all directories required by the agent unit's ReadWritePaths, DERIVED
     # FROM THE UNIT rather than hand-mirrored here.
@@ -734,7 +826,13 @@ create_directories() {
     _rwp="$(agent_rwp_dirs)"
     [ -n "$_rwp" ] && mkdir -p $_rwp
     # Paths the agent reaches through an escape hatch or that are not RWP entries.
-    mkdir -p /run/opendkim /var/lib/nginx /var/lib/dpkg /var/cache/apt /var/lib/apt
+    # The dpkg/apt paths are Debian-only: creating them on Alpine would
+    # leave distro-shaped litter and, worse, make later code believe an
+    # apt database exists. They stay behind the apt branch.
+    if [ "$PKG_MGR" = "apt" ]; then
+        mkdir -p /var/lib/dpkg /var/cache/apt /var/lib/apt
+    fi
+    mkdir -p /run/opendkim /var/lib/nginx
     mkdir -p /var/lib/dockpanel/git /var/lib/dockpanel/recordings /var/cache/nginx/fastcgi
     touch /etc/opendkim.conf /run/nginx.pid 2>/dev/null || true
 
@@ -795,11 +893,20 @@ setup_database() {
 
         # POSTGRES_PASSWORD is passed via the environment (bare `-e` inherits),
         # so the secret never appears in the logged command line.
+        # Lite mode caps the container: a 3.5 GiB phone cannot give
+        # Postgres an unbounded cgroup, and the panel itself is capped
+        # separately by its own unit (MemoryMax=1G systemd / openrc).
+        local pg_mem_args=()
+        if [ "$DOCKPANEL_LITE" = "1" ]; then
+            pg_mem_args=(--memory=256m --memory-swap=512m)
+            log "Lite mode: capping PostgreSQL container at 256 MiB RAM / 512 MiB swap"
+        fi
         POSTGRES_PASSWORD="$DB_PASSWORD" \
         run "Creating PostgreSQL 16 container (pulls the image on first install)" \
             docker run -d \
             --name "$DB_CONTAINER" \
             --restart unless-stopped \
+            "${pg_mem_args[@]}" \
             -e POSTGRES_DB=dockpanel \
             -e POSTGRES_USER=dockpanel \
             -e POSTGRES_PASSWORD \
@@ -1197,7 +1304,9 @@ build_frontend() {
 }
 
 # ── Systemd Services ─────────────────────────────────────────────────────
-create_services() {
+# The systemd path is untouched by the OpenRC work below; create_services()
+# dispatches to this or to create_services_openrc() on INIT_SYSTEM.
+create_services_systemd() {
     header "Systemd Services"
 
     # Agent service — deploy from repo (single source of truth: panel/agent/dockpanel-agent.service)
@@ -1258,6 +1367,7 @@ AGENT_SOCKET=/var/run/dockpanel/agent.sock
 AGENT_TOKEN=${AGENT_TOKEN}
 LISTEN_ADDR=127.0.0.1:3080
 BASE_URL=${API_BASE_URL}
+DOCKPANEL_LITE=${DOCKPANEL_LITE}
 EOF
     chmod 600 "$CONFIG_DIR/api.env"
 
@@ -1285,6 +1395,81 @@ EOF
         error "API failed to start"
         journalctl -u dockpanel-api --no-pager -n 10
         exit 1
+    fi
+}
+
+# ── OpenRC Services (Alpine / postmarketOS) ──────────────────────────────
+# OpenRC has no EnvironmentFile, no ReadWritePaths sandboxing and no
+# MemoryMax; the init scripts in scripts/openrc/ carry the equivalents
+# (start_pre sourcing api.env, checkpath dirs, ulimit). The MCP server is
+# NOT installed here either — same reason as on systemd (no key minted
+# yet); `rc-update add dockpanel-mcp` is the documented manual step once
+# an operator has saved a key to /etc/dockpanel/mcp.token.
+create_services_openrc() {
+    header "OpenRC Services"
+
+    if ! command -v rc-update &> /dev/null; then
+        error "OpenRC selected but rc-update is missing — not an OpenRC box"
+        exit 1
+    fi
+
+    # API environment — same file, same format as the systemd path writes
+    # (BASE_URL from domain, empty for IP access), because the API binary
+    # itself reads nothing else. Written here, not in the init script,
+    # so re-running the installer rotates secrets without touching the
+    # script the operator may have edited.
+    local API_BASE_URL=""
+    if [ -n "$PANEL_DOMAIN" ]; then
+        API_BASE_URL="https://${PANEL_DOMAIN}"
+    fi
+
+    cat > "$CONFIG_DIR/api.env" << EOF
+DATABASE_URL=postgres://dockpanel:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/dockpanel
+JWT_SECRET=${JWT_SECRET}
+AGENT_SOCKET=/var/run/dockpanel/agent.sock
+AGENT_TOKEN=${AGENT_TOKEN}
+LISTEN_ADDR=127.0.0.1:3080
+BASE_URL=${API_BASE_URL}
+DOCKPANEL_LITE=${DOCKPANEL_LITE}
+EOF
+    chmod 600 "$CONFIG_DIR/api.env"
+
+    # Agent init script — deploy from repo (single source of truth:
+    # scripts/openrc/dockpanel-agent, mirroring panel/agent/dockpanel-agent.service)
+    cp "$SCRIPT_DIR/openrc/dockpanel-agent" /etc/init.d/dockpanel-agent
+    chmod 755 /etc/init.d/dockpanel-agent
+    cp "$SCRIPT_DIR/openrc/dockpanel-api" /etc/init.d/dockpanel-api
+    chmod 755 /etc/init.d/dockpanel-api
+
+    rc-update add dockpanel-agent default > /dev/null 2>&1 || true
+    rc-update add dockpanel-api default > /dev/null 2>&1 || true
+
+    # Start agent, then API (the API init script `need`s the agent).
+    rc-service dockpanel-agent restart > /dev/null 2>&1 || rc-service dockpanel-agent start > /dev/null 2>&1
+    sleep 2
+    if rc-service dockpanel-agent status > /dev/null 2>&1; then
+        log "Agent service running"
+    else
+        error "Agent failed to start — see /var/log/dockpanel-agent.log"
+        exit 1
+    fi
+
+    rc-service dockpanel-api restart > /dev/null 2>&1 || rc-service dockpanel-api start > /dev/null 2>&1
+    sleep 2
+    if rc-service dockpanel-api status > /dev/null 2>&1; then
+        log "API service running"
+    else
+        error "API failed to start — see /var/log/dockpanel-api.log"
+        exit 1
+    fi
+}
+
+# Dispatcher: main() calls this, never the backend-specific functions.
+create_services() {
+    if [ "$INIT_SYSTEM" = "openrc" ]; then
+        create_services_openrc
+    else
+        create_services_systemd
     fi
 }
 
@@ -1360,8 +1545,12 @@ configure_nginx() {
         NGINX_GROUP="root"
     fi
 
-    # Determine config directory
-    if [ -d /etc/nginx/sites-enabled ]; then
+    # Determine config directory. Alpine ships nginx with http.d/ as the
+    # only included vhost directory, so it wins there; sites-enabled
+    # (Debian) and conf.d (RHEL) keep their existing order after it.
+    if [ -d /etc/nginx/http.d ]; then
+        NGINX_CONF="/etc/nginx/http.d/dockpanel-panel.conf"
+    elif [ -d /etc/nginx/sites-enabled ]; then
         NGINX_CONF="/etc/nginx/sites-enabled/dockpanel-panel.conf"
     elif [ -d /etc/nginx/conf.d ]; then
         NGINX_CONF="/etc/nginx/conf.d/dockpanel-panel.conf"
@@ -1578,9 +1767,15 @@ ${PANEL_TLS_BLOCK}
 }
 NGINXEOF
 
-    # Test and restart (full restart needed to release port bindings from removed default site)
+    # Test and restart (full restart needed to release port bindings from removed default site).
+    # nginx -t runs BEFORE any restart on every path — a bad vhost must never
+    # take a working nginx down with it.
     if nginx -t > /dev/null 2>&1; then
-        systemctl restart nginx
+        if [ "$INIT_SYSTEM" = "openrc" ]; then
+            rc-service nginx restart > /dev/null 2>&1 || true
+        else
+            systemctl restart nginx
+        fi
         log "Nginx configured — panel on port $PANEL_PORT"
     else
         error "Nginx config test failed"
@@ -1649,6 +1844,15 @@ install_php() {
     if command -v php &> /dev/null; then
         log "PHP already installed: $(php -v | head -1 | awk '{print $2}')"
         svc_ok "PHP $(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null) (FPM)"
+        return
+    fi
+
+    # Alpine: host PHP is out of scope for the Lite profile (PHP apps run
+    # as containers there). The apt/RHEL branches below name packages that
+    # do not exist on Alpine, so refuse loudly instead of letting the
+    # RHEL branch run dnf-shaped logic against apk.
+    if [ "$PKG_MGR" = "apk" ]; then
+        warn "Host PHP is not installed on Alpine — run PHP apps as Docker containers instead"
         return
     fi
 
@@ -1761,12 +1965,33 @@ install_php() {
 install_recommended_services() {
     header "Recommended Services"
 
-    # PHP-FPM (needed for WordPress, PHP sites)
-    install_php
+    # Lite mode skips host PHP and host mail/DNS services: on a phone
+    # those are exactly the heavyweight hosting pieces the Lite profile
+    # drops (WordPress/PHP sites, mail, DNS). The panel's Docker Apps,
+    # Databases and Backups paths do not need them. Non-lite installs
+    # are unchanged.
+    if [ "$DOCKPANEL_LITE" = "1" ]; then
+        log "Lite mode: skipping host PHP and host mail/DNS services"
+    else
+        # PHP-FPM (needed for WordPress, PHP sites)
+        install_php
+    fi
 
     # Certbot (needed for SSL certificates)
     if ! command -v certbot &> /dev/null; then
-        if run "Installing Certbot" pkg_install certbot python3-certbot-nginx; then
+        # Alpine names its nginx plugin certbot-nginx, not
+        # python3-certbot-nginx (that is the Debian name and does not
+        # exist in Alpine). Renewal: certbot.timer is systemd-only; on
+        # OpenRC the operator adds a cron entry (documented in FORK.md).
+        if [ "$PKG_MGR" = "apk" ]; then
+            if run "Installing Certbot" pkg_install certbot certbot-nginx; then
+                log "Certbot installed (Alpine: certbot certbot-nginx; add a cron renewal entry manually)"
+                svc_ok "Certbot"
+            else
+                warn "Certbot failed to install — SSL provisioning will not work until it is"
+                svc_fail "Certbot"
+            fi
+        elif run "Installing Certbot" pkg_install certbot python3-certbot-nginx; then
             systemctl enable --now certbot.timer > /dev/null 2>&1
             log "Certbot installed with auto-renewal"
             svc_ok "Certbot"
@@ -1799,7 +2024,12 @@ install_recommended_services() {
             svc_ok "UFW"
             ;;
         none)
-            if run "Installing UFW firewall" pkg_install ufw; then
+            # Alpine has no UFW package and detect_firewall already
+            # returns none there by design — never try to install one.
+            if [ "$PKG_MGR" = "apk" ]; then
+                log "Alpine: no OS firewall installed by the panel (manage nftables directly if wanted)"
+                svc_ok "firewall (none)"
+            elif run "Installing UFW firewall" pkg_install ufw; then
                 ufw default deny incoming > /dev/null 2>&1
                 ufw default allow outgoing > /dev/null 2>&1
                 ufw allow 22/tcp > /dev/null 2>&1
@@ -1846,7 +2076,12 @@ enabled = true
 [nginx-limit-req]
 enabled = true
 F2BEOF
-            systemctl enable --now fail2ban > /dev/null 2>&1
+            if [ "$INIT_SYSTEM" = "openrc" ]; then
+                rc-update add fail2ban default > /dev/null 2>&1 || true
+                rc-service fail2ban start > /dev/null 2>&1 || true
+            else
+                systemctl enable --now fail2ban > /dev/null 2>&1
+            fi
             log "Fail2Ban installed with SSH + Nginx jails"
             svc_ok "Fail2Ban"
         else
@@ -1900,7 +2135,11 @@ normalize_panel_listen() {
     # <ip>:443 — nginx inherits the old socket and the change silently
     # no-ops, leaving a config on disk that disagrees with what is running.
     # Only a restart rebinds.
-    systemctl restart nginx > /dev/null 2>&1 || true
+    if [ "$INIT_SYSTEM" = "openrc" ]; then
+        rc-service nginx restart > /dev/null 2>&1 || true
+    else
+        systemctl restart nginx > /dev/null 2>&1 || true
+    fi
 
     # Trust the socket, not the restart's exit code.
     if command -v ss > /dev/null 2>&1 && ! ss -ltn "( sport = :443 )" 2>/dev/null | grep -c "${bind_ip}:443" >/dev/null; then
@@ -2118,6 +2357,7 @@ main() {
 
     detect_pkg_manager
     detect_firewall
+    detect_init_system
 
     # Auto-detect: if no source available, use release binaries
     if [ "$INSTALL_FROM_RELEASE" != "1" ] && [ ! -d "$AGENT_SRC/src" ]; then
@@ -2186,6 +2426,12 @@ main() {
     if [ -f /etc/nginx/sites-enabled/default ]; then
         rm -f /etc/nginx/sites-enabled/default
     fi
+    # Alpine: the default server block lives in http.d/default.conf, not
+    # sites-enabled. Same conflict, same removal — configure_nginx writes
+    # the panel vhost into http.d/ on this platform.
+    if [ -f /etc/nginx/http.d/default.conf ]; then
+        rm -f /etc/nginx/http.d/default.conf
+    fi
     # RHEL: comment out the default server block in nginx.conf, which binds :80
     # and would fight the panel vhost.
     #
@@ -2225,8 +2471,13 @@ main() {
     sleep 3
 
     # Start services (may already be started by create_services)
-    systemctl start dockpanel-agent 2>/dev/null
-    systemctl start dockpanel-api 2>/dev/null
+    if [ "$INIT_SYSTEM" = "openrc" ]; then
+        rc-service dockpanel-agent start 2>/dev/null || true
+        rc-service dockpanel-api start 2>/dev/null || true
+    else
+        systemctl start dockpanel-agent 2>/dev/null
+        systemctl start dockpanel-api 2>/dev/null
+    fi
     sleep 2
 
     install_recommended_services

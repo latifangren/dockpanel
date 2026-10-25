@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useBranding } from "../context/BrandingContext";
 import { isNavVisible, navFlagsFor } from "../data/navItems";
 
 interface Command {
@@ -18,6 +19,7 @@ interface Command {
 
 export default function CommandPalette() {
   const { user } = useAuth();
+  const branding = useBranding();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -76,9 +78,9 @@ export default function CommandPalette() {
   // nav row (none today) is treated as unrestricted — this is a menu, and every
   // destination still enforces its own access on arrival.
   const allowed = useMemo(
-    () => commands.filter((c) => isNavVisible(navFlagsFor(c.path), user?.role ?? "")),
+    () => commands.filter((c) => isNavVisible(navFlagsFor(c.path), user?.role ?? "", branding.lite)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [user?.role],
+    [user?.role, branding.lite],
   );
 
   const filtered = query

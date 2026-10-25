@@ -650,6 +650,10 @@ pub async fn branding(
                         "accent_color": accent.unwrap_or(global_accent),
                         "hide_branding": hide,
                         "oauth_providers": oauth_providers,
+                        // Lite profile flag (DOCKPANEL_LITE=1 in the API
+                        // env): the frontend hides hosting menus when
+                        // true. UX profile only, not a security boundary.
+                        "lite": state.config.lite,
                     })));
                 }
             }
@@ -678,6 +682,8 @@ pub async fn branding(
         "accent_color": global_accent,
         "hide_branding": global_hide,
         "oauth_providers": oauth_providers,
+        // Lite profile flag — see the reseller branch above.
+        "lite": state.config.lite,
     })))
 }
 

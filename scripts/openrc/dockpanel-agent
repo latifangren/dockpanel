@@ -1,0 +1,58 @@
+#!/sbin/openrc-run
+# DockPanel agent — OpenRC init script (Alpine / postmarketOS, Lite profile).
+# Mirrors panel/agent/dockpanel-agent.service (the systemd unit is the
+# single source of truth for flags and paths; keep the two in sync).
+#
+# OpenRC differences, stated rather than papered over:
+#   * No ReadWritePaths sandboxing: OpenRC cannot namespace-mount the
+#     agent, so the agent runs unsandboxed, as root, like any OpenRC
+#     service. The directories setup.sh creates still apply.
+#   * No MemoryMax: there is no cgroup limit here. The Lite memory story
+#     on OpenRC is the Postgres container cap in setup.sh, not this unit.
+#   * Socket group: the systemd unit's ExecStartPost chgrp is reproduced
+#     in start_post below (nginx group on Alpine, www-data fallback).
+
+name="dockpanel-agent"
+description="DockPanel agent (Docker, services, terminal)"
+
+# need = hard ordering + start order; use = soft (nginx may start later,
+# the agent only needs the socket dir, not a running nginx, to boot).
+need docker net
+use nginx
+
+command="/usr/local/bin/dockpanel-agent"
+command_args=""
+supervisor="supervise-daemon"
+output_log="/var/log/dockpanel-agent.log"
+error_log="/var/log/dockpanel-agent.log"
+pidfile="/run/dockpanel-agent.pid"
+
+depend() {
+    need docker net
+    use nginx
+}
+
+start_pre() {
+    checkpath -d -m 0755 /var/run/dockpanel
+    checkpath -f -m 0644 /var/log/dockpanel-agent.log
+}
+
+start_post() {
+    # The agent creates /var/run/dockpanel/agent.sock root:root; nginx
+    # (running as group nginx on Alpine) must be able to read/write it
+    # for the /agent/* proxy in the panel vhost. Wait for the socket,
+    # then fix its group — same effect as the unit's ExecStartPost.
+    local i sock="/var/run/dockpanel/agent.sock"
+    for i in $(seq 1 20); do
+        [ -S "$sock" ] && break
+        sleep 0.5
+    done
+    if [ -S "$sock" ]; then
+        if getent group nginx >/dev/null 2>&1; then
+            chgrp nginx "$sock" 2>/dev/null || true
+        elif getent group www-data >/dev/null 2>&1; then
+            chgrp www-data "$sock" 2>/dev/null || true
+        fi
+        chmod 660 "$sock" 2>/dev/null || true
+    fi
+}

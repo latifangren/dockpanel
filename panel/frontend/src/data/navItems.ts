@@ -18,6 +18,20 @@ export interface NavItem {
    * behaviour we want.
    */
   resellerOnly?: boolean;
+  /**
+   * Shown in DockPanel Lite mode (backend `DOCKPANEL_LITE=1` surfaces as
+   * `lite:true` on /api/branding). Lite is an opt-in set: in lite mode
+   * ONLY rows carrying this flag are shown, everything else is hidden
+   * from both menus — the task list is the visible set (Dashboard,
+   * Docker Apps, Databases, Terminal, Monitoring, Backup Manager,
+   * Settings, Notifications), plus /account, which stays because it is
+   * the only door to password/2FA/passkey management and the 2FA banner
+   * points at it. Absence means "hidden in lite", not "undecided".
+   *
+   * Lite is a UX profile, NOT a security boundary: routes stay directly
+   * reachable and the backend enforces nothing on this flag (see FORK.md).
+   */
+  liteVisible?: boolean;
 }
 
 export interface NavGroup {
@@ -37,9 +51,16 @@ export interface NavGroup {
  * 403s. A decision inlined in two menus is a decision that drifts.
  */
 export function isNavVisible(
-  item: Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly">,
+  item: Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly" | "liteVisible">,
   role: string,
+  lite = false,
 ): boolean {
+  // Lite narrows FIRST: in lite mode a row without the flag is hidden
+  // for every role, before any role branch can re-admit it (an admin
+  // "sees everything" must not resurrect Sites or Mail in lite mode).
+  // Rows WITH the flag still go through the role logic below, so an
+  // adminOnly lite row (Docker Apps, Settings) stays admin-only.
+  if (lite && !item.liteVisible) return false;
   // Ahead of the admin branch, because it is the one kind of row "admin sees
   // everything" gets wrong: a tenant-scoped page has nothing to show an account
   // that is not a tenant, and the handler behind it says so with a 403.
@@ -59,7 +80,7 @@ export function isNavVisible(
  */
 export function navFlagsFor(
   path: string,
-): Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly"> {
+): Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly" | "liteVisible"> {
   const base = path.split("?")[0];
   for (const group of navGroups) {
     for (const item of group.items) {
@@ -74,11 +95,11 @@ export const navGroups: NavGroup[] = [
     key: "hosting",
     label: "Hosting",
     items: [
-      { to: "/", label: "Dashboard", iconName: "dashboard" },
+      { to: "/", label: "Dashboard", iconName: "dashboard", liteVisible: true },
       { to: "/sites", label: "Sites", iconName: "sites" },
-      { to: "/databases", label: "Databases", iconName: "databases" },
+      { to: "/databases", label: "Databases", iconName: "databases", liteVisible: true },
       { to: "/wordpress-toolkit", label: "WP Toolkit", iconName: "wordpress", adminOnly: true },
-      { to: "/apps", label: "Docker Apps", iconName: "apps", adminOnly: true },
+      { to: "/apps", label: "Docker Apps", iconName: "apps", adminOnly: true, liteVisible: true },
       { to: "/git-deploys", label: "Git Deploy", iconName: "gitDeploys", adminOnly: true },
       { to: "/migration", label: "Migration", iconName: "migration", adminOnly: true },
     ],
@@ -114,11 +135,11 @@ export const navGroups: NavGroup[] = [
       // this row to any single role would contradict the API in one direction
       // or the other. What the page SHOWS is decided in Mail.tsx, per caller.
       { to: "/mail", label: "Mail", iconName: "mail" },
-      { to: "/backup-orchestrator", label: "Backup Manager", iconName: "backups", adminOnly: true },
-      { to: "/monitoring", label: "Monitoring", iconName: "monitoring" },
-      { to: "/notifications", label: "Notifications", iconName: "notifications" },
+      { to: "/backup-orchestrator", label: "Backup Manager", iconName: "backups", adminOnly: true, liteVisible: true },
+      { to: "/monitoring", label: "Monitoring", iconName: "monitoring", liteVisible: true },
+      { to: "/notifications", label: "Notifications", iconName: "notifications", liteVisible: true },
       { to: "/logs", label: "Logs", iconName: "logs", adminOnly: true },
-      { to: "/terminal", label: "Terminal", iconName: "terminal" },
+      { to: "/terminal", label: "Terminal", iconName: "terminal", liteVisible: true },
     ],
   },
   {
@@ -133,7 +154,7 @@ export const navGroups: NavGroup[] = [
       { to: "/security", label: "Security", iconName: "security", adminOnly: true },
       { to: "/system", label: "System", iconName: "servers", adminOnly: true },
       { to: "/telemetry", label: "Telemetry", iconName: "monitoring", adminOnly: true },
-      { to: "/settings", label: "Settings", iconName: "settings", adminOnly: true },
+      { to: "/settings", label: "Settings", iconName: "settings", adminOnly: true, liteVisible: true },
     ],
   },
   {
@@ -145,7 +166,7 @@ export const navGroups: NavGroup[] = [
       // behind the `adminOnly` /settings row above, so a client had no door to
       // its own account at all. Never mark this `adminOnly` — the 2FA banner in
       // all four layouts points here, and a non-admin is exactly who it warns.
-      { to: "/account", label: "My Account", iconName: "settings" },
+      { to: "/account", label: "My Account", iconName: "settings", liteVisible: true },
     ],
   },
 ];

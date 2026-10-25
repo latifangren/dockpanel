@@ -1,0 +1,46 @@
+#!/sbin/openrc-run
+# DockPanel API — OpenRC init script (Alpine / postmarketOS, Lite profile).
+# Mirrors the API unit setup.sh writes to /etc/systemd/system/
+# dockpanel-api.service (same binary, same LISTEN_ADDR 127.0.0.1:3080).
+#
+# OpenRC has no EnvironmentFile, so start_pre sources /etc/dockpanel/
+# api.env with `set -a` (every assignment exported) before the daemon
+# starts — the exports carry into the daemon because supervise-daemon
+# forks from this script's shell. If the env file is missing the service
+# fails loudly here instead of starting with an empty DATABASE_URL.
+#
+# No MemoryMax equivalent: see dockpanel-agent's header note. The API's
+# systemd unit caps at 1G; on OpenRC there is no such cap in this script.
+
+name="dockpanel-api"
+description="DockPanel API (panel backend)"
+
+need docker net dockpanel-agent
+use nginx
+
+command="/usr/local/bin/dockpanel-api"
+command_args=""
+supervisor="supervise-daemon"
+output_log="/var/log/dockpanel-api.log"
+error_log="/var/log/dockpanel-api.log"
+pidfile="/run/dockpanel-api.pid"
+
+depend() {
+    need docker net dockpanel-agent
+    use nginx
+}
+
+start_pre() {
+    checkpath -d -m 0755 /var/run/dockpanel
+    checkpath -f -m 0644 /var/log/dockpanel-api.log
+    if [ ! -f /etc/dockpanel/api.env ]; then
+        eerror "Missing /etc/dockpanel/api.env — run setup.sh first"
+        return 1
+    fi
+    set -a
+    # shellcheck disable=SC1091
+    . /etc/dockpanel/api.env
+    set +a
+    [ -n "${DATABASE_URL:-}" ] || { eerror "DATABASE_URL is empty in /etc/dockpanel/api.env"; return 1; }
+    [ -n "${JWT_SECRET:-}" ] || { eerror "JWT_SECRET is empty in /etc/dockpanel/api.env"; return 1; }
+}
