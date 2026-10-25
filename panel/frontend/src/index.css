@@ -8,7 +8,7 @@
 @theme {
   /* Lite mix (default): warm light ground, amber accent — replaces the
      Terminal base. The dark-* ramp is inverted (950=lightest) so every
-     existing bg-dark-*/text-dark-* utility renders light without a
+     existing bg-dark and text-dark utility renders light without a
      page-by-page rewrite, exactly as the clean/arctic themes already did. */
   --color-rust-50:  #fffbeb;
   --color-rust-100: #fef3c7;

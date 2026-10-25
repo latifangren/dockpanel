@@ -32,6 +32,43 @@ function formatDate(iso: string): string {
   });
 }
 
+type DiffRow = { type: "same" | "added" | "removed"; text: string };
+
+// Line diff for the editor's Diff view. LCS-based, capped: files over 2000
+// lines on either side render no diff rather than an O(n*m) table. This is
+// a plain-text line diff, not a syntax-aware diff and not Monaco (there is
+// no Monaco in this codebase) — the editor itself stays a textarea.
+function computeLineDiff(original: string, modified: string): DiffRow[] {
+  const a = original.split("\n");
+  const b = modified.split("\n");
+  if (a.length > 2000 || b.length > 2000) return [];
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const rows: DiffRow[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      rows.push({ type: "same", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      rows.push({ type: "removed", text: a[i] });
+      i++;
+    } else {
+      rows.push({ type: "added", text: b[j] });
+      j++;
+    }
+  }
+  while (i < a.length) { rows.push({ type: "removed", text: a[i] }); i++; }
+  while (j < b.length) { rows.push({ type: "added", text: b[j] }); j++; }
+  return rows;
+}
+
 export default function Files() {
   const { id } = useParams<{ id: string }>();
   const [site, setSite] = useState<Site | null>(null);
@@ -42,6 +79,8 @@ export default function Files() {
   // Editor
   const [editing, setEditing] = useState<string | null>(null);
   const [editorContent, setEditorContent] = useState("");
+  const [editorOriginal, setEditorOriginal] = useState("");
+  const [editorView, setEditorView] = useState<"edit" | "diff">("edit");
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   // Create dialog
@@ -56,6 +95,7 @@ export default function Files() {
   // Upload
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState("");
+  const [dragActive, setDragActive] = useState(false);
 
   useEffect(() => {
     api.get<Site>(`/sites/${id}`).then(setSite).catch(() => {});
@@ -106,6 +146,8 @@ export default function Files() {
         `/sites/${id}/files/read?path=${encodeURIComponent(filePath)}`
       );
       setEditorContent(data.content);
+      setEditorOriginal(data.content);
+      setEditorView("edit");
       setEditing(filePath);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to read file");
@@ -122,6 +164,9 @@ export default function Files() {
         content: editorContent,
       });
       setSaveSuccess(true);
+      // The saved content is the new baseline: a diff after saving shows
+      // nothing, which is the truth, not a stale diff against the old file.
+      setEditorOriginal(editorContent);
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save file");
@@ -129,6 +174,67 @@ export default function Files() {
       setSaving(false);
     }
   };
+
+
+  // Shared by the Upload button and drag-and-drop below: same size guard,
+  // same per-file base64 upload to the real /files/upload endpoint, same
+  // message semantics. Extracted verbatim from the button's handler so the
+  // two paths cannot drift apart.
+  const uploadFiles = async (fileList: FileList | File[]) => {
+                const files = fileList;
+                if (!files || files.length === 0) return;
+                setUploading(true);
+                setUploadMessage("");
+                let success = 0;
+                let failed = 0;
+                let firstError = "";
+                for (const file of Array.from(files)) {
+                  // Refuse an oversize file HERE, before spending the upload.
+                  // The server refuses it too, but only after the whole body
+                  // has travelled — and its refusal used to be discarded by the
+                  // bare catch below, which is exactly what #121 reported: a
+                  // 33 MB upload that failed with no message of any kind.
+                  if (file.size > UPLOAD_MAX_FILE_BYTES) {
+                    failed++;
+                    if (!firstError) firstError = uploadTooLargeMessage(file.name, file.size);
+                    continue;
+                  }
+                  try {
+                    const base64 = await new Promise<string>((resolve, reject) => {
+                      const reader = new FileReader();
+                      reader.onload = () => resolve((reader.result as string).split(",")[1]);
+                      reader.onerror = reject;
+                      reader.readAsDataURL(file);
+                    });
+                    await api.post(`/sites/${id}/files/upload`, {
+                      path: currentPath,
+                      filename: file.name,
+                      content: base64,
+                    });
+                    success++;
+                  } catch (err) {
+                    failed++;
+                    if (!firstError) {
+                      firstError = err instanceof Error ? err.message : `Could not upload ${file.name}`;
+                    }
+                  }
+                }
+                setUploading(false);
+                if (failed > 0) {
+                  // A count is not a reason. Carry the first failure's sentence
+                  // — it is the only part that says what to do next.
+                  setUploadMessage(
+                    success > 0 ? `${success} uploaded, ${failed} failed — ${firstError}` : firstError
+                  );
+                } else {
+                  setUploadMessage(`${success} file(s) uploaded`);
+                }
+                loadDir(currentPath);
+                
+                // Success may erase itself; a failure must not. Three seconds
+                // is not reading time for a sentence the operator has to act on.
+                if (failed === 0) setTimeout(() => setUploadMessage(""), 3000);
+                };
 
   const handleCreate = async () => {
     if (!createName.trim()) return;
@@ -211,60 +317,10 @@ export default function Files() {
               className="hidden"
               multiple
               disabled={uploading}
-              onChange={async (e) => {
+              onChange={(e) => {
                 const files = e.target.files;
-                if (!files || files.length === 0) return;
-                setUploading(true);
-                setUploadMessage("");
-                let success = 0;
-                let failed = 0;
-                let firstError = "";
-                for (const file of Array.from(files)) {
-                  // Refuse an oversize file HERE, before spending the upload.
-                  // The server refuses it too, but only after the whole body
-                  // has travelled — and its refusal used to be discarded by the
-                  // bare catch below, which is exactly what #121 reported: a
-                  // 33 MB upload that failed with no message of any kind.
-                  if (file.size > UPLOAD_MAX_FILE_BYTES) {
-                    failed++;
-                    if (!firstError) firstError = uploadTooLargeMessage(file.name, file.size);
-                    continue;
-                  }
-                  try {
-                    const base64 = await new Promise<string>((resolve, reject) => {
-                      const reader = new FileReader();
-                      reader.onload = () => resolve((reader.result as string).split(",")[1]);
-                      reader.onerror = reject;
-                      reader.readAsDataURL(file);
-                    });
-                    await api.post(`/sites/${id}/files/upload`, {
-                      path: currentPath,
-                      filename: file.name,
-                      content: base64,
-                    });
-                    success++;
-                  } catch (err) {
-                    failed++;
-                    if (!firstError) {
-                      firstError = err instanceof Error ? err.message : `Could not upload ${file.name}`;
-                    }
-                  }
-                }
-                setUploading(false);
-                if (failed > 0) {
-                  // A count is not a reason. Carry the first failure's sentence
-                  // — it is the only part that says what to do next.
-                  setUploadMessage(
-                    success > 0 ? `${success} uploaded, ${failed} failed — ${firstError}` : firstError
-                  );
-                } else {
-                  setUploadMessage(`${success} file(s) uploaded`);
-                }
-                loadDir(currentPath);
+                if (files) void uploadFiles(files);
                 e.target.value = "";
-                // Success may erase itself; a failure must not. Three seconds
-                // is not reading time for a sentence the operator has to act on.
-                if (failed === 0) setTimeout(() => setUploadMessage(""), 3000);
               }}
             />
           </label>
@@ -325,7 +381,24 @@ export default function Files() {
 
       <div className="flex gap-6">
         {/* File listing */}
-        <div className={`bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto ${editing ? "w-1/2" : "w-full"}`}>
+        <div
+          className={`bg-dark-800 rounded-lg border overflow-x-auto ${editing ? "w-1/2" : "w-full"} ${dragActive ? "border-rust-500" : "border-dark-500"}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            if (e.dataTransfer.files.length > 0) void uploadFiles(e.dataTransfer.files);
+          }}
+        >
+          {dragActive && (
+            <div className="px-4 py-2 text-xs text-rust-400 border-b border-dark-500">
+              Drop files here to upload to this folder
+            </div>
+          )}
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <div className="w-6 h-6 border-2 border-dark-600 border-t-rust-500 rounded-full animate-spin" />
@@ -463,6 +536,20 @@ export default function Files() {
               </span>
               <div className="flex items-center gap-2">
                 {saveSuccess && <span className="text-xs text-rust-400">Saved</span>}
+                <div className="flex gap-1 p-0.5 bg-dark-900 rounded-md border border-dark-600">
+                  {(["edit", "diff"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setEditorView(v)}
+                      className={`px-2 py-0.5 rounded text-xs font-medium ${
+                        editorView === v ? "bg-rust-500 text-white" : "text-dark-300 hover:text-dark-100"
+                      }`}
+                    >
+                      {v === "edit" ? "Edit" : "Diff"}
+                    </button>
+                  ))}
+                </div>
                 <button
                   onClick={saveFile}
                   disabled={saving}
@@ -480,18 +567,57 @@ export default function Files() {
                 </button>
               </div>
             </div>
-            <textarea
-              value={editorContent}
-              onChange={(e) => setEditorContent(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-                  e.preventDefault();
-                  saveFile();
-                }
-              }}
-              className="flex-1 p-4 font-mono text-sm text-dark-50 resize-none focus:outline-none"
-              spellCheck={false}
-            />
+            {editorView === "diff" ? (
+              <div className="flex-1 overflow-auto p-4 font-mono text-sm">
+                {(() => {
+                  const rows = computeLineDiff(editorOriginal, editorContent);
+                  if (rows.length === 0) {
+                    return editorOriginal.split("\n").length > 2000 || editorContent.split("\n").length > 2000 ? (
+                      <p className="text-dark-300 text-xs">Diff unavailable for files over 2000 lines.</p>
+                    ) : (
+                      <p className="text-dark-300 text-xs">No changes yet — edit the file, then switch to Diff.</p>
+                    );
+                  }
+                  const added = rows.filter((r) => r.type === "added").length;
+                  const removed = rows.filter((r) => r.type === "removed").length;
+                  return (
+                    <>
+                      <p className="text-xs text-dark-400 mb-2">
+                        +{added} added · −{removed} removed · unsaved changes only (nothing is written until Save)
+                      </p>
+                      {rows.map((row, idx) => (
+                        <div
+                          key={idx}
+                          className={
+                            row.type === "added"
+                              ? "text-rust-400 bg-rust-500/10"
+                              : row.type === "removed"
+                                ? "text-danger-400 bg-danger-500/10"
+                                : "text-dark-300"
+                          }
+                        >
+                          <span className="inline-block w-4 text-center">{row.type === "added" ? "+" : row.type === "removed" ? "−" : " "}</span>
+                          {row.text || " "}
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
+              </div>
+            ) : (
+              <textarea
+                value={editorContent}
+                onChange={(e) => setEditorContent(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+                    e.preventDefault();
+                    saveFile();
+                  }
+                }}
+                className="flex-1 p-4 font-mono text-sm text-dark-50 resize-none focus:outline-none"
+                spellCheck={false}
+              />
+            )}
           </div>
         )}
       </div>

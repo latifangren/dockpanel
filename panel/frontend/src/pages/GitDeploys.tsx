@@ -127,6 +127,33 @@ function statusBadge(status: string) {
   return map[status] || "bg-dark-700 text-dark-200";
 }
 
+// Framework GUESS from repository URL keywords, ported from the AI Studio
+// v2 detection idea and deliberately weakened: v2 presented this as
+// "automatic framework detection", but matching substrings in a URL is not
+// inspecting a repository. This helper only prefills the port and the
+// pre-build command, shows its basis in the UI, and stays fully editable —
+// the operator's values always win, and build_method itself is left to the
+// server, which is what decides it in this codebase.
+function guessFrameworkFromUrl(repoUrl: string): { label: string; port: number; preBuild: string } | null {
+  const lower = repoUrl.toLowerCase();
+  if (lower.includes("next") || lower.includes("react") || lower.includes("saas") || lower.includes("web")) {
+    return { label: "Next.js / Node.js (guess)", port: 3000, preBuild: "npm ci && npm run build" };
+  }
+  if (lower.includes("rust") || lower.includes("cargo") || lower.includes("axum") || lower.includes("actix")) {
+    return { label: "Rust / Cargo (guess)", port: 8080, preBuild: "cargo build --release" };
+  }
+  if (lower.includes("laravel") || lower.includes("php") || lower.includes("wp")) {
+    return { label: "Laravel / PHP (guess)", port: 8000, preBuild: "composer install --no-dev --optimize-autoloader" };
+  }
+  if (lower.includes("go") || lower.includes("gin") || lower.includes("fiber")) {
+    return { label: "Go (guess)", port: 8080, preBuild: "go build -ldflags='-s -w' -o app ." };
+  }
+  if (lower.includes("python") || lower.includes("fastapi") || lower.includes("django")) {
+    return { label: "Python / FastAPI (guess)", port: 8000, preBuild: "pip install -r requirements.txt" };
+  }
+  return null;
+}
+
 export default function GitDeploys() {
   const { user } = useAuth();
   if (!user || user.role !== "admin") return <Navigate to="/" replace />;
@@ -156,6 +183,7 @@ export default function GitDeploys() {
   // Form state
   const [formName, setFormName] = useState("");
   const [formRepo, setFormRepo] = useState("");
+  const [repoGuess, setRepoGuess] = useState<{ label: string; port: number; preBuild: string } | null>(null);
   const [formBranch, setFormBranch] = useState("main");
   const [formDockerfile, setFormDockerfile] = useState("Dockerfile");
   const [formPort, setFormPort] = useState(3000);
@@ -1185,11 +1213,34 @@ export default function GitDeploys() {
                 <input
                   type="text"
                   value={formRepo}
-                  onChange={(e) => setFormRepo(e.target.value)}
+                  onChange={(e) => {
+                    setFormRepo(e.target.value);
+                    setRepoGuess(guessFrameworkFromUrl(e.target.value));
+                  }}
                   placeholder="https://github.com/user/repo.git"
                   className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
                 />
               </div>
+
+              {repoGuess && (
+                <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg">
+                  <span className="text-xs text-dark-300">
+                    Framework guess from URL keywords only (not repo inspection):{" "}
+                    <span className="text-dark-100 font-medium">{repoGuess.label}</span> — suggested port{" "}
+                    {repoGuess.port}, pre-build <span className="font-mono">{repoGuess.preBuild}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormPort(repoGuess.port);
+                      setFormPreBuild(repoGuess.preBuild);
+                    }}
+                    className="ml-auto px-2 py-1 text-xs bg-rust-500 text-white rounded hover:bg-rust-600"
+                  >
+                    Apply suggestion
+                  </button>
+                </div>
+              )}
 
               {/* Branch + Dockerfile */}
               <div className="grid grid-cols-2 gap-4">

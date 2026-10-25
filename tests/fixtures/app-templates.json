@@ -3,6 +3,12 @@
   "count": 147,
   "templates": [
     {
+      "available_tags": [
+        "5",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "CMS",
       "cmd": null,
       "container_port": "2368/tcp",
@@ -30,6 +36,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/ghost",
       "id": "ghost",
       "image": "ghost:5",
       "name": "Ghost",
@@ -38,6 +45,11 @@
       ]
     },
     {
+      "available_tags": [
+        "stable",
+        "latest",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "80/tcp",
@@ -51,6 +63,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/azuracast",
       "id": "azuracast",
       "image": "ghcr.io/azuracast/azuracast:stable",
       "name": "AzuraCast",
@@ -59,11 +72,18 @@
       ]
     },
     {
+      "available_tags": [
+        "7-alpine",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "6379/tcp",
       "default_port": 6379,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/redis",
       "id": "redis",
       "image": "redis:7-alpine",
       "name": "Redis",
@@ -72,22 +92,36 @@
       ]
     },
     {
+      "available_tags": [
+        "4",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 8081,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/adminer",
       "id": "adminer",
       "image": "adminer:4",
       "name": "Adminer",
       "volumes": []
     },
     {
+      "available_tags": [
+        "1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "3001/tcp",
       "default_port": 3001,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/uptime-kuma",
       "id": "uptime-kuma",
       "image": "louislam/uptime-kuma:1",
       "name": "Uptime Kuma",
@@ -96,11 +130,18 @@
       ]
     },
     {
+      "available_tags": [
+        "1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Automation",
       "cmd": null,
       "container_port": "5678/tcp",
       "default_port": 5678,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/n8n",
       "id": "n8n",
       "image": "n8nio/n8n:1",
       "name": "n8n",
@@ -109,11 +150,18 @@
       ]
     },
     {
+      "available_tags": [
+        "1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "3000/tcp",
       "default_port": 3000,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/gitea",
       "id": "gitea",
       "image": "gitea/gitea:1",
       "name": "Gitea",
@@ -123,6 +171,12 @@
       ]
     },
     {
+      "available_tags": [
+        "16-alpine",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "5432/tcp",
@@ -150,6 +204,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/postgres",
       "id": "postgres",
       "image": "postgres:16-alpine",
       "name": "PostgreSQL",
@@ -158,6 +213,12 @@
       ]
     },
     {
+      "available_tags": [
+        "8",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "3306/tcp",
@@ -192,6 +253,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/mysql",
       "id": "mysql",
       "image": "mysql:8",
       "name": "MySQL",
@@ -200,6 +262,12 @@
       ]
     },
     {
+      "available_tags": [
+        "11",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "3306/tcp",
@@ -220,6 +288,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/mariadb",
       "id": "mariadb",
       "image": "mariadb:11",
       "name": "MariaDB",
@@ -228,6 +297,12 @@
       ]
     },
     {
+      "available_tags": [
+        "7",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "27017/tcp",
@@ -248,6 +323,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/mongo",
       "id": "mongo",
       "image": "mongo:7",
       "name": "MongoDB",
@@ -256,6 +332,12 @@
       ]
     },
     {
+      "available_tags": [
+        "11",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "CMS",
       "cmd": null,
       "container_port": "8055/tcp",
@@ -283,6 +365,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/directus",
       "id": "directus",
       "image": "directus/directus:11",
       "name": "Directus",
@@ -292,6 +375,12 @@
       ]
     },
     {
+      "available_tags": [
+        "30",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Storage",
       "cmd": null,
       "container_port": "80/tcp",
@@ -312,6 +401,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/nextcloud",
       "id": "nextcloud",
       "image": "nextcloud:30",
       "name": "Nextcloud",
@@ -320,6 +410,12 @@
       ]
     },
     {
+      "available_tags": [
+        "13.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -333,6 +429,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/grafana",
       "id": "grafana",
       "image": "grafana/grafana:13.1",
       "name": "Grafana",
@@ -341,11 +438,18 @@
       ]
     },
     {
+      "available_tags": [
+        "v3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "9090/tcp",
       "default_port": 9090,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/prometheus",
       "id": "prometheus",
       "image": "prom/prometheus:v3",
       "name": "Prometheus",
@@ -354,6 +458,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v3.2.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Analytics",
       "cmd": [
         "sh",
@@ -392,12 +502,19 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/plausible",
       "id": "plausible",
       "image": "ghcr.io/plausible/community-edition:v3.2.1",
       "name": "Plausible Analytics",
       "volumes": []
     },
     {
+      "available_tags": [
+        "postgresql-v2.15.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Analytics",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -411,17 +528,25 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/umami",
       "id": "umami",
       "image": "ghcr.io/umami-software/umami:postgresql-v2.15.1",
       "name": "Umami",
       "volumes": []
     },
     {
+      "available_tags": [
+        "5",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Analytics",
       "cmd": null,
       "container_port": "80/tcp",
       "default_port": 8083,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/matomo",
       "id": "matomo",
       "image": "matomo:5",
       "name": "Matomo",
@@ -430,6 +555,12 @@
       ]
     },
     {
+      "available_tags": [
+        "8",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "80/tcp",
@@ -450,6 +581,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/pgadmin",
       "id": "pgadmin",
       "image": "dpage/pgadmin4:8",
       "name": "pgAdmin",
@@ -458,6 +590,12 @@
       ]
     },
     {
+      "available_tags": [
+        "RELEASE.2025-09-07T16-13-09Z",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Storage",
       "cmd": [
         "server",
@@ -483,6 +621,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/minio",
       "id": "minio",
       "image": "minio/minio:RELEASE.2025-09-07T16-13-09Z",
       "name": "MinIO",
@@ -491,6 +630,12 @@
       ]
     },
     {
+      "available_tags": [
+        "1.37.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Security",
       "cmd": null,
       "container_port": "80/tcp",
@@ -504,6 +649,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/vaultwarden",
       "id": "vaultwarden",
       "image": "vaultwarden/server:1.37.1",
       "name": "Vaultwarden",
@@ -512,6 +658,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "7700/tcp",
@@ -525,6 +677,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/meilisearch",
       "id": "meilisearch",
       "image": "getmeili/meilisearch:v1",
       "name": "Meilisearch",
@@ -533,11 +686,18 @@
       ]
     },
     {
+      "available_tags": [
+        "v0.58-lts",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Analytics",
       "cmd": null,
       "container_port": "3000/tcp",
       "default_port": 3004,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/metabase",
       "id": "metabase",
       "image": "metabase/metabase:v0.58-lts",
       "name": "Metabase",
@@ -546,11 +706,18 @@
       ]
     },
     {
+      "available_tags": [
+        "2026.08.2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 8085,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/nocodb",
       "id": "nocodb",
       "image": "nocodb/nocodb:2026.08.2",
       "name": "NocoDB",
@@ -559,11 +726,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 8086,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/searxng",
       "id": "searxng",
       "image": "searxng/searxng:latest",
       "name": "SearXNG",
@@ -572,11 +745,18 @@
       ]
     },
     {
+      "available_tags": [
+        "10",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "8096/tcp",
       "default_port": 8096,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/jellyfin",
       "id": "jellyfin",
       "image": "jellyfin/jellyfin:10",
       "name": "Jellyfin",
@@ -586,6 +766,12 @@
       ]
     },
     {
+      "available_tags": [
+        "4.131.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "8080/tcp",
@@ -599,6 +785,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/code-server",
       "id": "code-server",
       "image": "codercom/code-server:4.131.0",
       "name": "VS Code Server",
@@ -607,6 +794,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "80/tcp",
@@ -634,6 +827,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/drone",
       "id": "drone",
       "image": "drone/drone:2",
       "name": "Drone CI",
@@ -642,11 +836,18 @@
       ]
     },
     {
+      "available_tags": [
+        "2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "5000/tcp",
       "default_port": 5000,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/registry",
       "id": "registry",
       "image": "registry:2",
       "name": "Docker Registry",
@@ -655,17 +856,30 @@
       ]
     },
     {
+      "available_tags": [
+        "v1.30",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "8025/tcp",
       "default_port": 8025,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/mailpit",
       "id": "mailpit",
       "image": "axllent/mailpit:v1.30",
       "name": "Mailpit",
       "volumes": []
     },
     {
+      "available_tags": [
+        "2024.07.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": null,
       "container_port": "80/tcp",
@@ -679,6 +893,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/pihole",
       "id": "pihole",
       "image": "pihole/pihole:2024.07.0",
       "name": "Pi-hole",
@@ -688,11 +903,18 @@
       ]
     },
     {
+      "available_tags": [
+        "3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "3100/tcp",
       "default_port": 3100,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/loki",
       "id": "loki",
       "image": "grafana/loki:3",
       "name": "Grafana Loki",
@@ -701,6 +923,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -714,6 +942,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/wikijs",
       "id": "wikijs",
       "image": "ghcr.io/requarks/wiki:2",
       "name": "Wiki.js",
@@ -722,6 +951,12 @@
       ]
     },
     {
+      "available_tags": [
+        "26.05.4",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "80/tcp",
@@ -763,6 +998,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/bookstack",
       "id": "bookstack",
       "image": "lscr.io/linuxserver/bookstack:26.05.4",
       "name": "BookStack",
@@ -771,6 +1007,12 @@
       ]
     },
     {
+      "available_tags": [
+        "1.9",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -805,6 +1047,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/outline",
       "id": "outline",
       "image": "outlinewiki/outline:1.9",
       "name": "Outline",
@@ -813,6 +1056,12 @@
       ]
     },
     {
+      "available_tags": [
+        "release-11",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8065/tcp",
@@ -826,6 +1075,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/mattermost",
       "id": "mattermost",
       "image": "mattermost/mattermost-team-edition:release-11",
       "name": "Mattermost",
@@ -836,6 +1086,12 @@
       ]
     },
     {
+      "available_tags": [
+        "8.7.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -856,6 +1112,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/rocketchat",
       "id": "rocketchat",
       "image": "rocketchat/rocket.chat:8.7.0",
       "name": "Rocket.Chat",
@@ -864,6 +1121,12 @@
       ]
     },
     {
+      "available_tags": [
+        "release",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "3001/tcp",
@@ -905,6 +1168,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/immich",
       "id": "immich",
       "image": "ghcr.io/immich-app/immich-server:release",
       "name": "Immich",
@@ -913,6 +1177,12 @@
       ]
     },
     {
+      "available_tags": [
+        "260728",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "2342/tcp",
@@ -933,6 +1203,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/photoprism",
       "id": "photoprism",
       "image": "photoprism/photoprism:260728",
       "name": "PhotoPrism",
@@ -942,6 +1213,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2024.12",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Security",
       "cmd": null,
       "container_port": "9000/tcp",
@@ -976,6 +1253,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/authentik",
       "id": "authentik",
       "image": "ghcr.io/goauthentik/server:2024.12",
       "name": "Authentik",
@@ -985,6 +1263,12 @@
       ]
     },
     {
+      "available_tags": [
+        "26.7",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Security",
       "cmd": [
         "start-dev"
@@ -1021,12 +1305,19 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/keycloak",
       "id": "keycloak",
       "image": "quay.io/keycloak/keycloak:26.7",
       "name": "Keycloak",
       "volumes": []
     },
     {
+      "available_tags": [
+        "v3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "8000/tcp",
@@ -1061,6 +1352,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/woodpecker",
       "id": "woodpecker",
       "image": "woodpeckerci/woodpecker-server:v3",
       "name": "Woodpecker CI",
@@ -1069,6 +1361,12 @@
       ]
     },
     {
+      "available_tags": [
+        "10-community",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "9000/tcp",
@@ -1082,6 +1380,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/sonarqube",
       "id": "sonarqube",
       "image": "sonarqube:10-community",
       "name": "SonarQube",
@@ -1092,11 +1391,18 @@
       ]
     },
     {
+      "available_tags": [
+        "9",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "3000/tcp",
       "default_port": 3009,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/forgejo",
       "id": "forgejo",
       "image": "codeberg.org/forgejo/forgejo:9",
       "name": "Forgejo",
@@ -1106,6 +1412,12 @@
       ]
     },
     {
+      "available_tags": [
+        "5",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "80/tcp",
@@ -1154,6 +1466,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/invoice-ninja",
       "id": "invoice-ninja",
       "image": "invoiceninja/invoiceninja:5",
       "name": "Invoice Ninja",
@@ -1163,11 +1476,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 8080,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/erpnext",
       "id": "erpnext",
       "image": "frappe/erpnext:latest",
       "name": "ERPNext",
@@ -1176,6 +1495,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v6.2.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -1203,12 +1528,19 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/calcom",
       "id": "calcom",
       "image": "calcom/cal.com:v6.2.0",
       "name": "Cal.com",
       "volumes": []
     },
     {
+      "available_tags": [
+        "latest-ce",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -1250,6 +1582,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/chatwoot",
       "id": "chatwoot",
       "image": "chatwoot/chatwoot:latest-ce",
       "name": "Chatwoot",
@@ -1258,6 +1591,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -1285,12 +1624,19 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/typebot",
       "id": "typebot",
       "image": "baptistearno/typebot-builder:2",
       "name": "Typebot",
       "volumes": []
     },
     {
+      "available_tags": [
+        "0.33.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "11434/tcp",
@@ -1311,6 +1657,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/ollama",
       "id": "ollama",
       "image": "ollama/ollama:0.33.3",
       "name": "Ollama",
@@ -1319,6 +1666,12 @@
       ]
     },
     {
+      "available_tags": [
+        "main",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "8080/tcp",
@@ -1332,6 +1685,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/open-webui",
       "id": "open-webui",
       "image": "ghcr.io/open-webui/open-webui:main",
       "name": "Open WebUI",
@@ -1340,11 +1694,18 @@
       ]
     },
     {
+      "available_tags": [
+        "latest-gpu-nvidia-cuda-12",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 8296,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/localai",
       "id": "localai",
       "image": "localai/localai:latest-gpu-nvidia-cuda-12",
       "name": "LocalAI",
@@ -1353,11 +1714,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
       "default_port": 3013,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/homepage",
       "id": "homepage",
       "image": "ghcr.io/gethomepage/homepage:latest",
       "name": "Homepage",
@@ -1366,11 +1733,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "7575/tcp",
       "default_port": 7575,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/homarr",
       "id": "homarr",
       "image": "ghcr.io/homarr-labs/homarr:latest",
       "name": "Homarr",
@@ -1379,11 +1752,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 4000,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/dashy",
       "id": "dashy",
       "image": "lissy93/dashy:latest",
       "name": "Dashy",
@@ -1392,6 +1771,11 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8000/tcp",
@@ -1419,6 +1803,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/paperless-ngx",
       "id": "paperless-ngx",
       "image": "ghcr.io/paperless-ngx/paperless-ngx:latest",
       "name": "Paperless-ngx",
@@ -1428,11 +1813,18 @@
       ]
     },
     {
+      "available_tags": [
+        "2.14.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 8182,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/stirling-pdf",
       "id": "stirling-pdf",
       "image": "frooodle/s-pdf:2.14.3",
       "name": "Stirling-PDF",
@@ -1442,11 +1834,18 @@
       ]
     },
     {
+      "available_tags": [
+        "26.9.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "5006/tcp",
       "default_port": 5006,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/actual-budget",
       "id": "actual-budget",
       "image": "actualbudget/actual-server:26.9.0",
       "name": "Actual Budget",
@@ -1455,6 +1854,12 @@
       ]
     },
     {
+      "available_tags": [
+        "1.12.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -1482,6 +1887,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/hedgedoc",
       "id": "hedgedoc",
       "image": "quay.io/hedgedoc/hedgedoc:1.12.0",
       "name": "HedgeDoc",
@@ -1490,6 +1896,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2.6.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3456/tcp",
@@ -1503,6 +1915,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/vikunja",
       "id": "vikunja",
       "image": "vikunja/vikunja:2.6.0",
       "name": "Vikunja",
@@ -1511,11 +1924,17 @@
       ]
     },
     {
+      "available_tags": [
+        "stable",
+        "latest",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "5230/tcp",
       "default_port": 5230,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/memos",
       "id": "memos",
       "image": "neosmemo/memos:stable",
       "name": "Memos",
@@ -1524,11 +1943,18 @@
       ]
     },
     {
+      "available_tags": [
+        "v0.95.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 8383,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/trilium",
       "id": "trilium",
       "image": "triliumnext/notes:v0.95.0",
       "name": "Trilium Notes",
@@ -1537,11 +1963,18 @@
       ]
     },
     {
+      "available_tags": [
+        "3.2.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
       "default_port": 3015,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/docuseal",
       "id": "docuseal",
       "image": "docuseal/docuseal:3.2.3",
       "name": "DocuSeal",
@@ -1550,11 +1983,18 @@
       ]
     },
     {
+      "available_tags": [
+        "0.63.2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "4533/tcp",
       "default_port": 4533,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/navidrome",
       "id": "navidrome",
       "image": "deluan/navidrome:0.63.2",
       "name": "Navidrome",
@@ -1564,11 +2004,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "80/tcp",
       "default_port": 13378,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/audiobookshelf",
       "id": "audiobookshelf",
       "image": "ghcr.io/advplyr/audiobookshelf:latest",
       "name": "Audiobookshelf",
@@ -1580,6 +2026,12 @@
       ]
     },
     {
+      "available_tags": [
+        "0.6.27",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "8083/tcp",
@@ -1600,6 +2052,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/calibre-web",
       "id": "calibre-web",
       "image": "lscr.io/linuxserver/calibre-web:0.6.27",
       "name": "Calibre-Web",
@@ -1609,11 +2062,18 @@
       ]
     },
     {
+      "available_tags": [
+        "0.9.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "5000/tcp",
       "default_port": 5001,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/kavita",
       "id": "kavita",
       "image": "jvmilazz0/kavita:0.9.1",
       "name": "Kavita",
@@ -1623,6 +2083,12 @@
       ]
     },
     {
+      "available_tags": [
+        "1.43.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "32400/tcp",
@@ -1650,6 +2116,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/plex",
       "id": "plex",
       "image": "lscr.io/linuxserver/plex:1.43.3",
       "name": "Plex",
@@ -1660,11 +2127,18 @@
       ]
     },
     {
+      "available_tags": [
+        "1.29.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "80/tcp",
       "default_port": 8284,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/freshrss",
       "id": "freshrss",
       "image": "freshrss/freshrss:1.29.1",
       "name": "FreshRSS",
@@ -1674,6 +2148,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v2.16.2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -1701,6 +2181,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/linkwarden",
       "id": "linkwarden",
       "image": "ghcr.io/linkwarden/linkwarden:v2.16.2",
       "name": "Linkwarden",
@@ -1709,11 +2190,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "5000/tcp",
       "default_port": 5555,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/changedetection",
       "id": "changedetection",
       "image": "ghcr.io/dgtlmoon/changedetection.io:latest",
       "name": "Changedetection.io",
@@ -1722,6 +2209,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2.6.13",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "8080/tcp",
@@ -1742,6 +2235,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/tandoor",
       "id": "tandoor",
       "image": "vabene1111/recipes:2.6.13",
       "name": "Tandoor Recipes",
@@ -1751,6 +2245,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v3.25.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "9000/tcp",
@@ -1764,6 +2264,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/mealie",
       "id": "mealie",
       "image": "ghcr.io/mealie-recipes/mealie:v3.25.1",
       "name": "Mealie",
@@ -1772,6 +2273,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v2.28.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": [
         "serve"
@@ -1779,6 +2286,7 @@
       "container_port": "80/tcp",
       "default_port": 8286,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/ntfy",
       "id": "ntfy",
       "image": "binwiederhier/ntfy:v2.28.0",
       "name": "ntfy",
@@ -1788,6 +2296,12 @@
       ]
     },
     {
+      "available_tags": [
+        "3.1.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Tools",
       "cmd": null,
       "container_port": "80/tcp",
@@ -1801,6 +2315,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/gotify",
       "id": "gotify",
       "image": "gotify/server:3.1.0",
       "name": "Gotify",
@@ -1809,11 +2324,18 @@
       ]
     },
     {
+      "available_tags": [
+        "v0.107.79",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": null,
       "container_port": "3000/tcp",
       "default_port": 3017,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/adguard-home",
       "id": "adguard-home",
       "image": "adguard/adguardhome:v0.107.79",
       "name": "AdGuard Home",
@@ -1823,11 +2345,18 @@
       ]
     },
     {
+      "available_tags": [
+        "15.4.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": null,
       "container_port": "5380/tcp",
       "default_port": 5380,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/technitium-dns",
       "id": "technitium-dns",
       "image": "technitium/dns-server:15.4.0",
       "name": "Technitium DNS",
@@ -1836,11 +2365,18 @@
       ]
     },
     {
+      "available_tags": [
+        "2.15.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": null,
       "container_port": "81/tcp",
       "default_port": 8181,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/nginx-proxy-manager",
       "id": "nginx-proxy-manager",
       "image": "jc21/nginx-proxy-manager:2.15.1",
       "name": "Nginx Proxy Manager",
@@ -1850,6 +2386,12 @@
       ]
     },
     {
+      "available_tags": [
+        "1.0.20260223",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": null,
       "container_port": "51820/udp",
@@ -1884,6 +2426,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/wireguard",
       "id": "wireguard",
       "image": "lscr.io/linuxserver/wireguard:1.0.20260223",
       "name": "WireGuard",
@@ -1892,17 +2435,30 @@
       ]
     },
     {
+      "available_tags": [
+        "v10.9.2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 9999,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/dozzle",
       "id": "dozzle",
       "image": "amir20/dozzle:v10.9.2",
       "name": "Dozzle",
       "volumes": []
     },
     {
+      "available_tags": [
+        "latest-full",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "61208/tcp",
@@ -1916,17 +2472,24 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/glances",
       "id": "glances",
       "image": "nicolargo/glances:latest-full",
       "name": "Glances",
       "volumes": []
     },
     {
+      "available_tags": [
+        "stable",
+        "latest",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "19999/tcp",
       "default_port": 19999,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/netdata",
       "id": "netdata",
       "image": "netdata/netdata:stable",
       "name": "Netdata",
@@ -1937,11 +2500,18 @@
       ]
     },
     {
+      "available_tags": [
+        "v2.63.23",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Storage",
       "cmd": null,
       "container_port": "80/tcp",
       "default_port": 8288,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/filebrowser",
       "id": "filebrowser",
       "image": "filebrowser/filebrowser:v2.63.23",
       "name": "File Browser",
@@ -1951,6 +2521,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2.1.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Storage",
       "cmd": null,
       "container_port": "8384/tcp",
@@ -1971,6 +2547,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/syncthing",
       "id": "syncthing",
       "image": "lscr.io/linuxserver/syncthing:2.1.3",
       "name": "Syncthing",
@@ -1980,22 +2557,36 @@
       ]
     },
     {
+      "available_tags": [
+        "2024.10.22-7ca5933",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "80/tcp",
       "default_port": 8289,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/it-tools",
       "id": "it-tools",
       "image": "corentinth/it-tools:2024.10.22-7ca5933",
       "name": "IT-Tools",
       "volumes": []
     },
     {
+      "available_tags": [
+        "lts",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "8080/tcp",
       "default_port": 8290,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/jenkins",
       "id": "jenkins",
       "image": "jenkins/jenkins:lts",
       "name": "Jenkins",
@@ -2004,11 +2595,18 @@
       ]
     },
     {
+      "available_tags": [
+        "26.8.2.7",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "8123/tcp",
       "default_port": 8123,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/clickhouse",
       "id": "clickhouse",
       "image": "clickhouse/clickhouse-server:26.8.2.7",
       "name": "ClickHouse",
@@ -2018,6 +2616,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "8086/tcp",
@@ -2059,6 +2663,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/influxdb",
       "id": "influxdb",
       "image": "influxdb:2",
       "name": "InfluxDB",
@@ -2067,11 +2672,18 @@
       ]
     },
     {
+      "available_tags": [
+        "8-alpine",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "6379/tcp",
       "default_port": 6380,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/valkey",
       "id": "valkey",
       "image": "valkey/valkey:8-alpine",
       "name": "Valkey",
@@ -2080,6 +2692,12 @@
       ]
     },
     {
+      "available_tags": [
+        "3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "5984/tcp",
@@ -2100,6 +2718,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/couchdb",
       "id": "couchdb",
       "image": "couchdb:3",
       "name": "CouchDB",
@@ -2108,11 +2727,18 @@
       ]
     },
     {
+      "available_tags": [
+        "v1.8.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Security",
       "cmd": null,
       "container_port": "6060/tcp",
       "default_port": 6060,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/crowdsec",
       "id": "crowdsec",
       "image": "crowdsecurity/crowdsec:v1.8.1",
       "name": "CrowdSec",
@@ -2122,11 +2748,18 @@
       ]
     },
     {
+      "available_tags": [
+        "5.0.6",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Automation",
       "cmd": null,
       "container_port": "1880/tcp",
       "default_port": 1880,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/node-red",
       "id": "node-red",
       "image": "nodered/node-red:5.0.6",
       "name": "Node-RED",
@@ -2135,6 +2768,11 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Automation",
       "cmd": null,
       "container_port": "80/tcp",
@@ -2176,6 +2814,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/activepieces",
       "id": "activepieces",
       "image": "activepieces/activepieces:latest",
       "name": "Activepieces",
@@ -2184,6 +2823,12 @@
       ]
     },
     {
+      "available_tags": [
+        "6-apache",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "CMS",
       "cmd": null,
       "container_port": "80/tcp",
@@ -2218,6 +2863,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/wordpress-docker",
       "id": "wordpress-docker",
       "image": "wordpress:6-apache",
       "name": "WordPress (Docker)",
@@ -2226,6 +2872,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v6.2.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "CMS",
       "cmd": null,
       "container_port": "9000/tcp",
@@ -2274,6 +2926,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/listmonk",
       "id": "listmonk",
       "image": "listmonk/listmonk:v6.2.0",
       "name": "Listmonk",
@@ -2282,6 +2935,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v0.13.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Analytics",
       "cmd": null,
       "container_port": "8080/tcp",
@@ -2302,12 +2961,18 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/shynet",
       "id": "shynet",
       "image": "milesmcc/shynet:v0.13.1",
       "name": "Shynet",
       "volumes": []
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Storage",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -2328,6 +2993,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/zipline",
       "id": "zipline",
       "image": "ghcr.io/diced/zipline:latest",
       "name": "Zipline",
@@ -2337,11 +3003,18 @@
       ]
     },
     {
+      "available_tags": [
+        "4.39.22",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Security",
       "cmd": null,
       "container_port": "9091/tcp",
       "default_port": 9091,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/authelia",
       "id": "authelia",
       "image": "authelia/authelia:4.39.22",
       "name": "Authelia",
@@ -2350,6 +3023,12 @@
       ]
     },
     {
+      "available_tags": [
+        "default",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "7860/tcp",
@@ -2363,6 +3042,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/text-generation-webui",
       "id": "text-generation-webui",
       "image": "atinoda/text-generation-webui:default",
       "name": "Text Generation WebUI",
@@ -2373,6 +3053,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v1.10.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "9000/tcp",
@@ -2386,12 +3072,19 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/whisper",
       "id": "whisper",
       "image": "onerahmet/openai-whisper-asr-webservice:v1.10.0",
       "name": "Whisper ASR",
       "volumes": []
     },
     {
+      "available_tags": [
+        "main-latest",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "4000/tcp",
@@ -2405,12 +3098,18 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/litellm",
       "id": "litellm",
       "image": "ghcr.io/berriai/litellm:main-latest",
       "name": "LiteLLM Proxy",
       "volumes": []
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -2431,6 +3130,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/flowise",
       "id": "flowise",
       "image": "flowiseai/flowise:latest",
       "name": "Flowise",
@@ -2439,6 +3139,12 @@
       ]
     },
     {
+      "available_tags": [
+        "1.12.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "7860/tcp",
@@ -2452,6 +3158,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/langflow",
       "id": "langflow",
       "image": "langflowai/langflow:1.12.0",
       "name": "Langflow",
@@ -2460,6 +3167,11 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "5001/tcp",
@@ -2501,6 +3213,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/dify",
       "id": "dify",
       "image": "langgenius/dify-api:latest",
       "name": "Dify",
@@ -2509,6 +3222,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v0.28.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "AI",
       "cmd": null,
       "container_port": "8000/tcp",
@@ -2529,6 +3248,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/vllm",
       "id": "vllm",
       "image": "vllm/vllm-openai:v0.28.0",
       "name": "vLLM",
@@ -2537,6 +3257,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v3.2.4",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "8000/tcp",
@@ -2557,6 +3283,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/surrealdb",
       "id": "surrealdb",
       "image": "surrealdb/surrealdb:v3.2.4",
       "name": "SurrealDB",
@@ -2565,11 +3292,18 @@
       ]
     },
     {
+      "available_tags": [
+        "10.0.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "9000/tcp",
       "default_port": 9009,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/questdb",
       "id": "questdb",
       "image": "questdb/questdb:10.0.1",
       "name": "QuestDB",
@@ -2578,6 +3312,12 @@
       ]
     },
     {
+      "available_tags": [
+        "latest-pg16",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "5432/tcp",
@@ -2598,6 +3338,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/timescaledb",
       "id": "timescaledb",
       "image": "timescale/timescaledb:latest-pg16",
       "name": "TimescaleDB",
@@ -2606,11 +3347,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "6379/tcp",
       "default_port": 6381,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/keydb",
       "id": "keydb",
       "image": "eqalpha/keydb:latest",
       "name": "KeyDB",
@@ -2619,11 +3366,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "6379/tcp",
       "default_port": 6382,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/dragonflydb",
       "id": "dragonflydb",
       "image": "docker.dragonflydb.io/dragonflydb/dragonfly:latest",
       "name": "DragonflyDB",
@@ -2632,6 +3385,12 @@
       ]
     },
     {
+      "available_tags": [
+        "5",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "9042/tcp",
@@ -2645,6 +3404,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/cassandra",
       "id": "cassandra",
       "image": "cassandra:5",
       "name": "Apache Cassandra",
@@ -2653,6 +3413,12 @@
       ]
     },
     {
+      "available_tags": [
+        "5",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "7474/tcp",
@@ -2666,6 +3432,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/neo4j",
       "id": "neo4j",
       "image": "neo4j:5",
       "name": "Neo4j",
@@ -2675,6 +3442,12 @@
       ]
     },
     {
+      "available_tags": [
+        "3.12",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Database",
       "cmd": null,
       "container_port": "8529/tcp",
@@ -2688,6 +3461,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/arangodb",
       "id": "arangodb",
       "image": "arangodb:3.12",
       "name": "ArangoDB",
@@ -2697,11 +3471,18 @@
       ]
     },
     {
+      "available_tags": [
+        "3.0.0-beta.11",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "3000/tcp",
       "default_port": 3030,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/gitness",
       "id": "gitness",
       "image": "harness/gitness:3.0.0-beta.11",
       "name": "Gitness",
@@ -2710,11 +3491,18 @@
       ]
     },
     {
+      "available_tags": [
+        "6",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "4873/tcp",
       "default_port": 4873,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/verdaccio",
       "id": "verdaccio",
       "image": "verdaccio/verdaccio:6",
       "name": "Verdaccio",
@@ -2724,11 +3512,18 @@
       ]
     },
     {
+      "available_tags": [
+        "3.96.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "8081/tcp",
       "default_port": 8320,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/nexus",
       "id": "nexus",
       "image": "sonatype/nexus3:3.96.0",
       "name": "Nexus Repository",
@@ -2737,6 +3532,12 @@
       ]
     },
     {
+      "available_tags": [
+        "3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Development",
       "cmd": null,
       "container_port": "8080/tcp",
@@ -2750,6 +3551,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/buildkite-agent",
       "id": "buildkite-agent",
       "image": "buildkite/agent:3",
       "name": "Buildkite Agent",
@@ -2758,11 +3560,18 @@
       ]
     },
     {
+      "available_tags": [
+        "2.7.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "5055/tcp",
       "default_port": 5055,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/jellyseerr",
       "id": "jellyseerr",
       "image": "fallenbagel/jellyseerr:2.7.3",
       "name": "Jellyseerr",
@@ -2771,6 +3580,12 @@
       ]
     },
     {
+      "available_tags": [
+        "v1.35.0-ls158",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "5055/tcp",
@@ -2791,6 +3606,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/overseerr",
       "id": "overseerr",
       "image": "lscr.io/linuxserver/overseerr:v1.35.0-ls158",
       "name": "Overseerr",
@@ -2799,6 +3615,12 @@
       ]
     },
     {
+      "available_tags": [
+        "1.6.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "6767/tcp",
@@ -2819,6 +3641,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/bazarr",
       "id": "bazarr",
       "image": "lscr.io/linuxserver/bazarr:1.6.0",
       "name": "Bazarr",
@@ -2829,6 +3652,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2.5.2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "9696/tcp",
@@ -2849,6 +3678,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/prowlarr",
       "id": "prowlarr",
       "image": "lscr.io/linuxserver/prowlarr:2.5.2",
       "name": "Prowlarr",
@@ -2857,6 +3687,12 @@
       ]
     },
     {
+      "available_tags": [
+        "6.3.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "7878/tcp",
@@ -2877,6 +3713,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/radarr",
       "id": "radarr",
       "image": "lscr.io/linuxserver/radarr:6.3.0",
       "name": "Radarr",
@@ -2887,6 +3724,12 @@
       ]
     },
     {
+      "available_tags": [
+        "4.0.19",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "8989/tcp",
@@ -2907,6 +3750,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/sonarr",
       "id": "sonarr",
       "image": "lscr.io/linuxserver/sonarr:4.0.19",
       "name": "Sonarr",
@@ -2917,6 +3761,12 @@
       ]
     },
     {
+      "available_tags": [
+        "3.1.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "8686/tcp",
@@ -2937,6 +3787,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/lidarr",
       "id": "lidarr",
       "image": "lscr.io/linuxserver/lidarr:3.1.0",
       "name": "Lidarr",
@@ -2947,6 +3798,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2.18.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Media",
       "cmd": null,
       "container_port": "8181/tcp",
@@ -2967,6 +3824,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/tautulli",
       "id": "tautulli",
       "image": "lscr.io/linuxserver/tautulli:2.18.1",
       "name": "Tautulli",
@@ -2975,6 +3833,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2.3.0-latest",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "5000/tcp",
@@ -2995,6 +3859,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/checkmk",
       "id": "checkmk",
       "image": "checkmk/check-mk-raw:2.3.0-latest",
       "name": "Checkmk",
@@ -3003,6 +3868,12 @@
       ]
     },
     {
+      "available_tags": [
+        "6.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "9000/tcp",
@@ -3044,6 +3915,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/graylog",
       "id": "graylog",
       "image": "graylog/graylog:6.1",
       "name": "Graylog",
@@ -3052,11 +3924,18 @@
       ]
     },
     {
+      "available_tags": [
+        "latest-alpine",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Monitoring",
       "cmd": null,
       "container_port": "8686/tcp",
       "default_port": 8304,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/vector",
       "id": "vector",
       "image": "timberio/vector:latest-alpine",
       "name": "Vector",
@@ -3066,6 +3945,12 @@
       ]
     },
     {
+      "available_tags": [
+        "3.9.8",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Productivity",
       "cmd": null,
       "container_port": "80/tcp",
@@ -3100,6 +3985,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/leantime",
       "id": "leantime",
       "image": "leantime/leantime:3.9.8",
       "name": "Leantime",
@@ -3109,11 +3995,17 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Productivity",
       "cmd": null,
       "container_port": "8000/tcp",
       "default_port": 8306,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/focalboard",
       "id": "focalboard",
       "image": "mattermost/focalboard:latest",
       "name": "Focalboard",
@@ -3122,6 +4014,12 @@
       ]
     },
     {
+      "available_tags": [
+        "3.7.1",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Productivity",
       "cmd": null,
       "container_port": "22300/tcp",
@@ -3177,23 +4075,36 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/joplin-server",
       "id": "joplin-server",
       "image": "joplin/server:3.7.1",
       "name": "Joplin Server",
       "volumes": []
     },
     {
+      "available_tags": [
+        "v1.12.27",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Communication",
       "cmd": null,
       "container_port": "80/tcp",
       "default_port": 8307,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/element-web",
       "id": "element-web",
       "image": "vectorim/element-web:v1.12.27",
       "name": "Element Web",
       "volumes": []
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Communication",
       "cmd": null,
       "container_port": "8008/tcp",
@@ -3214,6 +4125,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/synapse",
       "id": "synapse",
       "image": "matrixdotorg/synapse:latest",
       "name": "Matrix Synapse",
@@ -3222,11 +4134,18 @@
       ]
     },
     {
+      "available_tags": [
+        "v3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": null,
       "container_port": "80/tcp",
       "default_port": 8309,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/traefik",
       "id": "traefik",
       "image": "traefik:v3",
       "name": "Traefik",
@@ -3236,11 +4155,18 @@
       ]
     },
     {
+      "available_tags": [
+        "2-alpine",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": null,
       "container_port": "80/tcp",
       "default_port": 8310,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/caddy",
       "id": "caddy",
       "image": "caddy:2-alpine",
       "name": "Caddy",
@@ -3251,6 +4177,12 @@
       ]
     },
     {
+      "available_tags": [
+        "2026.8.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": [
         "tunnel",
@@ -3267,12 +4199,19 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/cloudflared",
       "id": "cloudflared",
       "image": "cloudflare/cloudflared:2026.8.3",
       "name": "Cloudflare Tunnel",
       "volumes": []
     },
     {
+      "available_tags": [
+        "v1.102.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Networking",
       "cmd": null,
       "container_port": "41641/udp",
@@ -3293,6 +4232,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/tailscale",
       "id": "tailscale",
       "image": "tailscale/tailscale:v1.102.3",
       "name": "Tailscale",
@@ -3301,11 +4241,18 @@
       ]
     },
     {
+      "available_tags": [
+        "v2.3.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Storage",
       "cmd": null,
       "container_port": "3900/tcp",
       "default_port": 3900,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/garage",
       "id": "garage",
       "image": "dxflrs/garage:v2.3.0",
       "name": "Garage",
@@ -3316,11 +4263,18 @@
       ]
     },
     {
+      "available_tags": [
+        "4.45",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Storage",
       "cmd": null,
       "container_port": "9333/tcp",
       "default_port": 9333,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/seaweedfs",
       "id": "seaweedfs",
       "image": "chrislusf/seaweedfs:4.45",
       "name": "SeaweedFS",
@@ -3329,11 +4283,18 @@
       ]
     },
     {
+      "available_tags": [
+        "4.9.2",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Security",
       "cmd": null,
       "container_port": "1514/tcp",
       "default_port": 1514,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/wazuh",
       "id": "wazuh",
       "image": "wazuh/wazuh-manager:4.9.2",
       "name": "Wazuh Manager",
@@ -3345,6 +4306,12 @@
       ]
     },
     {
+      "available_tags": [
+        "0.74.0",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Security",
       "cmd": [
         "server",
@@ -3354,6 +4321,7 @@
       "container_port": "8080/tcp",
       "default_port": 8313,
       "env_vars": [],
+      "icon": "https://cdn.simpleicons.org/trivy",
       "id": "trivy",
       "image": "aquasec/trivy:0.74.0",
       "name": "Trivy Server",
@@ -3362,6 +4330,11 @@
       ]
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Automation",
       "cmd": null,
       "container_port": "3000/tcp",
@@ -3403,12 +4376,19 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/huginn",
       "id": "huginn",
       "image": "ghcr.io/huginn/huginn:latest",
       "name": "Huginn",
       "volumes": []
     },
     {
+      "available_tags": [
+        "main",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Automation",
       "cmd": null,
       "container_port": "8000/tcp",
@@ -3422,12 +4402,19 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/windmill",
       "id": "windmill",
       "image": "ghcr.io/windmill-labs/windmill:main",
       "name": "Windmill",
       "volumes": []
     },
     {
+      "available_tags": [
+        "1.29.3",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Automation",
       "cmd": null,
       "container_port": "8233/tcp",
@@ -3462,12 +4449,18 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/temporal",
       "id": "temporal",
       "image": "temporalio/auto-setup:1.29.3",
       "name": "Temporal Server",
       "volumes": []
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Analytics",
       "cmd": null,
       "container_port": "8088/tcp",
@@ -3495,6 +4488,7 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/superset",
       "id": "superset",
       "image": "apache/superset:latest",
       "name": "Apache Superset",
@@ -3503,6 +4497,12 @@
       ]
     },
     {
+      "available_tags": [
+        "8.0.0.b32245",
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Analytics",
       "cmd": null,
       "container_port": "5000/tcp",
@@ -3530,12 +4530,18 @@
           "secret": true
         }
       ],
+      "icon": "https://cdn.simpleicons.org/redash",
       "id": "redash",
       "image": "redash/redash:8.0.0.b32245",
       "name": "Redash",
       "volumes": []
     },
     {
+      "available_tags": [
+        "latest",
+        "stable",
+        "alpine"
+      ],
       "category": "Analytics",
       "cmd": null,
       "container_port": "8000/tcp",
@@ -3563,6 +4569,7 @@
           "secret": false
         }
       ],
+      "icon": "https://cdn.simpleicons.org/posthog",
       "id": "posthog",
       "image": "posthog/posthog:latest",
       "name": "PostHog",

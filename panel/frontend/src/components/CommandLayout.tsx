@@ -4,6 +4,7 @@ import { useServer } from "../context/ServerContext";
 import { useBranding } from "../context/BrandingContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
+import GlobalDockDrawer, { type DockTab } from "./GlobalDockDrawer";
 import LayoutSwitcher from "./LayoutSwitcher";
 import { useState, useRef, useEffect } from "react";
 
@@ -62,6 +63,32 @@ export default function CommandLayout() {
   // Layout options (persisted in localStorage)
   const [showHeader, setShowHeader] = useState(() => localStorage.getItem("dp-show-header") === "true");
   const [flatNav, setFlatNav] = useState(() => localStorage.getItem("dp-flat-nav") === "true");
+
+  // Global dock drawer (ported from the AI Studio v2 pattern, wired to the
+  // real terminal WebSocket and the real log endpoints — see
+  // GlobalDockDrawer.tsx). Ctrl+` toggles it from anywhere in this layout,
+  // except while typing in a field, where the keystroke belongs to the field.
+  const [dockOpen, setDockOpen] = useState(false);
+  const [dockTab, setDockTab] = useState<DockTab>("terminal");
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key !== "`") return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      e.preventDefault();
+      setDockOpen((prev) => !prev);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+  const toggleDock = (tab: DockTab) => {
+    if (dockOpen && dockTab === tab) {
+      setDockOpen(false);
+    } else {
+      setDockTab(tab);
+      setDockOpen(true);
+    }
+  };
 
   // Expose setters for Settings page
   useEffect(() => {
@@ -323,6 +350,14 @@ export default function CommandLayout() {
                     </span>
                   )}
                 </Link>
+                <button
+                  onClick={() => toggleDock("terminal")}
+                  className="p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded"
+                  title="Toggle dock terminal (Ctrl+`)"
+                  aria-label="Toggle dock terminal"
+                >
+                  <Icon name="terminal" className="w-4 h-4" />
+                </button>
                 <LayoutSwitcher variant={isLight ? "light" : "dark"} />
                 <button
                   onClick={state.cycleTheme}
@@ -378,6 +413,30 @@ export default function CommandLayout() {
 
             {/* Right side */}
             <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => toggleDock("terminal")}
+                className={`hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                  dockOpen && dockTab === "terminal"
+                    ? "bg-rust-500/20 border-rust-500/50 text-rust-400"
+                    : "bg-dark-800/70 hover:bg-dark-800 border-dark-700/70 text-dark-200 hover:text-dark-50"
+                }`}
+                title="Toggle dock terminal (Ctrl+`)"
+              >
+                Terminal
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleDock("logs")}
+                className={`hidden xl:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                  dockOpen && dockTab === "logs"
+                    ? "bg-rust-500/20 border-rust-500/50 text-rust-400"
+                    : "bg-dark-800/70 hover:bg-dark-800 border-dark-700/70 text-dark-200 hover:text-dark-50"
+                }`}
+                title="Toggle live log drawer (Ctrl+`)"
+              >
+                Live Logs
+              </button>
               <Link to="/notifications" className="relative p-2 rounded-lg transition-colors text-dark-400 hover:text-dark-50 hover:bg-dark-800" title={state.notifCount > 0 ? `${state.notifCount} unread notification${state.notifCount === 1 ? "" : "s"}` : "Notifications"} aria-label="Notifications">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
@@ -452,6 +511,10 @@ export default function CommandLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* Global dock drawer: CommandLayout only, as in v2. The other
+          layouts (Atlas/Glass/Nexus) do not mount it in this pass. */}
+      <GlobalDockDrawer open={dockOpen} onClose={() => setDockOpen(false)} initialTab={dockTab} />
     </div>
   );
 }

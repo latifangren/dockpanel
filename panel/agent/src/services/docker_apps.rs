@@ -298,6 +298,18 @@ pub struct AppTemplate {
     pub container_port: String,
     pub env_vars: Vec<EnvVar>,
     pub volumes: Vec<String>,
+    /// Brand icon URL for the catalogue card. Derived, not declared per
+    /// template: SimpleIcons by catalogue id (the AI Studio v2 fixture added
+    /// this field by hand, which the generated-fixture test would have
+    /// overwritten on the next regeneration — deriving it here makes the
+    /// fixture, the API, and the card agree). The frontend falls back to its
+    /// own inline icon or the template initial when the CDN is unreachable,
+    /// so a missing/offline icon degrades, it never breaks the card.
+    pub icon: String,
+    /// Tag choices shown on the catalogue card. Display only: deploy takes
+    /// a template_id and always uses the template's declared image, so
+    /// picking a tag here does not (yet) change what gets deployed.
+    pub available_tags: Vec<String>,
     /// True when the template materially benefits from GPU passthrough
     /// (LLM/diffusion/ASR inference). Frontend uses this to badge the
     /// template card and pre-tick the GPU toggle on the deploy form.
@@ -2903,6 +2915,35 @@ static TEMPLATES: &[AppTemplateDef] = &[
 ];
 
 /// Convert a static template definition to the owned serializable type.
+/// SimpleIcons CDN slug for a template. The catalogue id is used verbatim:
+/// no catalogue id carries a trailing numeric suffix, so the v2 fixture's
+/// slug-stripping rule and the plain id agree on all 148 entries.
+fn template_icon(id: &str) -> String {
+    format!("https://cdn.simpleicons.org/{id}")
+}
+
+/// Tag choices for a template card: the image's own tag first (the part
+/// after the last ':' in the last path segment, so a registry port can never
+/// be mistaken for a tag), then the generic fallbacks, deduplicated.
+/// Deliberately NOT v2's fixture list verbatim: v2 appended `lts` to 23
+/// entries by no rule visible in the data, and a generated artefact must be
+/// derivable from its source or the regeneration test cannot reproduce it.
+fn template_available_tags(image: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    let last_segment = image.rsplit('/').next().unwrap_or(image);
+    if let Some((_, tag)) = last_segment.split_once(':') {
+        if !tag.is_empty() {
+            tags.push(tag.to_string());
+        }
+    }
+    for fallback in ["latest", "stable", "alpine"] {
+        if !tags.iter().any(|t| t == fallback) {
+            tags.push(fallback.to_string());
+        }
+    }
+    tags
+}
+
 fn to_app_template(def: &AppTemplateDef) -> AppTemplate {
     AppTemplate {
         id: def.id.to_string(),
@@ -2925,6 +2966,8 @@ fn to_app_template(def: &AppTemplateDef) -> AppTemplate {
             })
             .collect(),
         volumes: def.volumes.iter().map(|v| v.to_string()).collect(),
+        icon: template_icon(def.id),
+        available_tags: template_available_tags(def.image),
         gpu_recommended: GPU_RECOMMENDED_TEMPLATES.contains(&def.id),
     }
 }
@@ -6481,6 +6524,8 @@ mod tests {
                     "name": t.name,
                     "category": t.category,
                     "image": t.image,
+                    "icon": template_icon(t.id),
+                    "available_tags": template_available_tags(t.image),
                     "default_port": t.default_port,
                     "container_port": t.container_port,
                     // Null for all but the handful the catalogue overrides, which

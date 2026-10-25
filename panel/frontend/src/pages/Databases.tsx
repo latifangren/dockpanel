@@ -537,6 +537,36 @@ function SqlBrowser({
                   Execute
                 </button>
                 <span className="text-xs text-dark-400">Ctrl+Enter</span>
+                {engine === "postgres" && (
+                  <span className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const q =
+                          "SELECT query, calls, total_exec_time, mean_exec_time, rows FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 20;";
+                        setSql(q);
+                        executeQuery(q);
+                      }}
+                      className="px-2 py-1 text-xs text-dark-300 hover:text-dark-100 border border-dark-500 rounded hover:bg-dark-700"
+                      title="Runs a real query against pg_stat_statements. Fails with the database's own error if the extension is not installed — no demo rows are ever shown."
+                    >
+                      Slow queries
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const q =
+                          "SELECT pid, usename, application_name, state, query_start, query FROM pg_stat_activity WHERE state <> 'idle' ORDER BY query_start;";
+                        setSql(q);
+                        executeQuery(q);
+                      }}
+                      className="px-2 py-1 text-xs text-dark-300 hover:text-dark-100 border border-dark-500 rounded hover:bg-dark-700"
+                      title="Runs a real query against pg_stat_activity."
+                    >
+                      Active queries
+                    </button>
+                  </span>
+                )}
               </div>
               {result && (
                 <span className="text-xs text-dark-300">

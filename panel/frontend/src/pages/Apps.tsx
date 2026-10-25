@@ -35,6 +35,14 @@ interface AppTemplate {
   container_port: string;
   env_vars: EnvVar[];
   gpu_recommended?: boolean;
+  // Ported from the AI Studio v2 catalogue: the agent now derives these
+  // (see docker_apps.rs template_icon/template_available_tags) instead of
+  // v2's hand-edited fixture, so they survive fixture regeneration.
+  // available_tags is display data for now: deploy takes a template_id and
+  // always uses the template's declared image, so no tag picker is wired
+  // into the deploy dialog in this pass.
+  icon?: string;
+  available_tags?: string[];
 }
 
 interface GpuDevice {
@@ -338,6 +346,28 @@ const appIcons: Record<string, ReactNode> = {
     <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#ff8e20" width="128" height="128"/><rect fill="#fff" x="20" y="24" width="40" height="28" rx="8" opacity=".9"/><rect fill="#fff" x="68" y="48" width="40" height="28" rx="8" opacity=".9"/><rect fill="#fff" x="20" y="76" width="48" height="28" rx="8" opacity=".7"/><path fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" d="M48 52v8l20-4M72 76l-12 8" opacity=".6"/></svg>
   ),
 };
+// Catalogue card icon, ported from v2's AppBrandIcon. Priority: the panel's
+// own inline SVG for templates that have one (works offline), then the
+// agent-derived SimpleIcons URL, then the template initial. A failed CDN
+// image degrades to the initial — it never leaves a broken-image icon.
+function TemplateBrandIcon({ tmpl }: { tmpl: AppTemplate }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  if (appIcons[tmpl.id]) return <>{appIcons[tmpl.id]}</>;
+  const iconUrl = tmpl.icon || `https://cdn.simpleicons.org/${tmpl.id}`;
+  if (imgFailed) {
+    return <span className="text-sm font-bold text-dark-200">{tmpl.name[0]}</span>;
+  }
+  return (
+    <img
+      src={iconUrl}
+      alt=""
+      loading="lazy"
+      onError={() => setImgFailed(true)}
+      className="w-6 h-6 object-contain"
+    />
+  );
+}
+
 
 /// What the panel knows about a deliberate stop, in words an operator can act on.
 /// Falls through to a neutral sentence rather than inventing a cause for a reason
@@ -2291,7 +2321,7 @@ volumes:
             >
               <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${categoryColors[tmpl.category] || "bg-dark-700"}`}>
-                  {appIcons[tmpl.id] || <span className="text-sm font-bold text-dark-200">{tmpl.name[0]}</span>}
+                  <TemplateBrandIcon tmpl={tmpl} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">

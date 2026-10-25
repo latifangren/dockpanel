@@ -19,6 +19,14 @@ export interface NavItem {
    */
   resellerOnly?: boolean;
   /**
+   * Hidden from the sidebar (and the command palette, which reads the same
+   * visibility decision) because its content lives inside a hub page, while
+   * the route itself stays registered and directly reachable — the same
+   * "hide the door, keep the room" rule lite mode uses, applied in every
+   * mode. Ported from the AI Studio v2 nav consolidation.
+   */
+  consolidatedInto?: string;
+  /**
    * Shown in DockPanel Lite mode (backend `DOCKPANEL_LITE=1` surfaces as
    * `lite:true` on /api/branding). Lite is an opt-in set: in lite mode
    * ONLY rows carrying this flag are shown, everything else is hidden
@@ -51,7 +59,7 @@ export interface NavGroup {
  * 403s. A decision inlined in two menus is a decision that drifts.
  */
 export function isNavVisible(
-  item: Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly" | "liteVisible">,
+  item: Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly" | "liteVisible" | "consolidatedInto">,
   role: string,
   lite = false,
 ): boolean {
@@ -61,6 +69,8 @@ export function isNavVisible(
   // Rows WITH the flag still go through the role logic below, so an
   // adminOnly lite row (Docker Apps, Settings) stays admin-only.
   if (lite && !item.liteVisible) return false;
+  // Consolidated rows are hidden in every mode: the hub is their door.
+  if (item.consolidatedInto) return false;
   // Ahead of the admin branch, because it is the one kind of row "admin sees
   // everything" gets wrong: a tenant-scoped page has nothing to show an account
   // that is not a tenant, and the handler behind it says so with a 403.
@@ -80,7 +90,7 @@ export function isNavVisible(
  */
 export function navFlagsFor(
   path: string,
-): Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly" | "liteVisible"> {
+): Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly" | "liteVisible" | "consolidatedInto"> {
   const base = path.split("?")[0];
   for (const group of navGroups) {
     for (const item of group.items) {
@@ -91,6 +101,23 @@ export function navFlagsFor(
 }
 
 export const navGroups: NavGroup[] = [
+  {
+    // Ported from the AI Studio v2 navigation consolidation. Projects is a
+    // local-browser workspace view (see Projects.tsx), so it is lite-visible:
+    // it groups exactly the lite set plus the pages lite hides, without
+    // resurrecting any hidden route's sidebar row. Networking wraps Sites /
+    // DNS / CDN, which lite hides, so it is NOT lite-visible — in lite mode
+    // its tab content stays reachable only by direct URL, like every other
+    // hidden route. Container Policies is deliberately NOT consolidated here:
+    // v2 folded it into an /apps policies tab that this codebase does not
+    // have, and folding it without that tab would orphan the page.
+    key: "workspaces",
+    label: "Workspaces & Apps",
+    items: [
+      { to: "/projects", label: "Projects", iconName: "extensions", liteVisible: true },
+      { to: "/networking", label: "Domains, DNS & CDN", iconName: "dns", adminOnly: true },
+    ],
+  },
   {
     key: "hosting",
     label: "Hosting",
@@ -123,8 +150,8 @@ export const navGroups: NavGroup[] = [
     key: "operations",
     label: "Operations",
     items: [
-      { to: "/dns", label: "DNS", iconName: "dns", adminOnly: true },
-      { to: "/cdn", label: "CDN", iconName: "dns", adminOnly: true },
+      { to: "/dns", label: "DNS", iconName: "dns", adminOnly: true, consolidatedInto: "/networking?tab=dns" },
+      { to: "/cdn", label: "CDN", iconName: "dns", adminOnly: true, consolidatedInto: "/networking?tab=cdn" },
       // Unrestricted since v2.103.0, and the flag's absence is the whole point.
       // The backend admits a mail domain to whoever owns the site of the same
       // name on the same server (`MAIL_DOMAIN_CALLER_PREDICATE`, backend
