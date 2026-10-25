@@ -31,3 +31,4 @@
 - [API Reference](api-reference.md)
 - [CLI Reference](cli-reference.md)
 - [Troubleshooting](troubleshooting.md)
+- [Fork: DockPanel Lite untuk postmarketOS](lite-pmos-blueprint.md)
