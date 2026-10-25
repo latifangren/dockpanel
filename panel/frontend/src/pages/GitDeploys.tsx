@@ -1,37 +1,17 @@
 import { useAuth } from "../context/AuthContext";
 import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { createPortal } from "react-dom";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
 import ConfirmDialog from "../components/ConfirmDialog";
+import { maskRepoCredentials, statusBadge } from "./gitdeploys/helpers";
+export { maskRepoCredentials };
+import ApprovalsBanner from "./gitdeploys/ApprovalsBanner";
+import DeployDetail from "./gitdeploys/DeployDetail";
+import DeployForm from "./gitdeploys/DeployForm";
 
-/**
- * Hide credentials embedded in a repository URL before it reaches the screen.
- *
- * `is_valid_repo_url` on the agent accepts any https:// URL, userinfo included,
- * and nothing on the panel side strips it — so an operator who pastes
- * `https://ghp_xxx@github.com/me/app.git` (the workaround people reach for when
- * a private HTTPS clone fails) stores a live token in `git_deploys.repo_url`.
- * This page then printed it back in three places, one of which — the deploy
- * approval queue — is read by an ADMINISTRATOR looking at somebody else's
- * deployment. Masking here does not un-store the token, and the guide now says
- * so; it stops the panel being the thing that shows it around.
- *
- * Only the userinfo is touched. Everything else about the URL still renders, so
- * the operator can still tell which repository a row is for.
- */
-export function maskRepoCredentials(url: string): string {
-  // Anchored on the scheme so a path containing '@' cannot be mistaken for
-  // userinfo, and non-greedy up to the LAST '@' before the first '/' of the
-  // path — which is where a parser puts the authority boundary.
-  return url.replace(
-    /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/@]*@)/,
-    (_m, scheme) => `${scheme}•••@`,
-  );
-}
 
-interface GitDeploy {
+export interface GitDeploy {
   id: string;
   name: string;
   repo_url: string;
@@ -73,7 +53,7 @@ interface GitDeploy {
   volumes: string[];
 }
 
-interface GitPreview {
+export interface GitPreview {
   id: string;
   git_deploy_id: string;
   branch: string;
@@ -91,7 +71,7 @@ interface GitPreview {
 // endpoints behind it (list / approve / reject) shipped fully built and scoped and
 // no screen ever called them, so the only way to finish a protected deploy was a
 // pair of hand-written curls against ids nothing displayed.
-interface DeployApproval {
+export interface DeployApproval {
   id: string;
   deploy_id: string;
   requested_by: string;
@@ -103,7 +83,7 @@ interface DeployApproval {
   created_at: string;
 }
 
-interface DeployHistory {
+export interface DeployHistory {
   id: string;
   git_deploy_id: string;
   commit_hash: string;
@@ -116,43 +96,6 @@ interface DeployHistory {
   created_at: string;
 }
 
-function statusBadge(status: string) {
-  const map: Record<string, string> = {
-    pending: "bg-dark-700 text-dark-200",
-    deploying: "bg-warn-500/15 text-warn-400 animate-pulse",
-    running: "bg-rust-500/15 text-rust-400",
-    failed: "bg-danger-500/15 text-danger-400",
-    stopped: "bg-dark-700 text-dark-300",
-  };
-  return map[status] || "bg-dark-700 text-dark-200";
-}
-
-// Framework GUESS from repository URL keywords, ported from the AI Studio
-// v2 detection idea and deliberately weakened: v2 presented this as
-// "automatic framework detection", but matching substrings in a URL is not
-// inspecting a repository. This helper only prefills the port and the
-// pre-build command, shows its basis in the UI, and stays fully editable —
-// the operator's values always win, and build_method itself is left to the
-// server, which is what decides it in this codebase.
-function guessFrameworkFromUrl(repoUrl: string): { label: string; port: number; preBuild: string } | null {
-  const lower = repoUrl.toLowerCase();
-  if (lower.includes("next") || lower.includes("react") || lower.includes("saas") || lower.includes("web")) {
-    return { label: "Next.js / Node.js (guess)", port: 3000, preBuild: "npm ci && npm run build" };
-  }
-  if (lower.includes("rust") || lower.includes("cargo") || lower.includes("axum") || lower.includes("actix")) {
-    return { label: "Rust / Cargo (guess)", port: 8080, preBuild: "cargo build --release" };
-  }
-  if (lower.includes("laravel") || lower.includes("php") || lower.includes("wp")) {
-    return { label: "Laravel / PHP (guess)", port: 8000, preBuild: "composer install --no-dev --optimize-autoloader" };
-  }
-  if (lower.includes("go") || lower.includes("gin") || lower.includes("fiber")) {
-    return { label: "Go (guess)", port: 8080, preBuild: "go build -ldflags='-s -w' -o app ." };
-  }
-  if (lower.includes("python") || lower.includes("fastapi") || lower.includes("django")) {
-    return { label: "Python / FastAPI (guess)", port: 8000, preBuild: "pip install -r requirements.txt" };
-  }
-  return null;
-}
 
 export default function GitDeploys() {
   const { user } = useAuth();
@@ -625,97 +568,13 @@ export default function GitDeploys() {
         />
       )}
 
-      {/* Pending deploy approvals.
-          Installation-wide for the machines this administrator operates — not a
-          property of the selected row — and the bell notification an approver
-          follows links to this page with nothing selected. So it sits above the
-          list, where it is the first thing on screen. */}
-      {approvals.length > 0 && (
-        <div className="mb-4 bg-dark-800 rounded-lg border border-warn-500/30 overflow-hidden">
-          <div className="px-5 py-4 border-b border-dark-600">
-            <h2 className="text-xs font-medium text-warn-400 uppercase font-mono tracking-widest">
-              Pending Approvals ({approvals.length})
-            </h2>
-            <p className="text-xs text-dark-200 mt-1">
-              Protected deployments waiting on a second administrator. You cannot approve a request you filed yourself.
-            </p>
-          </div>
-          <div className="divide-y divide-dark-600">
-            {approvals.map((a) => {
-              const own = a.requested_by === user.id;
-              return (
-                <div key={a.id} className="px-5 py-3 flex items-center justify-between gap-4">
-                  {/* The deployment list is scoped to its owner, so the approving
-                      administrator has usually never seen this deployment anywhere
-                      else in the panel. Naming the requester, the repository and
-                      the branch is what makes the second signature a review rather
-                      than a formality. */}
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-warn-500/15 text-warn-400 shrink-0">
-                        awaiting approval
-                      </span>
-                      <code className="text-sm text-dark-50 font-mono truncate">{a.deploy_name}</code>
-                      <span className="text-xs text-dark-300 shrink-0 hidden sm:inline">{new Date(a.created_at).toLocaleString()}</span>
-                    </div>
-                    <div className="mt-1 text-xs text-dark-200 font-mono truncate">
-                      {a.requested_by_email} &middot; {maskRepoCredentials(a.repo_url).replace(/^https?:\/\//, "").replace(/\.git$/, "")} &middot; {a.branch}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {own ? (
-                      // Not a dead end. `reject_deploy` has no self-rejection ban, so
-                      // the requester may withdraw — and on a single-admin install
-                      // that is the ONLY exit: nobody else exists to approve, and the
-                      // one-pending-per-deployment index means pressing Deploy again
-                      // cannot replace the row either.
-                      <>
-                        <span className="text-xs text-dark-300 font-mono hidden md:inline">your request — another admin must approve it</span>
-                        <button
-                          onClick={() => setPendingConfirm({
-                            type: "reject-request",
-                            id: a.id,
-                            label: `Withdraw your own deploy request for "${a.deploy_name}"?`,
-                          })}
-                          disabled={resolving === a.id}
-                          className="px-3 py-1 bg-dark-700 text-dark-100 rounded-md text-xs font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
-                        >
-                          {resolving === a.id ? "Working..." : "Withdraw"}
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          onClick={() => setPendingConfirm({
-                            type: "approve-request",
-                            id: a.id,
-                            label: `Approve and deploy "${a.deploy_name}" to production now.`,
-                          })}
-                          disabled={resolving === a.id}
-                          className="px-3 py-1 bg-rust-500/15 text-rust-400 rounded-md text-xs font-medium hover:bg-rust-500/25 disabled:opacity-50 transition-colors"
-                        >
-                          {resolving === a.id ? "Working..." : "Approve"}
-                        </button>
-                        <button
-                          onClick={() => setPendingConfirm({
-                            type: "reject-request",
-                            id: a.id,
-                            label: `Reject the deploy request for "${a.deploy_name}"? This is final — the requester has to ask again.`,
-                          })}
-                          disabled={resolving === a.id}
-                          className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-danger-500/20 disabled:opacity-50 transition-colors"
-                        >
-                          Reject
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* Pending deploy approvals — moved to ./gitdeploys/ApprovalsBanner.tsx */}
+      <ApprovalsBanner
+        approvals={approvals}
+        user={user}
+        resolving={resolving}
+        setPendingConfirm={setPendingConfirm}
+      />
 
       {/* Deploy list */}
       <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
@@ -802,894 +661,95 @@ export default function GitDeploys() {
         )}
       </div>
 
-      {/* Detail panel */}
-      {selected && (
-        <div className="mt-6 space-y-6 animate-fade-up">
-          {/* Config section */}
-          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-            <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
-              <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Configuration</h2>
-              <button
-                onClick={openEdit}
-                className="px-3 py-1 bg-dark-700 text-dark-100 rounded-md text-xs font-medium hover:bg-dark-600 transition-colors"
-              >
-                Edit
-              </button>
-            </div>
-            <div className="p-5">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {[
-                  { label: "Name", value: selected.name },
-                  { label: "Repository", value: maskRepoCredentials(selected.repo_url) },
-                  { label: "Branch", value: selected.branch },
-                  { label: "Dockerfile", value: selected.dockerfile },
-                  { label: "Container Port", value: String(selected.container_port) },
-                  { label: "Host Port", value: String(selected.host_port) },
-                  { label: "Domain", value: selected.domain || "\u2014" },
-                  { label: "Auto-deploy", value: selected.auto_deploy ? "Enabled" : "Disabled" },
-                  { label: "Status", value: selected.status },
-                  { label: "Last Commit", value: selected.last_commit ? selected.last_commit.substring(0, 8) : "\u2014" },
-                  { label: "Memory Limit", value: selected.memory_mb ? `${selected.memory_mb} MB` : "None" },
-                  { label: "CPU Limit", value: selected.cpu_percent ? `${selected.cpu_percent}%` : "None" },
-                  {
-                    label: "HTTPS",
-                    value:
-                      (selected.tls_mode ?? (selected.ssl_email ? "acme" : "none")) === "provided"
-                        ? `Registered certificate (${selected.tls_certificate || "\u2014"})`
-                        : (selected.tls_mode ?? (selected.ssl_email ? "acme" : "none")) === "acme"
-                        ? `Let's Encrypt (${selected.ssl_email || "\u2014"})`
-                        : "None",
-                  },
-                  { label: "Pre-build Cmd", value: selected.pre_build_cmd || "\u2014" },
-                  { label: "Post-deploy Cmd", value: selected.post_deploy_cmd || "\u2014" },
-                  { label: "Build Method", value: selected.build_method === "nixpacks" ? "Nixpacks" : selected.build_method === "auto-detect" ? "Auto-detect" : selected.build_method === "compose" ? "Docker Compose" : "Dockerfile" },
-                  { label: "Preview TTL", value: selected.preview_ttl_hours > 0 ? `${selected.preview_ttl_hours}h` : "No auto-cleanup" },
-                  { label: "Build Context", value: selected.build_context || "." },
-                  { label: "GitHub", value: selected.github_token ? "Connected" : "Not configured" },
-                  { label: "Deploy Schedule", value: selected.deploy_cron || "\u2014" },
-                  { label: "Deploy Protection", value: selected.deploy_protected ? "Second admin must approve" : "Disabled" },
-                ].map((field) => (
-                  <div key={field.label}>
-                    <span className="block text-xs font-medium text-dark-300 mb-0.5">{field.label}</span>
-                    <span className="text-sm text-dark-50 font-mono break-all">{field.value}</span>
-                  </div>
-                ))}
-              </div>
-              {Object.keys(selected.env_vars).length > 0 && (
-                <div className="mt-4">
-                  <span className="block text-xs font-medium text-dark-300 mb-1">Environment Variables</span>
-                  <div className="bg-dark-900 border border-dark-500 rounded-lg p-3 space-y-1">
-                    {Object.entries(selected.env_vars).map(([k, v]) => (
-                      <div key={k} className="flex items-center gap-2 text-xs font-mono">
-                        <span className="text-dark-100">{k}</span>
-                        <span className="text-dark-300">=</span>
-                        <span className="text-dark-200">{"*".repeat(Math.min(v.length, 12))}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {(selected.volumes || []).length > 0 && (
-                <div className="mt-4">
-                  <span className="block text-xs font-medium text-dark-300 mb-1">Persistent Volumes</span>
-                  <div className="bg-dark-900 border border-dark-500 rounded-lg p-3 space-y-1">
-                    {selected.volumes.map((path) => (
-                      <div key={path} className="text-xs font-mono text-dark-100">{path}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {Object.keys(selected.build_args || {}).length > 0 && (
-                <div className="mt-4">
-                  <span className="block text-xs font-medium text-dark-300 mb-1">Build Arguments</span>
-                  <div className="bg-dark-900 border border-dark-500 rounded-lg p-3 space-y-1">
-                    {Object.entries(selected.build_args).map(([k, v]) => (
-                      <div key={k} className="flex items-center gap-2 text-xs font-mono">
-                        <span className="text-dark-100">{k}</span>
-                        <span className="text-dark-300">=</span>
-                        <span className="text-dark-200">{v}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Actions bar */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => handleDeploy(selected.id)}
-              disabled={deploying === selected.id}
-              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors flex items-center gap-2"
-            >
-              {deploying === selected.id && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-              {deploying === selected.id ? "Deploying..." : "Deploy Now"}
-            </button>
-            {selected.status === "running" && (
-              <>
-                <button onClick={async () => { await api.post(`/git-deploys/${selected.id}/stop`); loadDeploys(); }} className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors">Stop</button>
-                <button onClick={async () => { await api.post(`/git-deploys/${selected.id}/restart`); loadDeploys(); }} className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors">Restart</button>
-              </>
-            )}
-            {selected.status === "stopped" && (
-              <button onClick={async () => { await api.post(`/git-deploys/${selected.id}/start`); loadDeploys(); setMessage({ text: "Container started", type: "success" }); }} className="px-3 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">Start</button>
-            )}
-            <button
-              onClick={() => handleDelete(selected.id)}
-              className="px-4 py-2 bg-danger-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/20 transition-colors"
-            >
-              Delete
-            </button>
-          </div>
-
-          {/* Deploy Key */}
-          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-            <button
-              onClick={() => setShowDeployKey(!showDeployKey)}
-              className="w-full px-5 py-4 flex items-center justify-between hover:bg-dark-700/30 transition-colors"
-            >
-              <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Deploy Key</h2>
-              <svg className={`w-4 h-4 text-dark-300 transition-transform ${showDeployKey ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-              </svg>
-            </button>
-            {showDeployKey && (
-              <div className="px-5 pb-5 border-t border-dark-600 pt-4">
-                <p className="text-xs text-dark-200 mb-3">Add this key to your Git provider for private repos.</p>
-                {selected.deploy_key_public ? (
-                  <div className="space-y-3">
-                    <div className="relative">
-                      <pre className="bg-dark-900 border border-dark-500 rounded-lg p-3 text-xs font-mono text-dark-100 overflow-x-auto whitespace-pre-wrap break-all">
-                        {selected.deploy_key_public}
-                      </pre>
-                      <button
-                        onClick={() => copyText(selected.deploy_key_public!)}
-                        className="absolute top-2 right-2 px-2 py-1 bg-dark-800 border border-dark-500 rounded text-xs text-dark-200 hover:text-dark-50 transition-colors"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                    <button
-                      onClick={handleKeygen}
-                      disabled={generatingKey}
-                      className="text-sm text-dark-200 hover:text-dark-50 transition-colors"
-                    >
-                      {generatingKey ? "Regenerating..." : "Regenerate key"}
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={handleKeygen}
-                    disabled={generatingKey}
-                    className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
-                  >
-                    {generatingKey ? "Generating..." : "Generate Deploy Key"}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Container Logs */}
-          {selected.container_id && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-              <button onClick={() => { setShowLogs(!showLogs); if (!showLogs) loadContainerLogs(); }} className="w-full px-5 py-4 flex items-center justify-between hover:bg-dark-700/30 transition-colors">
-                <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Container Logs</h2>
-                <svg className={`w-4 h-4 text-dark-300 transition-transform ${showLogs ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                </svg>
-              </button>
-              {showLogs && (
-                <div className="border-t border-dark-600">
-                  <div className="flex items-center justify-between px-5 py-2 bg-dark-900">
-                    <span className="text-xs text-dark-300 font-mono">stdout + stderr</span>
-                    <button onClick={loadContainerLogs} className="text-xs text-rust-400 hover:text-rust-300 transition-colors">Refresh</button>
-                  </div>
-                  <pre className="p-4 text-[11px] font-mono text-dark-200 bg-dark-950 max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap">
-                    {containerLogs || "No logs available"}
-                  </pre>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Webhook URL */}
-          {selected.auto_deploy && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-              <div className="px-5 py-4 border-b border-dark-600">
-                <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Webhook URL</h2>
-                <p className="text-xs text-dark-200 mt-1">Add this URL to your Git provider's webhook settings (push events).</p>
-              </div>
-              <div className="p-5">
-                <div className="relative">
-                  <pre className="bg-dark-900 border border-dark-500 rounded-lg p-3 text-xs font-mono text-dark-100 overflow-x-auto pr-24">
-                    {showSecret
-                      ? `${window.location.origin}/api/webhooks/git/${selected.id}/${selected.webhook_secret}`
-                      : `${window.location.origin}/api/webhooks/git/${selected.id}/${"●".repeat(8)}`}
-                  </pre>
-                  <div className="absolute top-2 right-2 flex items-center gap-1">
-                    <button
-                      onClick={() => setShowSecret(!showSecret)}
-                      className="px-2 py-1 bg-dark-800 border border-dark-500 rounded text-xs text-dark-200 hover:text-dark-50 transition-colors"
-                      title={showSecret ? "Hide secret" : "Show secret"}
-                    >
-                      {showSecret ? (
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-                        </svg>
-                      ) : (
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => copyText(`${window.location.origin}/api/webhooks/git/${selected.id}/${selected.webhook_secret}`)}
-                      className="px-2 py-1 bg-dark-800 border border-dark-500 rounded text-xs text-dark-200 hover:text-dark-50 transition-colors"
-                    >
-                      Copy
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Deploy History */}
-          {history.length > 0 && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-              <div className="px-5 py-4 border-b border-dark-600">
-                <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Deploy History</h2>
-              </div>
-              <div className="divide-y divide-dark-600">
-                {history.map((entry, idx) => (
-                  <div key={entry.id}>
-                    <button
-                      onClick={() => setExpandedLog(expandedLog === entry.id ? null : entry.id)}
-                      className="w-full px-5 py-3 flex items-center justify-between hover:bg-dark-700/30 transition-colors text-left"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium shrink-0 ${statusBadge(entry.status)}`}>
-                          {entry.status}
-                        </span>
-                        <code className="text-xs text-dark-200 bg-dark-700 px-1.5 py-0.5 rounded font-mono shrink-0">
-                          {entry.commit_hash.substring(0, 8)}
-                        </code>
-                        {entry.commit_message && (
-                          <span className="text-sm text-dark-100 truncate">{entry.commit_message}</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0 ml-3">
-                        <span className="text-xs text-dark-300 bg-dark-700 px-1.5 py-0.5 rounded">{entry.triggered_by}</span>
-                        {entry.duration_ms != null && (
-                          <span className="text-xs text-dark-200 font-mono">{(entry.duration_ms / 1000).toFixed(1)}s</span>
-                        )}
-                        <span className="text-xs text-dark-300">{new Date(entry.created_at).toLocaleString()}</span>
-                        {/* Rollback button — not on the first (latest) entry if it's running */}
-                        {!(idx === 0 && (entry.status === "deploying" || entry.status === "running")) && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleRollback(entry.id); }}
-                            className="px-2 py-0.5 bg-warn-500/10 text-warn-400 rounded text-xs font-medium hover:bg-warn-500/20 transition-colors"
-                          >
-                            Rollback
-                          </button>
-                        )}
-                        {entry.status === "failed" && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setExpandedLog(entry.id); explainWithAi(entry.id); }}
-                            disabled={aiExplain[entry.id]?.loading}
-                            className="px-2 py-0.5 bg-accent-500/10 text-accent-400 rounded text-xs font-medium hover:bg-accent-500/20 transition-colors disabled:opacity-50"
-                          >
-                            {aiExplain[entry.id]?.loading ? "Explaining..." : "Explain with AI"}
-                          </button>
-                        )}
-                        <svg className={`w-4 h-4 text-dark-300 transition-transform ${expandedLog === entry.id ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                        </svg>
-                      </div>
-                    </button>
-                    {expandedLog === entry.id && entry.output && (
-                      <div className="px-5 pb-4 space-y-3">
-                        <pre className="bg-dark-900 text-dark-100 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap border border-dark-500">
-                          {entry.output}
-                        </pre>
-                        {aiExplain[entry.id] && (
-                          <div className="bg-accent-500/5 border border-accent-500/20 rounded-lg p-4">
-                            <div className="flex items-center gap-2 mb-1.5">
-                              <span className="text-[10px] font-medium text-accent-400 uppercase tracking-widest">AI Diagnosis</span>
-                              {aiExplain[entry.id].provider && (
-                                <span className="text-[10px] text-dark-300">via {aiExplain[entry.id].provider}</span>
-                              )}
-                            </div>
-                            {aiExplain[entry.id].loading && (
-                              <p className="text-xs text-dark-200">Asking the configured provider...</p>
-                            )}
-                            {aiExplain[entry.id].error && (
-                              <p className="text-xs text-danger-400">{aiExplain[entry.id].error}</p>
-                            )}
-                            {aiExplain[entry.id].text && (
-                              <p className="text-xs text-dark-100 whitespace-pre-wrap">{aiExplain[entry.id].text}</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Preview Deployments */}
-          {previews.length > 0 && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-              <div className="px-5 py-4 border-b border-dark-600">
-                <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Preview Deployments</h2>
-              </div>
-              <div className="divide-y divide-dark-600">
-                {previews.map(p => (
-                  <div key={p.id} className="px-5 py-3 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge(p.status)}`}>{p.status}</span>
-                      <code className="text-sm text-dark-50 font-mono">{p.branch}</code>
-                      {p.commit_hash && <code className="text-xs text-dark-300 font-mono">{p.commit_hash.substring(0, 8)}</code>}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {p.domain && <a href={`http://${p.domain}`} target="_blank" rel="noreferrer" className="text-xs text-rust-400 hover:text-rust-300">Open</a>}
-                      <span className="text-xs text-dark-300 font-mono">:{p.host_port}</span>
-                      <button onClick={() => deletePreview(p.id)} className="text-xs text-danger-400 hover:text-danger-300">Delete</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {/* Detail panel — moved to ./gitdeploys/DeployDetail.tsx */}
+      <DeployDetail
+        selected={selected}
+        history={history}
+        previews={previews}
+        deploying={deploying}
+        generatingKey={generatingKey}
+        showDeployKey={showDeployKey}
+        showLogs={showLogs}
+        showSecret={showSecret}
+        containerLogs={containerLogs}
+        expandedLog={expandedLog}
+        aiExplain={aiExplain}
+        setExpandedLog={setExpandedLog}
+        setShowDeployKey={setShowDeployKey}
+        setShowLogs={setShowLogs}
+        setShowSecret={setShowSecret}
+        setMessage={setMessage}
+        openEdit={openEdit}
+        handleDeploy={handleDeploy}
+        handleDelete={handleDelete}
+        handleKeygen={handleKeygen}
+        loadContainerLogs={loadContainerLogs}
+        copyText={copyText}
+        handleRollback={handleRollback}
+        explainWithAi={explainWithAi}
+        deletePreview={deletePreview}
+        loadDeploys={loadDeploys}
+      />
 
       </div>
 
-      {/* Create / Edit Modal */}
-      {showModal && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          {/* Overlay */}
-          <div className="absolute inset-0 bg-black/60 dp-modal-overlay" onClick={() => { setShowModal(false); resetForm(); }} />
-
-          {/* Modal card */}
-          <div className="relative bg-dark-800 rounded-lg border border-dark-500 w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-fade-up dp-modal">
-            <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
-              <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
-                {editing ? "Edit Deploy" : "New Deploy"}
-              </h2>
-              <button
-                onClick={() => { setShowModal(false); resetForm(); }}
-                className="text-dark-300 hover:text-dark-50 transition-colors"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              {/* The other half of what #118 was promised. The guide has carried
-                  this warning since v2.135.0, but the reporter's own accepted
-                  fallback was "documenting it AND surfacing it in the UI", and
-                  only the doc shipped — so the person who most needs it, the one
-                  filling in this form for the first time, was the one person not
-                  shown it. Deliberately above the first field and on the edit
-                  path too: the loss lands on the SECOND deploy, so an operator
-                  editing an existing deploy is inside the window, not past it. */}
-              <div className="px-3 py-2 bg-warn-500/10 border border-warn-500/20 rounded-lg">
-                <p className="text-xs text-warn-400">
-                  Git Deploys have no persistent storage. Every deploy replaces the
-                  container, so anything the app writes to its own filesystem —
-                  uploads, generated files, a SQLite database — is lost on the next
-                  deploy, not this one.
-                </p>
-                <p className="text-xs text-warn-400/80 mt-1">
-                  Use a database under <span className="font-medium">Databases</span>, or
-                  object storage, for anything that has to survive a deploy.
-                </p>
-              </div>
-              {/* Name */}
-              <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">Name</label>
-                <input
-                  type="text"
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value.replace(/[^a-zA-Z0-9-]/g, ""))}
-                  placeholder="my-app"
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
-                />
-                <p className="text-xs text-dark-300 mt-1">Letters, numbers, and hyphens only</p>
-              </div>
-
-              {/* Repository URL */}
-              <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">Repository URL</label>
-                <input
-                  type="text"
-                  value={formRepo}
-                  onChange={(e) => {
-                    setFormRepo(e.target.value);
-                    setRepoGuess(guessFrameworkFromUrl(e.target.value));
-                  }}
-                  placeholder="https://github.com/user/repo.git"
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
-                />
-              </div>
-
-              {repoGuess && (
-                <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg">
-                  <span className="text-xs text-dark-300">
-                    Framework guess from URL keywords only (not repo inspection):{" "}
-                    <span className="text-dark-100 font-medium">{repoGuess.label}</span> — suggested port{" "}
-                    {repoGuess.port}, pre-build <span className="font-mono">{repoGuess.preBuild}</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormPort(repoGuess.port);
-                      setFormPreBuild(repoGuess.preBuild);
-                    }}
-                    className="ml-auto px-2 py-1 text-xs bg-rust-500 text-white rounded hover:bg-rust-600"
-                  >
-                    Apply suggestion
-                  </button>
-                </div>
-              )}
-
-              {/* Branch + Dockerfile */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-dark-100 mb-1">Branch</label>
-                  <input
-                    type="text"
-                    value={formBranch}
-                    onChange={(e) => setFormBranch(e.target.value)}
-                    placeholder="main"
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-dark-100 mb-1">Dockerfile Path</label>
-                  <input
-                    type="text"
-                    value={formDockerfile}
-                    onChange={(e) => setFormDockerfile(e.target.value)}
-                    placeholder="Dockerfile"
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Port + Domain */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-dark-100 mb-1">Container Port</label>
-                  <input
-                    type="number"
-                    value={formPort}
-                    onChange={(e) => setFormPort(parseInt(e.target.value) || 3000)}
-                    min={1}
-                    max={65535}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-dark-100 mb-1">Domain (optional)</label>
-                  <input
-                    type="text"
-                    value={formDomain}
-                    onChange={(e) => {
-                      setFormDomain(e.target.value);
-                      // A TLS choice is meaningless without a domain, and the
-                      // backend refuses a mode other than none for one — so
-                      // emptying the box takes the choice with it rather than
-                      // leaving a hidden "acme"/"provided" behind a disabled select.
-                      if (!e.target.value.trim()) {
-                        setFormTlsMode("none");
-                        setFormTlsCertificate("");
-                        setFormSslEmail("");
-                      }
-                    }}
-                    placeholder="app.example.com"
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* HTTPS */}
-              {formDomain && (
-                <div>
-                  <label htmlFor="gd-tls-mode" className="block text-sm font-medium text-dark-100 mb-1">HTTPS</label>
-                  <select
-                    id="gd-tls-mode"
-                    value={formTlsMode}
-                    onChange={(e) => {
-                      const mode = e.target.value as "none" | "acme" | "provided";
-                      setFormTlsMode(mode);
-                      // The email/alias is only meaningful to its own mode.
-                      // Keeping a typed value behind a hidden input would send
-                      // it with a mode that ignores it.
-                      if (mode !== "acme") setFormSslEmail("");
-                      if (mode !== "provided") setFormTlsCertificate("");
-                      if (mode === "provided" && registeredCerts === null) {
-                        setRegisteredCertsError("");
-                        api.get<{ id: string; alias: string; dns_names: string[] }[]>("/tls-certificates")
-                          .then((rows) => setRegisteredCerts(rows))
-                          .catch((err) => {
-                            // Left at null so choosing the mode again asks
-                            // again; an empty list here would read as
-                            // "nothing registered" for the life of the page
-                            // after one failed request.
-                            setRegisteredCertsError(err instanceof Error ? err.message : "Could not load registered certificates");
-                          });
-                      }
-                    }}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
-                  >
-                    <option value="none">No HTTPS — plain HTTP, or TLS terminated upstream</option>
-                    <option value="acme">Let's Encrypt certificate</option>
-                    <option value="provided">Registered certificate</option>
-                  </select>
-                  {formTlsMode === "acme" && (
-                    <>
-                      <input type="email" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)}
-                        placeholder="admin@example.com" aria-label="SSL Email"
-                        className="mt-2 w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
-                      <p className="text-xs text-dark-300 mt-1">Auto-provisions a Let's Encrypt certificate on first deploy. Account email required.</p>
-                    </>
-                  )}
-                  {formTlsMode === "provided" && (
-                    <>
-                      <select
-                        value={formTlsCertificate}
-                        onChange={(e) => setFormTlsCertificate(e.target.value)}
-                        aria-label="Registered certificate"
-                        className="mt-2 w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
-                      >
-                        <option value="">
-                          {registeredCerts === null ? "Loading…" : "Choose a certificate"}
-                        </option>
-                        {(registeredCerts ?? []).map((c) => (
-                          <option key={c.id} value={c.alias}>
-                            {c.alias}{c.dns_names.length > 0 ? ` — ${c.dns_names.join(", ")}` : ""}
-                          </option>
-                        ))}
-                      </select>
-                      {registeredCertsError ? (
-                        <p className="text-xs text-danger-400 mt-1">{registeredCertsError}</p>
-                      ) : registeredCerts !== null && registeredCerts.length === 0 ? (
-                        <p className="text-xs text-dark-300 mt-1">
-                          No certificates are registered on this server yet. Register one under Monitoring → Certificates, then pick it here.
-                        </p>
-                      ) : (
-                        <p className="text-xs text-dark-300 mt-1">
-                          The certificate must cover the domain above; the deploy falls back to plain HTTP with a warning otherwise. Served by nginx only.
-                        </p>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* Environment Variables */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-sm font-medium text-dark-100">Environment Variables</label>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowEnvPaste(!showEnvPaste)}
-                      className="text-xs text-rust-400 hover:text-rust-300 transition-colors"
-                    >
-                      {showEnvPaste ? "Manual entry" : "Paste .env"}
-                    </button>
-                    {!showEnvPaste && (
-                      <button
-                        type="button"
-                        onClick={() => setFormEnvVars([...formEnvVars, { key: "", value: "" }])}
-                        className="px-2 py-0.5 text-xs text-rust-400 hover:text-rust-300 font-medium transition-colors"
-                      >
-                        + Add
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {showEnvPaste ? (
-                  <textarea
-                    placeholder={"KEY=value\nDATABASE_URL=postgres://...\nSECRET_KEY=abc123"}
-                    rows={6}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                    onBlur={(e) => {
-                      const lines = e.target.value.split("\n").filter((l) => l.trim() && !l.startsWith("#"));
-                      const parsed = lines.map((l) => {
-                        const eq = l.indexOf("=");
-                        if (eq === -1) return { key: l.trim(), value: "" };
-                        return { key: l.substring(0, eq).trim(), value: l.substring(eq + 1).trim().replace(/^["']|["']$/g, "") };
-                      }).filter((p) => p.key);
-                      if (parsed.length > 0) {
-                        setFormEnvVars(parsed);
-                        setShowEnvPaste(false);
-                      }
-                    }}
-                  />
-                ) : (
-                  <>
-                    {formEnvVars.length === 0 && (
-                      <p className="text-xs text-dark-300">No environment variables defined</p>
-                    )}
-                    <div className="space-y-2">
-                      {formEnvVars.map((ev, i) => (
-                        <div key={i} className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={ev.key}
-                            onChange={(e) => {
-                              const next = [...formEnvVars];
-                              next[i] = { ...next[i], key: e.target.value };
-                              setFormEnvVars(next);
-                            }}
-                            placeholder="KEY"
-                            className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                          />
-                          <span className="text-dark-300">=</span>
-                          <input
-                            type="text"
-                            value={ev.value}
-                            onChange={(e) => {
-                              const next = [...formEnvVars];
-                              next[i] = { ...next[i], value: e.target.value };
-                              setFormEnvVars(next);
-                            }}
-                            placeholder="value"
-                            className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setFormEnvVars(formEnvVars.filter((_, j) => j !== i))}
-                            className="p-1.5 text-danger-400 hover:text-danger-300 transition-colors"
-                            title="Remove variable"
-                          >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Persistent Volumes */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-sm font-medium text-dark-100">Persistent Volumes</label>
-                  <button
-                    type="button"
-                    onClick={() => setFormVolumes([...formVolumes, ""])}
-                    className="px-2 py-0.5 text-xs text-rust-400 hover:text-rust-300 font-medium transition-colors"
-                  >
-                    + Add
-                  </button>
-                </div>
-                <p className="text-xs text-dark-300 mb-2">
-                  Container paths only — DockPanel manages the host location for you. Without one,
-                  every deploy replaces the container and anything it wrote to its own filesystem is
-                  lost. Takes effect on the next deploy; adding a path here carries over whatever the
-                  running container already has there.
-                </p>
-                {formVolumes.length === 0 && (
-                  <p className="text-xs text-dark-300">No persistent volumes defined</p>
-                )}
-                <div className="space-y-2">
-                  {formVolumes.map((path, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={path}
-                        onChange={(e) => {
-                          const next = [...formVolumes];
-                          next[i] = e.target.value;
-                          setFormVolumes(next);
-                        }}
-                        placeholder="/data"
-                        className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setFormVolumes(formVolumes.filter((_, j) => j !== i))}
-                        className="p-1.5 text-danger-400 hover:text-danger-300 transition-colors"
-                        title="Remove volume"
-                      >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Auto-deploy toggle */}
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formAutoDeploy}
-                    onChange={(e) => setFormAutoDeploy(e.target.checked)}
-                    className="w-4 h-4 text-rust-500 border-dark-500 rounded focus:ring-accent-500"
-                  />
-                  <span className="text-sm text-dark-100">Auto-deploy on push</span>
-                </label>
-                <p className="text-xs text-dark-300 mt-1 ml-6">Automatically deploy when commits are pushed via webhook</p>
-              </div>
-
-              {/* Deploy Protection */}
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formProtected}
-                    onChange={(e) => setFormProtected(e.target.checked)}
-                    className="w-4 h-4 text-warn-500 border-dark-500 rounded focus:ring-accent-500"
-                  />
-                  <span className="text-sm text-dark-100">Require another admin's approval before deploy</span>
-                </label>
-                {/* The copy here used to describe a client-side are-you-sure dialog.
-                    The server does something else entirely: it files a request and
-                    refuses to build until a DIFFERENT administrator signs it off.
-                    (The old wording is not quoted — a pin arm greps raw source and
-                    would match the quotation.) */}
-                <p className="text-xs text-dark-300 mt-1 ml-6">
-                  Pressing Deploy files a request instead of building. A different administrator must approve it under
-                  Pending Approvals — nobody can approve their own request. Webhook, scheduled and rollback deploys are
-                  not covered.
-                </p>
-              </div>
-
-              {/* Preview TTL */}
-              <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">Preview TTL (hours)</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={formPreviewTtl}
-                  onChange={(e) => setFormPreviewTtl(Number(e.target.value))}
-                  className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-dark-100 text-sm focus:border-accent-500 focus:outline-none"
-                />
-                <p className="text-xs text-dark-300 mt-1">Auto-cleanup preview environments after this many hours (0 = no cleanup)</p>
-              </div>
-
-              {/* Pre-build Command */}
-              <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">Pre-build Command</label>
-                <input type="text" value={formPreBuild} onChange={(e) => setFormPreBuild(e.target.value)}
-                  placeholder="npm install, composer install, etc." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
-                <p className="text-xs text-dark-300 mt-1">Only applies when DockPanel generates the Dockerfile for you — becomes an install step inside the built image (add it as a RUN line yourself if you commit your own Dockerfile)</p>
-              </div>
-
-              {/* Post-deploy Command */}
-              <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">Post-deploy Command</label>
-                <input type="text" value={formPostDeploy} onChange={(e) => setFormPostDeploy(e.target.value)}
-                  placeholder="php artisan migrate, npx prisma migrate deploy, etc." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
-                <p className="text-xs text-dark-300 mt-1">Runs inside the container after deploy (docker exec)</p>
-              </div>
-
-              {/* Build Arguments */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-sm font-medium text-dark-100">Build Arguments</label>
-                  <button
-                    type="button"
-                    onClick={() => setFormBuildArgs([...formBuildArgs, { key: "", value: "" }])}
-                    className="px-2 py-0.5 text-xs text-rust-400 hover:text-rust-300 font-medium transition-colors"
-                  >
-                    + Add build arg
-                  </button>
-                </div>
-                <p className="text-xs text-dark-300 mb-2">Passed as --build-arg to Docker build</p>
-                {formBuildArgs.length === 0 && (
-                  <p className="text-xs text-dark-300">No build arguments defined</p>
-                )}
-                <div className="space-y-2">
-                  {formBuildArgs.map((arg, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={arg.key}
-                        onChange={(e) => {
-                          const next = [...formBuildArgs];
-                          next[i] = { ...next[i], key: e.target.value };
-                          setFormBuildArgs(next);
-                        }}
-                        placeholder="KEY"
-                        className="w-1/3 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                      />
-                      <span className="text-dark-300">=</span>
-                      <input
-                        type="text"
-                        value={arg.value}
-                        onChange={(e) => {
-                          const next = [...formBuildArgs];
-                          next[i] = { ...next[i], value: e.target.value };
-                          setFormBuildArgs(next);
-                        }}
-                        placeholder="value"
-                        className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setFormBuildArgs(formBuildArgs.filter((_, j) => j !== i))}
-                        className="p-1.5 text-danger-400 hover:text-danger-300 transition-colors"
-                        title="Remove build arg"
-                      >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Build Context */}
-              <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">Build Context</label>
-                <input
-                  type="text"
-                  value={formBuildContext}
-                  onChange={(e) => setFormBuildContext(e.target.value)}
-                  placeholder="."
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                />
-                <p className="text-xs text-dark-300 mt-1">Subdirectory for Docker build context (default: repo root)</p>
-              </div>
-
-              {/* GitHub Token */}
-              <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">GitHub Token</label>
-                <input type="password" value={formGithubToken} onChange={(e) => setFormGithubToken(e.target.value)}
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
-                <p className="text-xs text-dark-300 mt-1">Sets commit status in GitHub after deploy (optional)</p>
-              </div>
-
-              {/* Deploy Schedule */}
-              <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">Deploy Schedule (cron)</label>
-                <input type="text" value={formCron} onChange={(e) => setFormCron(e.target.value)}
-                  placeholder="0 3 * * * (daily at 3 AM UTC)" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
-                <p className="text-xs text-dark-300 mt-1">Auto-deploy on schedule (cron format: minute hour day month weekday)</p>
-              </div>
-            </div>
-
-            {/* Modal footer */}
-            <div className="px-5 py-4 border-t border-dark-600 flex justify-end gap-3">
-              <button
-                onClick={() => { setShowModal(false); resetForm(); }}
-                className="px-4 py-2 text-sm text-dark-300 border border-dark-600 rounded-lg hover:text-dark-100 hover:border-dark-400 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={submitting || !formName.trim() || !formRepo.trim()}
-                className="flex items-center gap-2 px-6 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
-              >
-                {submitting && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                {submitting ? "Saving..." : editing ? "Update" : "Create"}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      {/* Create / Edit Modal — moved to ./gitdeploys/DeployForm.tsx */}
+      <DeployForm
+        showModal={showModal}
+        editing={editing}
+        submitting={submitting}
+        formName={formName}
+        formRepo={formRepo}
+        repoGuess={repoGuess}
+        formBranch={formBranch}
+        formDockerfile={formDockerfile}
+        formPort={formPort}
+        formDomain={formDomain}
+        formEnvVars={formEnvVars}
+        formAutoDeploy={formAutoDeploy}
+        formSslEmail={formSslEmail}
+        formTlsMode={formTlsMode}
+        formTlsCertificate={formTlsCertificate}
+        registeredCerts={registeredCerts}
+        registeredCertsError={registeredCertsError}
+        formPreBuild={formPreBuild}
+        formPostDeploy={formPostDeploy}
+        formBuildArgs={formBuildArgs}
+        formBuildContext={formBuildContext}
+        formGithubToken={formGithubToken}
+        formCron={formCron}
+        formProtected={formProtected}
+        formPreviewTtl={formPreviewTtl}
+        formVolumes={formVolumes}
+        showEnvPaste={showEnvPaste}
+        setShowModal={setShowModal}
+        setFormName={setFormName}
+        setFormRepo={setFormRepo}
+        setRepoGuess={setRepoGuess}
+        setFormBranch={setFormBranch}
+        setFormDockerfile={setFormDockerfile}
+        setFormPort={setFormPort}
+        setFormDomain={setFormDomain}
+        setFormEnvVars={setFormEnvVars}
+        setFormAutoDeploy={setFormAutoDeploy}
+        setFormSslEmail={setFormSslEmail}
+        setFormTlsMode={setFormTlsMode}
+        setFormTlsCertificate={setFormTlsCertificate}
+        setRegisteredCerts={setRegisteredCerts}
+        setRegisteredCertsError={setRegisteredCertsError}
+        setFormPreBuild={setFormPreBuild}
+        setFormPostDeploy={setFormPostDeploy}
+        setFormBuildArgs={setFormBuildArgs}
+        setFormBuildContext={setFormBuildContext}
+        setFormGithubToken={setFormGithubToken}
+        setFormCron={setFormCron}
+        setFormProtected={setFormProtected}
+        setFormPreviewTtl={setFormPreviewTtl}
+        setFormVolumes={setFormVolumes}
+        setShowEnvPaste={setShowEnvPaste}
+        resetForm={resetForm}
+        handleSave={handleSave}
+      />
     </div>
   );
 }
