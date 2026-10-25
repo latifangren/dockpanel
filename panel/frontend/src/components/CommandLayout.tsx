@@ -57,7 +57,7 @@ function ServerSelector() {
 export default function CommandLayout() {
   const state = useLayoutState();
   const branding = useBranding();
-  const isLight = state.theme === "clean" || state.theme === "arctic";
+  const isLight = state.theme === "clean" || state.theme === "arctic" || state.theme === "lite-mix" || state.theme === "lite-clean";
 
   // Layout options (persisted in localStorage)
   const [showHeader, setShowHeader] = useState(() => localStorage.getItem("dp-show-header") === "true");
@@ -238,9 +238,9 @@ export default function CommandLayout() {
                       end
                       onClick={() => state.setSidebarOpen(false)}
                       className={({ isActive }) =>
-                        `flex items-center gap-3 px-4 py-2 transition-colors text-sm ${
+                        `flex items-center gap-3 px-4 py-2 transition-colors text-sm rounded-xl ${
                           isActive
-                            ? "bg-rust-500/10 text-rust-400 font-bold border-l-2 border-rust-500"
+                            ? "bg-rust-500/10 text-rust-400 font-bold"
                             : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30"
                         }`
                       }
@@ -272,8 +272,6 @@ export default function CommandLayout() {
                                 </span>
                               )}
                             </span>
-                          ) : isActive ? (
-                            <span className="ml-auto blinking-cursor text-xs">_</span>
                           ) : null}
                         </>
                       )}

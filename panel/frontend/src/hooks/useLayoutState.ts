@@ -4,7 +4,7 @@ import { useBranding } from "../context/BrandingContext";
 import { api } from "../api";
 import { navGroups, isNavVisible, type NavGroup } from "../data/navItems";
 
-const themeOrder = ["terminal", "midnight", "ember", "arctic", "clean", "clean-dark"] as const;
+const themeOrder = ["lite-mix", "lite-warm", "lite-clean", "lite-midnight"] as const;
 
 /** Fired after any user-initiated theme change so every mounted reader re-seeds.
  *  Distinct from `dp-layout-change` on purpose — reusing that name would make
@@ -43,10 +43,11 @@ export function badgeCount(n: number): string {
  *  classic render-blocking script and cannot import this module. */
 export function readStoredTheme(): string {
   const stored = localStorage.getItem("dp-theme");
-  if (!stored || stored === "dark") return "midnight";
-  if (stored === "light") return "arctic";
-  if (stored === "nexus") return "clean";
-  if (stored === "nexus-dark") return "clean-dark";
+  // Lite is the only cycle now; legacy ids map onto the closest lite theme
+  // instead of resurrecting the old Terminal/midnight defaults.
+  if (!stored || stored === "terminal") return "lite-mix";
+  if (stored === "dark" || stored === "nexus-dark") return "lite-midnight";
+  if (stored === "light" || stored === "nexus") return "lite-clean";
   return stored;
 }
 
@@ -57,12 +58,12 @@ export function readStoredTheme(): string {
  *
  *  `data-color-scheme` is load-bearing: index.css reads it to hand the native
  *  scrollbars and form controls the right scheme, so it must stay "light" for
- *  arctic and clean and "dark" for the other four. */
+ *  arctic, clean, lite-mix and lite-clean and "dark" for the rest. */
 export function applyTheme(t: string): void {
   localStorage.setItem("dp-theme", t);
   const root = document.documentElement;
   root.setAttribute("data-theme", t);
-  root.setAttribute("data-color-scheme", (t === "clean" || t === "arctic") ? "light" : "dark");
+  root.setAttribute("data-color-scheme", (t === "clean" || t === "arctic" || t === "lite-mix" || t === "lite-clean") ? "light" : "dark");
   window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
 }
 

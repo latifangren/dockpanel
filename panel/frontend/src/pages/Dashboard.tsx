@@ -236,27 +236,70 @@ function CountUp({ value }: { value: number }) {
   return <>{displayed.toFixed(0)}</>;
 }
 
-function barColor(pct: number, type: "cpu" | "mem" | "disk" = "cpu"): string {
-  if (type === "disk") {
-    if (pct < 80) return "bg-rust-500";
-    if (pct <= 90) return "bg-warn-500";
-    return "bg-danger-500";
+interface DeployedAppLite {
+  container_id: string;
+  name: string;
+  template: string;
+  status: string;
+  port: number | null;
+  domain: string | null;
+  ssl?: boolean;
+  health: string | null;
+  image: string | null;
+}
+
+/* Lite home gauge: an SVG ring, accent-coloured, with the value in the middle.
+   The ring fraction is the percentage passed in; for Load the caller converts
+   load_avg_1 to a percentage of cpu_count first. */
+function Gauge({ label, value, display, sub }: { label: string; value: number; display: string; sub: string }) {
+  const C = 2 * Math.PI * 52;
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <div className="text-center">
+      <div className="relative w-[118px] h-[118px] mx-auto">
+        <svg width="118" height="118" viewBox="0 0 118 118" className="-rotate-90" aria-hidden="true">
+          <circle cx="59" cy="59" r="52" fill="none" stroke="var(--color-dark-700)" strokeWidth="9" />
+          <circle cx="59" cy="59" r="52" fill="none" stroke="var(--color-rust-500)" strokeWidth="9" strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C * (1 - pct / 100)} />
+        </svg>
+        <div className="absolute inset-0 grid place-items-center text-center">
+          <div>
+            <div className={`text-lg font-bold leading-none ${pctColor(pct)}`}>{display}</div>
+            <div className="text-[11px] text-dark-400 font-medium mt-1">{label}</div>
+          </div>
+        </div>
+      </div>
+      <p className="text-xs text-dark-400 mt-2">{sub}</p>
+    </div>
+  );
+}
+
+/* Two-series area chart for the Monitoring tabs. Network and Disk I/O have no
+   history endpoint, so the series are client-side samples of readings this
+   page already polls (see the sampling effects before the return). With fewer
+   than two samples there is no line to draw, and the card says so instead of
+   inventing a curve. */
+function DualAreaChart({ a, b, colorA, colorB, height = 160 }: { a: number[]; b: number[]; colorA: string; colorB: string; height?: number }) {
+  if (a.length < 2) {
+    return <p className="text-xs text-dark-400 py-10 text-center">Collecting samples — the chart fills as new readings arrive.</p>;
   }
-  // CPU and Memory
-  if (pct < 70) return "bg-rust-500";
-  if (pct <= 90) return "bg-warn-500";
-  return "bg-danger-500";
+  const width = 600;
+  const max = Math.max(...a, ...b, 1);
+  const pts = (data: number[]) => data.map((v, i) => `${(i / (data.length - 1)) * width},${height - (v / max) * (height - 8) - 4}`).join(" ");
+  const pa = pts(a);
+  const pb = b.length >= 2 ? pts(b) : "";
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points={`0,${height} ${pa} ${width},${height}`} fill={colorA} opacity="0.12" />
+      {pb && <polygon points={`0,${height} ${pb} ${width},${height}`} fill={colorB} opacity="0.08" />}
+      <polyline points={pa} fill="none" stroke={colorA} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      {pb && <polyline points={pb} fill="none" stroke={colorB} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
+    </svg>
+  );
 }
 
 function pctColor(pct: number): string {
   if (pct < 60) return "text-dark-50";
   if (pct < 80) return "text-warn-400";
-  return "text-danger-400";
-}
-
-function tempColor(temp: number): string {
-  if (temp < 60) return "text-rust-400";
-  if (temp < 80) return "text-warn-400";
   return "text-danger-400";
 }
 
@@ -334,6 +377,12 @@ export default function Dashboard() {
   const [bmUrl, setBmUrl] = useState("");
   // Update notification
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  // Lite home state: monitoring tab, deployed-app list (same /apps endpoint
+  // the count below already reads), and client-side samples for the tab charts.
+  const [monTab, setMonTab] = useState<"network" | "disk">("network");
+  const [appsList, setAppsList] = useState<DeployedAppLite[]>([]);
+  const [netSamples, setNetSamples] = useState<{ rx: number; tx: number }[]>([]);
+  const [diskSamples, setDiskSamples] = useState<{ r: number; w: number }[]>([]);
 
   const isVisible = (widget: string) => widgetConfig[widget] !== false; // default visible
   const toggleWidget = (widget: string) => {
@@ -379,8 +428,8 @@ export default function Dashboard() {
     // no tenant view of them to ask for. Same reasoning as the reads below.
     if (isAdmin) {
       api
-        .get<{ container_id: string }[]>("/apps")
-        .then((list) => setAppCount(list.length))
+        .get<DeployedAppLite[]>("/apps")
+        .then((list) => { setAppCount(list.length); setAppsList(list); })
         .catch(() => {});
     }
     // Admin-gated in `routes/system.rs`. Asking as anybody else produced the
@@ -721,6 +770,46 @@ export default function Dashboard() {
     }
   }, [network]);
 
+  // Lite home monitoring samples (see DualAreaChart): network rates arrive
+  // on the 5s poll, disk-io on the 15s slow poll. Rates may be absent on
+  // older agents — then nothing is sampled and the chart says so.
+  useEffect(() => {
+    if (network.length === 0) return;
+    const rx = network.reduce((s, i) => s + (i.rx_rate ?? 0), 0);
+    const tx = network.reduce((s, i) => s + (i.tx_rate ?? 0), 0);
+    if (rx === 0 && tx === 0) return;
+    setNetSamples((prev) => [...prev.slice(-39), { rx, tx }]);
+  }, [network]);
+  useEffect(() => {
+    if (!diskIo) return;
+    setDiskSamples((prev) => [...prev.slice(-39), { r: diskIo.read_bytes_sec, w: diskIo.write_bytes_sec }]);
+  }, [diskIo]);
+
+  // Same stop/start/restart calls as Apps.tsx handleAction, on the same
+  // /apps/{container_id}/{action} routes; the list is re-read afterwards.
+  const handleAppAction = async (app: DeployedAppLite, action: "stop" | "start" | "restart") => {
+    try {
+      await api.post(`/apps/${app.container_id}/${action}`, {});
+      const list = await api.get<DeployedAppLite[]>("/apps");
+      setAppsList(list);
+      setAppCount(list.length);
+      setActionMessage({ text: `${app.name} ${action === "restart" ? "restarted" : action === "stop" ? "stopped" : "started"}`, type: "success" });
+      setTimeout(() => setActionMessage(null), 3000);
+    } catch (err) {
+      setActionMessage({ text: err instanceof Error ? err.message : `Could not ${action} ${app.name}`, type: "error" });
+      setTimeout(() => setActionMessage(null), 10000);
+    }
+  };
+
+  // Same open-URL rule as Apps.tsx: a domain links by scheme (ssl), otherwise
+  // the published port on the panel host (local) or the member's IP.
+  const appOpenUrl = (app: DeployedAppLite): string | null => {
+    if (app.domain) return `${app.ssl ? "https" : "http"}://${app.domain}`;
+    const host = !activeServer || activeServer.is_local ? window.location.hostname : activeServer.ip_address;
+    if (app.port && host) return `http://${host}:${app.port}`;
+    return null;
+  };
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 animate-fade-up">
       <div className="page-header">
@@ -858,6 +947,7 @@ export default function Dashboard() {
               { id: "status_bar", label: "Status Bar" },
               { id: "health_banner", label: "Health Indicator" },
               { id: "sites_grid", label: "Sites Grid" },
+              { id: "apps_list", label: "Applications" },
               { id: "activity", label: "Recent Activity", hostOnly: true },
               { id: "timeline", label: "Timeline" },
               { id: "fleet", label: "Fleet Health", hostOnly: true },
@@ -1088,206 +1178,180 @@ export default function Dashboard() {
         <>
           {/* System Information — host-level, so `system &&` rather than relying
               on the outer gate that used to supply it. */}
-          {system && isVisible("system_info") && <div className="hidden sm:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-dark-600 border border-dark-500 rounded-lg overflow-hidden mb-6">
-            {[
-              ["Hostname", system.hostname],
-              ["OS", system.os],
-              ["Kernel", system.kernel],
-              ["Processor", system.cpu_model],
-              ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
-              ["Processes", system.process_count.toLocaleString()],
-            ].map(([label, value]) => (
-              <div key={label} className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">{label}</span>
-                <span title={String(value)} className={`text-sm text-dark-50 font-medium truncate ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
-              </div>
-            ))}
-          </div>}
-
-          {/* Resource Metrics — 3 column. Host CPU/memory/disk: admin-only data. */}
-          {system && isVisible("metrics") && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 stagger-children">
-            {[
-              { label: "CPU Usage", pct: system.cpu_usage, type: "cpu" as const, detail: `${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}`,
-                icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg> },
-              { label: "Memory", pct: system.mem_usage_pct, type: "mem" as const, detail: `${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB${system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}`,
-                icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M7 4v3m4-3v3m4-3v3M3 10h18" strokeLinecap="round" /></svg> },
-              { label: "Disk", pct: system.disk_usage_pct, type: "disk" as const, detail: `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free${dockerDiskUsage ? ` · Images: ${dockerDiskUsage}` : ""}`,
-                icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg> },
-            ].map(({ label, pct, type, detail, icon }) => (
-              <div key={label} className="border border-dark-600 bg-dark-800 rounded-lg p-5 relative overflow-hidden shadow-lg shadow-black/10 elevation-1">
-                <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-dark-50" : pct < 85 ? "bg-warn-500" : "bg-danger-500"}`} />
-                <div className="relative text-center">
-                  <div className="flex items-center justify-center gap-1.5 text-dark-200 mb-1">
-                    <span className="opacity-60">{icon}</span>
-                    <span className="text-xs uppercase tracking-widest font-medium">{label}</span>
-                  </div>
-                  <div className={`text-5xl font-bold font-mono my-2 ${pctColor(pct)}`}>
-                    <CountUp value={pct} /><span className="text-xl text-dark-300 ml-0.5">%</span>
-                  </div>
-                  <div className="h-2 bg-dark-700 rounded-full overflow-hidden mt-3 mx-auto max-w-[80%]">
-                    <div className={`h-full rounded-full transition-all duration-500 ${barColor(pct, type)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-                  </div>
-                  <p className="text-xs text-dark-300 mt-3">{detail}</p>
-                  {/* Feature #7: Disk full forecast */}
-                  {label === "Disk" && diskForecast !== null && diskForecast < 30 && (
-                    <p className={`text-[10px] mt-1 font-medium ${diskForecast < 7 ? "text-danger-400" : "text-warn-400"}`}>
-                      Disk full in ~{diskForecast}d at current rate
-                    </p>
+          {/* Lite home (v3, 1Panel-inspired): counts, gauges, monitoring,
+              system info and app list. This replaces the old system-info
+              grid, metric tiles, history charts and status bar; everything
+              below (fleet, sites grid, activity, timeline, network,
+              processes) is unchanged. Counts use only fields this page
+              already fetches; the prototype's Cron/Backup counts have no
+              Dashboard field, so they are not shown as counts. */}
+          <div className="flex flex-col xl:flex-row gap-4 mb-6 items-start">
+            <div className="flex-1 min-w-0 flex flex-col gap-4">
+              <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
+                <h3 className="text-sm font-semibold mb-4">Dashboard</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                  <Link to="/sites" className="hover:opacity-80 transition-opacity">
+                    <span className="block text-xs text-dark-400 mb-1">Sites</span>
+                    <span className="text-2xl font-bold text-rust-500">{sites.total}</span>
+                    {sites.active > 0 && <span className="block text-[11px] text-dark-400 mt-0.5">{sites.active} active</span>}
+                  </Link>
+                  <Link to="/databases" className="hover:opacity-80 transition-opacity">
+                    <span className="block text-xs text-dark-400 mb-1">Databases</span>
+                    <span className="text-2xl font-bold text-rust-500">{dbCount}</span>
+                  </Link>
+                  {isAdmin && (
+                    <Link to="/apps" className="hover:opacity-80 transition-opacity">
+                      <span className="block text-xs text-dark-400 mb-1">Applications</span>
+                      <span className="text-2xl font-bold text-rust-500">{appCount}</span>
+                    </Link>
+                  )}
+                  {isAdmin && (
+                    <Link to="/apps" className="hover:opacity-80 transition-opacity">
+                      <span className="block text-xs text-dark-400 mb-1">Docker</span>
+                      <span className="text-2xl font-bold text-rust-500">{dockerInfo?.running ?? 0}<span className="text-sm text-dark-400 font-normal">/{dockerInfo?.total ?? 0}</span></span>
+                      <span className="block text-[11px] text-dark-400 mt-0.5">running</span>
+                    </Link>
                   )}
                 </div>
               </div>
-            ))}
-          </div>}
 
-          {/* Disk I/O moved into stat bar below */}
-
-          {/* Historical Charts */}
-          {isVisible("charts") && metricsHistory.length >= 2 && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 animate-fade-up">
-              {[
-                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "var(--color-rust-500)" },
-                { label: "Memory", data: metricsHistory.map(p => p.mem), color: "var(--color-accent-500)" },
-                { label: "Disk", data: metricsHistory.map(p => p.disk), color: "var(--color-warn-500)" },
-              ].map(({ label, data, color }) => (
-                <div key={label} className="border border-dark-500 bg-dark-800 rounded-lg p-4 elevation-1">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] uppercase tracking-widest text-dark-300 font-medium">{label} (24h)</span>
-                    <span className="text-xs text-dark-200 font-mono">{data[data.length - 1]?.toFixed(1)}%</span>
+              {system && isVisible("metrics") && (
+                <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
+                  <h3 className="text-sm font-semibold mb-4">Status</h3>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    {system.load_avg_1 !== undefined && (
+                      <Gauge label="Load" value={(system.load_avg_1 / Math.max(1, system.cpu_count)) * 100} display={system.load_avg_1.toFixed(2)} sub="Low load" />
+                    )}
+                    <Gauge label="CPU" value={system.cpu_usage} display={`${system.cpu_usage.toFixed(0)}%`} sub={`${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1.toFixed(2)}` : ""}`} />
+                    <Gauge label="Memory" value={system.mem_usage_pct} display={`${system.mem_usage_pct.toFixed(0)}%`} sub={`${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB`} />
+                    <Gauge label="Disk" value={system.disk_usage_pct} display={`${system.disk_usage_pct.toFixed(0)}%`} sub={`${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free`} />
                   </div>
-                  <Sparkline data={data} color={color} height={48} />
                 </div>
-              ))}
-            </div>
-          )}
+              )}
 
-          {/* Status Bar — grid of stat cells */}
-          {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-600 rounded-lg overflow-hidden mb-6 shadow-sm shadow-black/5 stagger-children">
-            {/* The one host-derived cell in an otherwise tenant-safe grid, which is
-                why this bar could not simply be shown or hidden as a whole. */}
-            {system && (
-              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
-                <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
-              </div>
-            )}
-            <Link to="/sites" className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Sites</span>
-              <span className="text-sm text-dark-50 font-medium">{sites.total}{sites.active > 0 && <span className="text-rust-400 ml-1 text-xs">({sites.active} active)</span>}</span>
-            </Link>
-            <Link to="/databases" className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Databases</span>
-              <span className="text-sm text-dark-50 font-medium">{dbCount}</span>
-            </Link>
-            {/* Feature #1: Docker container overview. Admin-only both ways: the
-                count comes from an admin endpoint, and the cell links to a page
-                that redirects anybody else. Rendered ungated it read "0/0 running"
-                to a client — a number, not a blank, and a false one. */}
-            {isAdmin && (
-              <Link to="/apps" className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Docker</span>
-                <span className="text-sm text-dark-50 font-medium">
-                  {dockerInfo?.running ?? 0}<span className="text-xs text-dark-300 font-normal">/{dockerInfo?.total ?? 0}</span>
-                  <span className="text-[10px] text-dark-400 ml-1">running</span>
-                </span>
-              </Link>
-            )}
-            {intel && <>
-              {/* /security is adminOnly. For anybody else the score is now built
-                  purely from their own alerts, certificates and backups (the host
-                  diagnostics term is admin-only since v2.77.0), so /monitoring is
-                  both reachable and the right explanation of the number. */}
-              <Link to={isAdmin ? "/security?tab=diagnostics" : "/monitoring"} title={isAdmin ? "View system diagnostics that drive this score" : "View the alerts and certificates behind this score"} className={`px-4 py-3 flex flex-col card-interactive ${
-                intel.health_score < 60 ? "bg-danger-500/5" : "bg-dark-800"
-              }`}>
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Health</span>
-                <span className={`text-sm font-bold ${
-                  intel.health_score >= 90 ? "text-rust-400" :
-                  intel.health_score >= 75 ? "text-accent-400" :
-                  intel.health_score >= 60 ? "text-warn-400" : "text-danger-400"
-                }`}>{intel.health_score}/100 {intel.grade}</span>
-              </Link>
-              <Link to="/monitoring?tab=alerts" className={`px-4 py-3 flex flex-col card-interactive ${
-                intel.firing_alerts > 0 ? "bg-danger-500/5" : "bg-dark-800"
-              }`}>
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Alerts</span>
-                {intel.firing_alerts > 0
-                  ? <span className="text-sm text-danger-400 font-bold">{intel.firing_alerts} firing</span>
-                  : <span className="text-sm text-rust-400 font-medium">0</span>
-                }
-              </Link>
-              <Link to="/monitoring?tab=certificates" className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">SSL</span>
-                <span className="text-sm text-dark-50 font-medium">{intel.ssl_countdowns.length} certs</span>
-              </Link>
-              <Link to="/monitoring?tab=statuspage" className={`px-4 py-3 flex flex-col card-interactive ${
-                intel.open_incidents > 0 ? "bg-danger-500/5" : "bg-dark-800"
-              }`}>
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Incidents</span>
-                {intel.open_incidents > 0
-                  ? <span className="text-sm text-danger-400 font-bold">{intel.open_incidents} open</span>
-                  : <span className="text-sm text-rust-400 font-medium">0</span>
-                }
-              </Link>
-              {/* /backup-orchestrator is adminOnly; a client's backups live per-site,
-                  so send them where they can actually act on this count. */}
-              <Link to={isAdmin ? "/backup-orchestrator" : "/sites"} className={`px-4 py-3 flex flex-col card-interactive ${
-                intel.stale_backups > 0 ? "bg-warn-500/5" : "bg-dark-800"
-              }`}>
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Backups</span>
-                {intel.stale_backups > 0
-                  ? <span className="text-sm text-warn-400 font-bold">{intel.stale_backups} stale</span>
-                  : <span className="text-sm text-rust-400 font-medium">fresh</span>
-                }
-              </Link>
-            </>}
-            {/* `updateCount` is only ever fetched for an admin, so for anybody else
-                this cell asserted "up to date" about a machine it had not asked
-                about. An unhidden blank is honest; an unhidden zero is a claim. */}
-            {isAdmin && (
-              <Link to="/updates" className={`px-4 py-3 flex flex-col card-interactive ${
-                updateCount > 0 ? "bg-warn-500/5" : "bg-dark-800"
-              }`}>
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
-                {updateCount > 0
-                  ? <span className="text-sm text-warn-400 font-bold">{updateCount} available</span>
-                  : <span className="text-sm text-rust-400 font-medium">up to date</span>
-                }
-              </Link>
-            )}
-            {/* Disk I/O */}
-            {diskIo && isVisible("disk_io") && <>
-              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Disk Read</span>
-                <span className="text-sm text-dark-50 font-medium font-mono">{formatRate(diskIo.read_bytes_sec)}</span>
-              </div>
-              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Disk Write</span>
-                <span className="text-sm text-dark-50 font-medium font-mono">{formatRate(diskIo.write_bytes_sec)}</span>
-              </div>
-            </>}
-            {/* Feature #6: Bandwidth usage summary. Derived from `network`, which
-                `fetchRealtimeData` only fetches for an admin \u2014 so this read
-                "0 B / 0 B" to everybody else, host traffic reported as none. */}
-            {isAdmin && (
-              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Bandwidth</span>
-                <span className="text-sm text-dark-50 font-medium">
-                  <span className="text-dark-400">{"\u2193"}</span>{formatSize(bandwidthTotal.rx)}
-                  <span className="text-dark-400 ml-1">{"\u2191"}</span>{formatSize(bandwidthTotal.tx)}
-                </span>
-              </div>
-            )}
-            {/* Feature #9: Mail queue widget. `/mail/queue` is admin-gated, so the
-                same false zero \u2014 and mail is admin-only end to end anyway. */}
-            {isAdmin && (
-              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Mail Queue</span>
-                <span className={`text-sm font-medium ${(mailQueue ?? 0) > 0 ? "text-warn-400" : "text-dark-50"}`}>
-                  {mailQueue ?? 0} <span className="text-[10px] text-dark-400">messages</span>
-                </span>
-              </div>
-            )}
-          </div>}
+              {isAdmin && isVisible("charts") && (
+                <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
+                  <h3 className="text-sm font-semibold mb-4">Monitoring</h3>
+                  <div className="flex gap-2 mb-3">
+                    <button onClick={() => setMonTab("network")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${monTab === "network" ? "bg-rust-500 text-white" : "bg-dark-700 text-dark-200 hover:bg-dark-600"}`}>Network</button>
+                    <button onClick={() => setMonTab("disk")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${monTab === "disk" ? "bg-rust-500 text-white" : "bg-dark-700 text-dark-200 hover:bg-dark-600"}`}>Disk I/O</button>
+                  </div>
+                  {monTab === "network" ? (
+                    <>
+                      <div className="flex gap-2 flex-wrap mb-3">
+                        <span className="px-2.5 py-1 rounded-md bg-rust-500/10 text-rust-400 text-xs font-medium">↓ {network.length > 0 ? formatRate(network.reduce((s, i) => s + (i.rx_rate ?? 0), 0)) : "—"}</span>
+                        <span className="px-2.5 py-1 rounded-md bg-accent-500/10 text-accent-400 text-xs font-medium">↑ {network.length > 0 ? formatRate(network.reduce((s, i) => s + (i.tx_rate ?? 0), 0)) : "—"}</span>
+                        <span className="px-2.5 py-1 rounded-md bg-dark-700 text-dark-200 text-xs font-medium">Total ↓ {formatSize(bandwidthTotal.rx)} · ↑ {formatSize(bandwidthTotal.tx)}</span>
+                      </div>
+                      <DualAreaChart a={netSamples.map((s) => s.rx)} b={netSamples.map((s) => s.tx)} colorA="var(--color-rust-500)" colorB="var(--color-accent-500)" />
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex gap-2 flex-wrap mb-3">
+                        <span className="px-2.5 py-1 rounded-md bg-rust-500/10 text-rust-400 text-xs font-medium">Read {diskIo ? formatRate(diskIo.read_bytes_sec) : "—"}</span>
+                        <span className="px-2.5 py-1 rounded-md bg-accent-500/10 text-accent-400 text-xs font-medium">Write {diskIo ? formatRate(diskIo.write_bytes_sec) : "—"}</span>
+                      </div>
+                      <DualAreaChart a={diskSamples.map((s) => s.r)} b={diskSamples.map((s) => s.w)} colorA="var(--color-rust-500)" colorB="var(--color-accent-500)" />
+                    </>
+                  )}
+                  {metricsHistory.length >= 2 && (
+                    <div className="grid grid-cols-3 gap-4 mt-4">
+                      {[
+                        { label: "CPU (24h)", data: metricsHistory.map((p) => p.cpu), color: "var(--color-rust-500)" },
+                        { label: "Memory (24h)", data: metricsHistory.map((p) => p.mem), color: "var(--color-accent-500)" },
+                        { label: "Disk (24h)", data: metricsHistory.map((p) => p.disk), color: "var(--color-warn-500)" },
+                      ].map(({ label, data, color }) => (
+                        <div key={label}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[11px] text-dark-400 font-medium">{label}</span>
+                            <span className="text-xs text-dark-200">{data[data.length - 1]?.toFixed(1)}%</span>
+                          </div>
+                          <Sparkline data={data} color={color} height={40} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="w-full xl:w-[340px] shrink-0 flex flex-col gap-4">
+              {system && isVisible("system_info") && (
+                <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
+                  <h3 className="text-sm font-semibold mb-3">System Information</h3>
+                  {[
+                    ["Hostname", system.hostname],
+                    ["Operating system", system.os],
+                    ["Kernel", system.kernel],
+                    ["Processor", system.cpu_model],
+                    ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
+                    ["Processes", system.process_count.toLocaleString()],
+                    ["Uptime", formatUptime(system.uptime_secs)],
+                    ["Disk", `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB`],
+                  ].map(([label, value]) => (
+                    <div key={label} className="flex justify-between gap-3 py-2 border-b border-dark-700 last:border-b-0 text-sm">
+                      <span className="text-dark-400">{label}</span>
+                      <span className="font-medium text-right truncate" title={String(value)}>{value}</span>
+                    </div>
+                  ))}
+                  {/* No architecture or IP row: SystemInfo carries neither
+                      field, and inventing them would be a lie the old grid
+                      never told either. */}
+                </div>
+              )}
+
+              {isAdmin && isVisible("apps_list") && (
+                <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold">Application</h3>
+                    <Link to="/apps" className="text-xs text-rust-400 hover:text-rust-300">Manage</Link>
+                  </div>
+                  {appsList.length === 0 ? (
+                    <p className="text-sm text-dark-400">No applications deployed yet. <Link to="/apps" className="text-rust-400 hover:underline">Deploy one</Link> to see it here.</p>
+                  ) : (
+                    <div className="divide-y divide-dark-700">
+                      {appsList.map((app) => {
+                        const openUrl = appOpenUrl(app);
+                        const running = app.status.toLowerCase().includes("running");
+                        return (
+                          <div key={app.container_id} className="py-3 flex items-center gap-3 first:pt-0 last:pb-0">
+                            <div className="w-11 h-11 rounded-xl bg-rust-500 flex items-center justify-center text-white font-bold text-lg shrink-0">
+                              {app.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">{app.name}</p>
+                              <p className="text-xs text-dark-400 truncate">{app.template || app.image || "—"}</p>
+                              <p className="text-xs mt-0.5">
+                                <span className={`inline-flex items-center gap-1 font-medium ${running ? "text-rust-400" : "text-dark-400"}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${running ? "bg-rust-500 animate-pulse" : "bg-dark-500"}`} />
+                                  {app.status}
+                                </span>
+                              </p>
+                            </div>
+                            <div className="text-right shrink-0">
+                              {openUrl ? (
+                                <a href={openUrl} target="_blank" rel="noopener noreferrer" className="inline-block px-3 py-1.5 rounded-full border border-rust-500 text-rust-400 text-xs font-bold hover:bg-rust-500 hover:text-white transition-colors">Open</a>
+                              ) : (
+                                <span className="inline-block px-3 py-1.5 rounded-full border border-dark-600 text-dark-400 text-xs">No port</span>
+                              )}
+                              <div className="mt-1.5 text-xs">
+                                {running ? (
+                                  <button onClick={() => handleAppAction(app, "stop")} className="text-rust-400 hover:underline">Stop</button>
+                                ) : (
+                                  <button onClick={() => handleAppAction(app, "start")} className="text-rust-400 hover:underline">Start</button>
+                                )}
+                                <button onClick={() => handleAppAction(app, "restart")} className="text-rust-400 hover:underline ml-2">Restart</button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Reboot Required Warning */}
           {rebootRequired && (

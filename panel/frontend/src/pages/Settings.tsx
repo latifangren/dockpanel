@@ -101,6 +101,12 @@ const RECORD_COLUMN_BY_TYPE: Record<string, string> = {
  *  layout thumbnails below had no branch for clean or clean-dark and so rendered
  *  a black terminal preview inside a white card on both. */
 const THEME_SWATCHES = [
+  // Lite themes first (2026-10-25 redesign): these are the selectable set.
+  // Upstream entries below are kept for compatibility only.
+  { id: "lite-mix", name: "Lite Mix", desc: "Warm light, amber — default", bg: "#faf7f2", sidebar: "#fffdf9", accent: "#d97706", card: "#ffffff", text: "#a8a29e", bar: "#f0e6d6" },
+  { id: "lite-warm", name: "Lite Warm", desc: "Warm charcoal, amber", bg: "#1c1917", sidebar: "#171412", accent: "#f59e0b", card: "#292524", text: "#78716c", bar: "#44403c" },
+  { id: "lite-clean", name: "Lite Clean", desc: "White, blue", bg: "#f8fafc", sidebar: "#ffffff", accent: "#2563eb", card: "#f1f5f9", text: "#94a3b8", bar: "#e2e8f0" },
+  { id: "lite-midnight", name: "Lite Midnight", desc: "Navy, teal & violet", bg: "#0a1628", sidebar: "#050a18", accent: "#14b8a6", card: "#0f1f3a", text: "#3a5785", bar: "#182d50" },
   { id: "terminal", name: "Terminal", desc: "Hacker aesthetic", bg: "#111113", sidebar: "#09090b", accent: "#22c55e", card: "#18181b", text: "#52525b", bar: "#27272a" },
   { id: "midnight", name: "Midnight", desc: "Deep navy, modern", bg: "#0a1628", sidebar: "#050a18", accent: "#3b82f6", card: "#0f1f3a", text: "#3a5785", bar: "#182d50" },
   { id: "ember", name: "Ember", desc: "Warm & premium", bg: "#1c1917", sidebar: "#100e0d", accent: "#fb923c", card: "#292524", text: "#78716c", bar: "#3b3533" },
@@ -109,7 +115,7 @@ const THEME_SWATCHES = [
   { id: "clean", name: "Clean Light", desc: "Modern SaaS, blue", bg: "#f8fafc", sidebar: "#ffffff", accent: "#2563eb", card: "#f1f5f9", text: "#94a3b8", bar: "#e2e8f0" },
 ] as const;
 
-const DEFAULT_SWATCH = THEME_SWATCHES[1]; // midnight — the default theme
+const DEFAULT_SWATCH = THEME_SWATCHES[0]; // lite-mix — the default theme
 
 interface HealthStatus {
   db: string;

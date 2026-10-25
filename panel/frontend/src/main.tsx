@@ -23,16 +23,15 @@ import "./index.css";
 // only (applyTheme in hooks/useLayoutState.ts).
 (() => {
   const stored = localStorage.getItem("dp-theme");
-  let theme = stored || "midnight";
-  if (theme === "dark") theme = "midnight";
-  if (theme === "light") theme = "arctic";
-  if (theme === "nexus") theme = "clean";
-  if (theme === "nexus-dark") theme = "clean-dark";
+  let theme = stored || "lite-mix";
+  if (theme === "dark" || theme === "nexus-dark") theme = "lite-midnight";
+  if (theme === "light" || theme === "nexus") theme = "lite-clean";
+  if (theme === "terminal") theme = "lite-mix";
   // Layout initialization
   const layout = localStorage.getItem("dp-layout") || "command";
   document.documentElement.setAttribute("data-theme", theme);
   document.documentElement.setAttribute("data-layout", layout);
-  document.documentElement.setAttribute("data-color-scheme", (theme === "clean" || theme === "arctic") ? "light" : "dark");
+  document.documentElement.setAttribute("data-color-scheme", (theme === "clean" || theme === "arctic" || theme === "lite-mix" || theme === "lite-clean") ? "light" : "dark");
 })();
 
 // Retry lazy import — handles stale chunks after deploy

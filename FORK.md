@@ -83,6 +83,39 @@ ter-fork, sementara DockPanel menyatakan tidak ada premium tier.
   (dijangkau lewat route detail site), jadi tidak ada yang disembunyikan
   — konsisten dengan prinsip di bawah.
 
+- **Redesain total frontend (2026-10-25, belum di-push).** Keputusan
+  pengguna: tampilan bawaan DockPanel diganti total, bukan dipertahankan
+  demi rebase upstream. `panel/frontend/src/index.css`: tema dasar
+  Terminal diganti — font UI Inter (JetBrains Mono hanya untuk kode),
+  radius 12–28px (dulu 0px), tanpa scanline CRT, bayangan lembut. Ramp
+  `dark-*` dibalik (950 = permukaan paling terang) supaya semua halaman
+  yang memakai utilitas `bg-dark-*`/`text-dark-*` mewarisi tampilan baru
+  tanpa ditulis ulang satu per satu. Tema default baru: `lite-mix`
+  (terang hangat, aksen amber). Tiga tema lain yang bisa dipilih:
+  `lite-warm` (arang hangat + amber), `lite-clean` (putih + biru),
+  `lite-midnight` (navy + teal/violet). Pemetaan ID lama ke lite ada di
+  `theme-init.js`, `main.tsx`, dan `useLayoutState.ts` (terminal/tanpa
+  nilai → lite-mix; dark/nexus-dark → lite-midnight; light/nexus →
+  lite-clean); pemilih tema di `Settings.tsx` menaruh keempat tema lite
+  di urutan pertama, entri upstream lama tetap ada di bawahnya untuk
+  kompatibilitas tapi tidak lagi disiklus. Chrome bersama: sidebar
+  `CommandLayout` (nav aktif membulat, indikator kursor `_` dihapus),
+  gaya kartu/tombol/input/tabel umum di `index.css`. Dashboard
+  (`pages/Dashboard.tsx`) direstruktur ke layout prototipe v3: baris
+  hitungan (Sites, Databases, Applications, Docker), kartu Status
+  dengan 4 gauge SVG (Load, CPU, Memory, Disk), kartu Monitoring dengan
+  tab Network / Disk I/O (grafik area dari sampel sisi klien atas data
+  yang sudah dipoll halaman ini — tidak ada endpoint baru), kolom kanan
+  System Information dan daftar Application (Open + Stop/Start/Restart
+  lewat route `/apps/{id}/{action}` yang sama dengan halaman Apps).
+  Filter lite M3 tidak berubah: sidebar dan Ctrl+K tetap menyaring
+  lewat `isNavVisible`; di mode non-lite menu hosting kembali, dengan
+  tampilan sistem desain baru. Yang sengaja tidak ada di Dashboard baru:
+  hitungan Cron/Backup (tidak ada field-nya di API Dashboard),
+  baris Architecture/IP di System Information (bukan field
+  `SystemInfo`), dan logo brand aplikasi (tidak tersedia di codebase —
+  dipakai ubin huruf awal bergradasi).
+
 **Lite adalah profil UX, bukan batas keamanan.** Route tetap bisa
 dijangkau langsung lewat URL, dan backend tidak menegakkan apa pun
 berdasarkan flag ini — halaman yang dibuka langsung tetap menjalankan
