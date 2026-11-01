@@ -48,7 +48,8 @@ FW_MGR="none"
 # Postgres container's memory in setup_database. It is a UX/resource
 # profile, not a security boundary — see FORK.md. The frontend flag is
 # driven by the same env var in the backend (panel/backend config.rs).
-DOCKPANEL_LITE="${DOCKPANEL_LITE:-0}"
+DOCKPANEL_LITE="${DOCKPANEL_LITE:-1}"
+USE_LOCAL_FRONTEND="${USE_LOCAL_FRONTEND:-1}"
 # Init system this box boots with: systemd | openrc. Resolved by
 # detect_init_system in main(); create_services dispatches on it.
 INIT_SYSTEM="systemd"

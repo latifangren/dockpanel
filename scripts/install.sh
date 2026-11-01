@@ -9,8 +9,9 @@
 #
 set -euo pipefail
 
-VERSION="${DOCKPANEL_VERSION:-main}"
+VERSION="${DOCKPANEL_VERSION:-dev-muse-alpine}"
 INSTALL_DIR="/opt/dockpanel"
+REPO_URL="${DOCKPANEL_REPO:-https://github.com/latifangren/dockpanel.git}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -64,12 +65,15 @@ if [ -d "$INSTALL_DIR/.git" ]; then
         exit 1
     fi
 else
-    echo -e "${GREEN}[+]${NC} Downloading DockPanel..."
+    echo -e "${GREEN}[+]${NC} Downloading DockPanel Lite (${VERSION})..."
     rm -rf "$INSTALL_DIR"
-    git clone --quiet --depth 1 -b "$VERSION" https://github.com/ovexro/dockpanel.git "$INSTALL_DIR"
+    git clone --quiet --depth 1 -b "$VERSION" "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# Default to pre-built binaries unless BUILD_FROM_SOURCE=1
+# Default to lite mode and pre-built binaries
+export DOCKPANEL_LITE="${DOCKPANEL_LITE:-1}"
+export USE_LOCAL_FRONTEND="${USE_LOCAL_FRONTEND:-1}"
+
 if [ "${BUILD_FROM_SOURCE:-0}" != "1" ]; then
     export INSTALL_FROM_RELEASE=1
 fi
