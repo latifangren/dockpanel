@@ -10,7 +10,7 @@ use crate::error::{internal_error, err, agent_error, paginate, require_admin, Ap
 use crate::services::agent::AgentError;
 use crate::AppState;
 
-/// Hard per-account cap on total databases, independent of any reseller quota.
+/// Hard per-account cap on total databases.
 /// Bounds how much of the shared, host-wide DB port pool + host RAM a single
 /// tenant can consume so one account cannot deny database creation to everyone.
 const MAX_DATABASES_PER_USER: i64 = 25;
@@ -92,7 +92,7 @@ pub async fn list(
 ) -> Result<Json<Vec<Database>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
 
-    // Same admin-widening create() already grants (helpers::SITE_CALLER_PREDICATE) —
+    // Same admin-widening create() already grants (hosting_helpers::SITE_CALLER_PREDICATE) —
     // without it, a database an admin creates on a tenant's site via the local-box
     // arm becomes invisible to its own creator (v2.216.0 audit finding).
     //
@@ -135,7 +135,7 @@ async fn resolve_owner(
         (Some(sid), None) => {
             let row: Option<(Option<Uuid>, String)> = sqlx::query_as(&format!(
                 "SELECT s.server_id, s.domain FROM sites s WHERE {}",
-                crate::helpers::SITE_CALLER_PREDICATE
+                crate::hosting_helpers::SITE_CALLER_PREDICATE
             ))
             .bind(sid)
             .bind(user_id)
@@ -181,7 +181,7 @@ pub async fn create(
     let agent =
         crate::helpers::agent_for_site_server(&state, owner_server_id, &owner_label).await?;
 
-    // Hard per-account cap on total databases (independent of reseller quota) so a
+    // Hard per-account cap on total databases so a
     // single tenant cannot exhaust the shared, host-wide DB port pool / host RAM.
     // Counts both site-owned and stack-owned rows (COALESCE — chk_databases_owner
     // guarantees exactly one of the two joins matches per row).
@@ -282,12 +282,6 @@ pub async fn create(
     let encrypted_password = crate::services::secrets_crypto::encrypt_credential(&password, &state.config.jwt_secret)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
 
-    // Atomically reserve one slot against the caller's reseller quota (if any). The old
-    // check-then-increment was TOCTOU-racy — concurrent creates all read the same stale
-    // `used_databases` and each incremented past `max`. A conditional UPDATE ... RETURNING
-    // makes the check and the increment one statement. Released on any failure below.
-    let reserved_quota = reserve_reseller_db_slot(&state, claims.sub).await?;
-
     // Insert DB record first to atomically claim the port (unique index prevents races).
     // container_id is empty until the agent creates it.
     let db_record: Database = match sqlx::query_as(
@@ -307,7 +301,6 @@ pub async fn create(
     {
         Ok(r) => r,
         Err(e) => {
-            if reserved_quota { release_reseller_db_slot(&state, claims.sub).await; }
             if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
                 return Err(err(StatusCode::CONFLICT, "Port or database name conflict, please retry"));
             }
@@ -334,12 +327,11 @@ pub async fn create(
     let result = match agent.post("/databases", Some(agent_body)).await {
         Ok(r) => r,
         Err(e) => {
-            // Clean up the DB record + release the reserved quota slot if the agent fails.
+            // Clean up the DB record if the agent fails.
             let _ = sqlx::query("DELETE FROM databases WHERE id = $1")
                 .bind(db_record.id)
                 .execute(&state.db)
                 .await;
-            if reserved_quota { release_reseller_db_slot(&state, claims.sub).await; }
             return Err(agent_error("Database creation", e));
         }
     };
@@ -357,8 +349,6 @@ pub async fn create(
         .execute(&state.db)
         .await
         .map_err(|e| internal_error("create databases", e))?;
-
-    // (Reseller counter already incremented atomically by reserve_reseller_db_slot above.)
 
     tracing::info!("Database created: {} ({}, port {})", body.name, engine, port);
 
@@ -468,12 +458,6 @@ pub async fn remove(
         .await
         .map_err(|e| internal_error("remove databases", e))?;
 
-    // Decrement reseller database counter
-    let _ = sqlx::query(
-        "UPDATE reseller_profiles SET used_databases = GREATEST(used_databases - 1, 0), updated_at = NOW() \
-         WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)"
-    ).bind(claims.sub).execute(&state.db).await;
-
     purge_dumps_if_unclaimed(&state, &agent, &name, owner_server_id).await;
 
     tracing::info!("Database deleted: {name}");
@@ -510,12 +494,17 @@ pub(crate) async fn purge_dumps_if_unclaimed(
     // of the candidates. Doubt keeps the files; only positive evidence that
     // nothing else claims the name removes them. The reverse default trades a
     // disclosed leak for silent data loss.
+    // R1 (backend-hosting removal): the `sites` join is gone — `databases` carries
+    // no server column of its own, so a site-owned survivor can no longer prove
+    // it lives on a different host. Its stack join contributes NULL, which the
+    // `IS NULL` arm already treats as "possibly here", so the directory is kept
+    // whenever a same-named site-owned database survives anywhere. That is the
+    // conservative direction this guard already documents above: a leaked
+    // directory, never a survivor's dumps deleted.
     let shared: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM databases d \
-         LEFT JOIN sites s ON s.id = d.site_id \
          LEFT JOIN docker_stacks st ON st.id = d.stack_id \
-         WHERE d.name = $1 AND (COALESCE(s.server_id, st.server_id) = $2 \
-         OR COALESCE(s.server_id, st.server_id) IS NULL))",
+         WHERE d.name = $1 AND (st.server_id = $2 OR st.server_id IS NULL))",
     )
     .bind(&name)
     .bind(site_server_id)
@@ -945,57 +934,6 @@ pub async fn schema_overview(
         "foreign_keys": foreign_keys,
         "engine": engine,
     })))
-}
-
-/// Atomically reserve one database slot against the caller's reseller quota.
-/// Returns Ok(true) if a slot was reserved (caller must release it on a later
-/// failure), Ok(false) if the user has no reseller (nothing to enforce/release),
-/// or Err(403) if the reseller's database quota is exhausted. The conditional
-/// UPDATE ... RETURNING makes the quota check and the increment a single atomic
-/// statement, closing the check-then-increment TOCTOU.
-async fn reserve_reseller_db_slot(state: &AppState, user_id: Uuid) -> Result<bool, ApiError> {
-    let reserved: Option<i32> = sqlx::query_scalar(
-        "UPDATE reseller_profiles SET used_databases = used_databases + 1, updated_at = NOW() \
-         WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL) \
-           AND (max_databases IS NULL OR used_databases < max_databases) \
-         RETURNING 1",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("reserve reseller quota", e))?;
-
-    if reserved.is_some() {
-        return Ok(true); // slot reserved + counter incremented atomically
-    }
-
-    // 0 rows updated: either the user has no reseller/profile (nothing to enforce),
-    // or the profile exists but the quota condition failed (quota exhausted).
-    let has_profile: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT rp.user_id FROM reseller_profiles rp \
-         WHERE rp.user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("reserve reseller quota", e))?;
-
-    if has_profile.is_some() {
-        return Err(err(StatusCode::FORBIDDEN, "Reseller database quota exceeded"));
-    }
-    Ok(false) // no reseller → nothing reserved
-}
-
-/// Release a reserved reseller database slot (compensating decrement) when a
-/// create fails after `reserve_reseller_db_slot` succeeded.
-async fn release_reseller_db_slot(state: &AppState, user_id: Uuid) {
-    let _ = sqlx::query(
-        "UPDATE reseller_profiles SET used_databases = GREATEST(used_databases - 1, 0), updated_at = NOW() \
-         WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)",
-    )
-    .bind(user_id)
-    .execute(&state.db)
-    .await;
 }
 
 /// Find an available port using a single SQL query to find the first gap.

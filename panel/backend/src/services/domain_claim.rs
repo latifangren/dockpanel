@@ -52,6 +52,12 @@ pub enum Holder {
     #[default]
     New,
     /// The `sites` row with this id may hold it.
+    ///
+    /// R3: no production constructor remains — every site door died — but
+    /// the variant STAYS. `find_occupant`'s `sites` leg still reports
+    /// collisions with legacy rows, and deleting the variant would blind
+    /// the guard until R7 drops the table. Revisit in R7.
+    #[allow(dead_code)]
     Site(Uuid),
     /// The `git_deploys` row with this id may hold it.
     GitDeploy(Uuid),
@@ -414,13 +420,23 @@ mod tests {
     fn every_other_role_is_unaffected() {
         // The gate must be a pure addition. If it refused anyone else, the
         // regression would be invisible here and loud in production.
-        for role in ["admin", "reseller", "user", "suspended", ""] {
+        //
+        // R2: the stored `reseller` value never reaches this function — the
+        // auth boundary maps it to `user` before any handler passes
+        // `claims.role` here — so it is asserted through that mapping, as
+        // the ordinary role it now is, not as a literal that no longer
+        // exists as a privilege.
+        for role in ["admin", "user", "suspended", ""] {
             assert!(
                 may_claim_new(role, Holder::New),
                 "role {role:?} must still be able to claim a new domain here — \
                  whether it may act at all is decided by its own handler's guard"
             );
         }
+        assert!(
+            may_claim_new(crate::auth::effective_role("reseller"), Holder::New),
+            "a stored reseller claims new domains as a user after R2"
+        );
     }
 
     #[test]
@@ -444,7 +460,10 @@ mod tests {
     #[test]
     fn only_an_administrator_may_claim_a_domain_a_mail_domain_holds() {
         assert!(may_claim_mail_held("admin"));
-        for role in ["client", "user", "reseller", "suspended", ""] {
+        // R2: as in `every_other_role_is_unaffected`, the stored `reseller`
+        // value is asserted through the auth-boundary mapping — it is
+        // refused here exactly as the `user` it now is.
+        for role in ["client", "user", "suspended", ""] {
             assert!(
                 !may_claim_mail_held(role),
                 "role {role:?} must not claim a name whose mailboxes exist — the \
@@ -452,6 +471,10 @@ mod tests {
                  would let the account mint its own access to those mailboxes"
             );
         }
+        assert!(
+            !may_claim_mail_held(crate::auth::effective_role("reseller")),
+            "a stored reseller must not claim a name whose mailboxes exist"
+        );
     }
 
     #[test]

@@ -241,87 +241,6 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
-section "4. RESELLER SYSTEM"
-# ═══════════════════════════════════════════════════════════════════════
-
-# Create a reseller
-# Create a user first, then promote to reseller
-R_USER_RESP=$(api_post "/users" '{"email":"reseller@e2etest.dev","password":"ResellerPass1234!","role":"user"}')
-R_USER_ID=$(echo "$R_USER_RESP" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-# Response might have id directly or nested in user object
-uid = d.get('id', d.get('user',{}).get('id',''))
-print(uid)
-" 2>/dev/null || echo "")
-if [ -z "$R_USER_ID" ] || [ "$R_USER_ID" = "" ] || [ "$R_USER_ID" = "None" ]; then
-    # Try listing users to find the one we just created
-    R_USER_ID=$(api_get "/users" | python3 -c "
-import sys, json
-users = json.load(sys.stdin)
-for u in (users if isinstance(users, list) else []):
-    if u.get('email') == 'reseller@e2etest.dev':
-        print(u['id'])
-        break
-" 2>/dev/null || echo "")
-fi
-RESELLER_RESP=$(api_post "/resellers" "{\"user_id\":\"${R_USER_ID}\",\"panel_name\":\"E2E Reseller\",\"max_users\":5,\"max_sites\":10,\"max_databases\":5}")
-RESELLER_ID=$(echo "$RESELLER_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-if [ -n "$RESELLER_ID" ] && [ "$RESELLER_ID" != "" ]; then
-    ok "Reseller created (ID: ${RESELLER_ID:0:8}...)"
-
-    # List resellers
-    RESELLERS=$(api_get "/resellers")
-    R_COUNT=$(echo "$RESELLERS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else 0)" 2>/dev/null || echo "0")
-    if [ "$R_COUNT" -ge 1 ]; then
-        ok "Resellers list: $R_COUNT"
-    else
-        fail "Resellers list empty"
-    fi
-
-    # Allocate server to reseller
-    ALLOC_STATUS=$(api_post_status "/resellers/${RESELLER_ID}/servers" "{\"server_id\":\"${SERVER_ID}\"}")
-    if [ "$ALLOC_STATUS" = "200" ] || [ "$ALLOC_STATUS" = "201" ]; then
-        ok "Server allocated to reseller"
-    else
-        fail "Server allocation returned HTTP $ALLOC_STATUS"
-    fi
-
-    # Login as reseller
-    RESELLER_HEADERS=$(mktemp)
-    curl -s -D "$RESELLER_HEADERS" -X POST "${API}/auth/login" \
-        -H "Content-Type: application/json" \
-        -d '{"email":"reseller@e2etest.dev","password":"ResellerPass1234!"}' > /dev/null 2>&1
-    RESELLER_TOKEN=$(grep -i "set-cookie" "$RESELLER_HEADERS" 2>/dev/null | sed 's/.*token=//;s/;.*//')
-    rm -f "$RESELLER_HEADERS"
-
-    if [ -n "$RESELLER_TOKEN" ]; then
-        ok "Reseller login successful"
-
-        # Reseller dashboard
-        R_DASH=$(curl -s -H "Authorization: Bearer $RESELLER_TOKEN" "${API}/reseller/dashboard" 2>/dev/null)
-        if echo "$R_DASH" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
-            ok "Reseller dashboard loads"
-        else
-            fail "Reseller dashboard failed"
-        fi
-
-        # Reseller tries admin endpoint (should be 403)
-        R_ADMIN=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $RESELLER_TOKEN" "${API}/users" 2>/dev/null)
-        if [ "$R_ADMIN" = "403" ]; then
-            ok "Reseller blocked from admin endpoints (403)"
-        else
-            fail "Reseller accessed admin endpoint (HTTP $R_ADMIN, expected 403)"
-        fi
-    else
-        fail "Reseller login failed"
-    fi
-else
-    fail "Reseller creation failed: $(echo "$RESELLER_RESP" | head -c 300)"
-    RESELLER_ID=""
-fi
-
-# ═══════════════════════════════════════════════════════════════════════
 section "5. MAIL SYSTEM"
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -714,14 +633,6 @@ for CID in $CONC_IDS; do
 done
 [ -n "$CONC_IDS" ] && ok "Concurrent sites deleted" || true
 
-# Delete reseller (and their user account)
-if [ -n "${RESELLER_ID:-}" ]; then
-    api_delete "/resellers/${RESELLER_ID}" > /dev/null 2>&1 && ok "Reseller deleted" || fail "Reseller delete failed"
-fi
-# Delete the reseller's user account
-if [ -n "${R_USER_ID:-}" ] && [ "$R_USER_ID" != "" ] && [ "$R_USER_ID" != "None" ]; then
-    api_delete "/users/${R_USER_ID}" > /dev/null 2>&1
-fi
 
 # Delete backup test site
 [ -n "${BK_SITE_ID:-}" ] && { api_delete "/sites/${BK_SITE_ID}" > /dev/null 2>&1 && ok "Backup test site deleted" || fail "Backup site delete failed"; }

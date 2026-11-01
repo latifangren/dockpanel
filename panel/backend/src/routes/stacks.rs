@@ -1402,7 +1402,7 @@ pub async fn renew_ssl(
         .post_long(
             &format!("/ssl/{domain}/renew"),
             Some(serde_json::json!({ "email": contact })),
-            crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
+            crate::routes::acme::DNS01_ORDER_TIMEOUT_SECS,
         )
         .await
         .map_err(|e| agent_error("SSL renewal", e))?;

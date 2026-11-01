@@ -579,7 +579,11 @@ pub async fn callback(
     let claims = crate::auth::Claims {
         sub: user.id,
         email: user.email.clone(),
-        role: user.role.clone(),
+        // Same mapping as every other minting path: a stored `reseller` role
+        // is issued as `user` (see `crate::auth::effective_role`). AuthUser
+        // normalises on every request too, so this is consistency of the
+        // issued token itself, not a new gate.
+        role: crate::auth::effective_role(&user.role).to_owned(),
         iat: now,
         exp: now + 7200, // 2 hours
         jti: Some(jti.clone()),

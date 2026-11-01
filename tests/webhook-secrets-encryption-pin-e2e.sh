@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # webhook-secrets-encryption-pin-e2e.sh — s431
 #
-# Regression pins for the 5 sibling plaintext webhook/verify secrets deferred
+# Regression pins for the 4 sibling plaintext webhook/verify secrets deferred
 # from s430's notification-secrets rollout: `deploy_configs.webhook_secret`,
 # `git_deploys.webhook_secret`, `extensions.webhook_secret`,
-# `whmcs_config.webhook_secret`, `webhook_endpoints.verify_secret` were all
-# plain columns, with zero `secrets_crypto` reference anywhere in the files
-# that wrote or read them.
+# `webhook_endpoints.verify_secret` were all plain columns, with zero
+# `secrets_crypto` reference anywhere in the files that wrote or read them.
 #
 # ⚠ The s430 ledger's own design note characterized deploy_configs/git_deploys
 # as "compare-only — should be HASHED, mirroring extensions.api_key_hash".
@@ -14,10 +13,10 @@
 # from the GET/list response on EVERY page load to render the webhook URL to
 # paste into the git host — not shown once at creation like an API key. A
 # hash-only design would have silently broken that display on the very next
-# page load after creation. All five subjects here are reversible-encrypt.
+# page load after creation. All four subjects here are reversible-encrypt.
 #
 # ⚠ A second defect a naive port of the s430 pattern would have shipped: three
-# of the five columns (deploy_configs.webhook_secret VARCHAR(64),
+# of the columns (deploy_configs.webhook_secret VARCHAR(64),
 # git_deploys.webhook_secret VARCHAR(64), webhook_endpoints.verify_secret
 # VARCHAR(200)) are sized for the PLAINTEXT. Base64(nonce+ciphertext+tag) is
 # longer than the plaintext it wraps — encrypting in place without widening
@@ -32,9 +31,7 @@
 #       signing. services::extensions::emit_event has no AppState (PgPool
 #       only), so it decrypts via decrypt_credential_from_env, matching
 #       notifications.rs/uptime.rs's s430 precedent.
-#   §C  whmcs.rs::update_config ENCRYPTS (decrypting the prior value first, so
-#       the preserve-vs-mint comparison still runs on plaintext); get_config
-#       and the inbound webhook receiver DECRYPT.
+#   §C  (removed in R2: whmcs.rs deleted with the WHMCS integration.)
 #   §D  deploy.rs::set_config ENCRYPTS on write, then decrypts whatever
 #       RETURNING * actually gives back (not the freshly-generated local) —
 #       ON CONFLICT's DO UPDATE never touches this column, so an
@@ -43,7 +40,7 @@
 #   §E  git_deploys.rs::create ENCRYPTS; list/get_one/update DECRYPT
 #       alongside the existing mask_github_token() call; the webhook receiver
 #       DECRYPTS before the SHA256 hash-compare.
-#   §F  credential_reencrypt.rs's self-enforcing registry carries all 5 new
+#   §F  credential_reencrypt.rs's self-enforcing registry carries all 4 new
 #       subjects in SIMPLE_SUBJECTS and pairs each writer module in
 #       COVERED_MODULES.
 #   §G  the three too-narrow columns are widened to TEXT.
@@ -55,7 +52,6 @@ cd "$(dirname "$0")/.."
 GATEWAY=panel/backend/src/routes/webhook_gateway.rs
 EXTENSIONS=panel/backend/src/routes/extensions.rs
 EXT_SVC=panel/backend/src/services/extensions.rs
-WHMCS=panel/backend/src/routes/whmcs.rs
 DEPLOY=panel/backend/src/routes/deploy.rs
 GITDEPLOYS=panel/backend/src/routes/git_deploys.rs
 REENCRYPT=panel/backend/src/services/credential_reencrypt.rs
@@ -107,22 +103,6 @@ has "$EXT_SVC" 'decrypt_credential_from_env\(&webhook_secret\)' \
   "B7 emit_event decrypts via the AppState-free helper (no AppState in this fn)"
 
 echo
-echo "== §C  whmcs.rs: encrypt on save, decrypt on read + inbound verify =="
-
-hasml "$WHMCS" 'cur_secret = cur_secret\s*\.map\(\|s\| crate::services::secrets_crypto::decrypt_credential_or_legacy' \
-  "C1 update_config decrypts the prior value before the preserve-vs-mint decision"
-hasml "$WHMCS" 'encrypted_webhook_secret = crate::services::secrets_crypto::encrypt_credential\(\s*&webhook_secret' \
-  "C2 update_config encrypts before the INSERT/DO UPDATE"
-has "$WHMCS" '\.bind\(&encrypted_webhook_secret\)' \
-  "C3 the SQL bind chain uses the encrypted local"
-has "$WHMCS" '"webhook_secret": webhook_secret' \
-  "C4 the save response still returns PLAINTEXT"
-has "$WHMCS" 'let webhook = webhook\.map\(\|w\| \{' \
-  "C5 get_config decrypts before serializing"
-has "$WHMCS" 'let secret = secret\.map\(\|s\| \{' \
-  "C6 the inbound webhook receiver decrypts before the ct_eq compare"
-
-echo
 echo "== §D  deploy.rs: encrypt on write, decrypt what RETURNING * actually holds =="
 
 hasml "$DEPLOY" 'encrypted_webhook_secret = crate::services::secrets_crypto::encrypt_credential\(\s*&webhook_secret' \
@@ -169,7 +149,6 @@ echo "== §F  credential_reencrypt.rs's registry carries all 5 new subjects =="
 for subj in \
   '"webhook_endpoints", "id", "verify_secret"' \
   '"extensions", "id", "webhook_secret"' \
-  '"whmcs_config", "id", "webhook_secret"' \
   '"deploy_configs", "id", "webhook_secret"' \
   '"git_deploys", "id", "webhook_secret"'; do
   esc=$(printf '%s' "$subj" | sed 's/[.[\*^$()+?{|]/\\&/g')
@@ -183,7 +162,6 @@ done
 for pair in \
   '"webhook_gateway", "webhook_endpoints.verify_secret"' \
   '"extensions", "extensions.webhook_secret"' \
-  '"whmcs", "whmcs_config.webhook_secret"' \
   '"deploy", "deploy_configs.webhook_secret"' \
   '"git_deploys", "git_deploys.webhook_secret"'; do
   esc=$(printf '%s' "$pair" | sed 's/[.[\*^$()+?{|]/\\&/g')

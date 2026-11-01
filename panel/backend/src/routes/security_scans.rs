@@ -142,7 +142,6 @@ pub async fn trigger_scan(
                 &state.db,
                 &member,
                 findings,
-                &state.config.jwt_secret,
             )
             .await;
         }

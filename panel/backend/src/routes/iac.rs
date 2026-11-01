@@ -131,32 +131,6 @@ pub async fn delete_token(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-/// GET /api/iac/resources/sites — Terraform-compatible site listing.
-pub async fn tf_list_sites(
-    State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-    let sites: Vec<(uuid::Uuid, String, String, String, bool, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as(
-            "SELECT id, domain, runtime, status, ssl_enabled, created_at \
-             FROM sites WHERE user_id = $1 ORDER BY domain"
-        )
-        .bind(claims.sub)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| internal_error("tf list sites", e))?;
-
-    let items: Vec<serde_json::Value> = sites.iter().map(|(id, domain, runtime, status, ssl, created)| {
-        serde_json::json!({
-            "id": id, "domain": domain, "runtime": runtime,
-            "status": status, "ssl_enabled": ssl, "created_at": created,
-        })
-    }).collect();
-
-    Ok(Json(serde_json::json!({ "resources": items })))
-}
-
 /// GET /api/iac/resources/databases — Terraform-compatible database listing.
 pub async fn tf_list_databases(
     State(state): State<AppState>,

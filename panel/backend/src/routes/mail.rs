@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser, Claims, ServerScope};
 use crate::error::{internal_error, err, agent_error, ApiError};
-use crate::routes::sites::ProvisionStep;
+use crate::provision::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
 use crate::AppState;
@@ -1345,7 +1345,8 @@ async fn provision_mail_host_cert(
             // one always rewrites the vhost. So put the site's real
             // configuration back afterwards, exactly as the four SSL doors in
             // `routes/ssl.rs` already do for their own writes.
-            crate::routes::ssl::rebuild_vhost_for_domain(db, agent, domain, server_id).await;
+            // R3: the site-vhost restore that used to run here died with
+            // `routes/sites.rs` — there is no site vhost left to put back.
         }
         Err(e) => tracing::warn!("Auto-SSL (mail): failed for {domain}: {e} — provision manually"),
     }
@@ -2321,7 +2322,7 @@ pub async fn tls_enforce(
 /// The one predicate that decides whether a caller may act on a mail domain.
 ///
 /// Binds `$1` = the mail domain id, `$2` = the caller's own id — the same two
-/// parameters, in the same order, as [`crate::helpers::SITE_CALLER_PREDICATE`],
+/// parameters, in the same order, as [`crate::hosting_helpers::SITE_CALLER_PREDICATE`],
 /// so a query that joins another table onto `mail_domains` can add its own bind
 /// as `$3` and drop this in unchanged.
 ///

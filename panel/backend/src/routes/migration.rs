@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
 use crate::error::{internal_error, err, require_admin, ApiError};
-use crate::routes::sites::ProvisionStep;
+use crate::provision::ProvisionStep;
 use crate::services::activity;
 use crate::AppState;
 
@@ -920,7 +920,7 @@ pub async fn import(
                         // domain lookup here is the shape `domain-claim` §B2
                         // forbids, because that is how paths came to disagree.
                         None => {
-                            crate::helpers::site_id_for_owned_domain(&db, &wanted, user_id).await
+                            crate::hosting_helpers::site_id_for_owned_domain(&db, &wanted, user_id).await
                         }
                     }
                 }

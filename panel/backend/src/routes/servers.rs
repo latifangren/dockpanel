@@ -74,7 +74,7 @@ pub struct Server {
 /// `gpu_metrics_history`, `timeline`) widen conditionally with a bound
 /// `$N::uuid IS NULL OR` predicate, mirroring `dashboard::intelligence`'s own
 /// established idiom for the same distinction. No shared predicate was
-/// introduced for servers (unlike `helpers::SITE_CALLER_PREDICATE` for
+/// introduced for servers (unlike `hosting_helpers::SITE_CALLER_PREDICATE` for
 /// sites): the two shapes above are what the codebase's own prior fixes
 /// (`intelligence`, `fleet_overview`) had already established, and a new
 /// abstraction used by none of the existing call sites would be inconsistent

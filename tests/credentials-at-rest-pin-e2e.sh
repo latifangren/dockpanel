@@ -2,21 +2,21 @@
 # Regression pins for the s377 ship — the credential promise the project publishes.
 #
 # `SECURITY.md` and `README.md` both state, without qualification, that every
-# stored credential is encrypted at rest with AES-256-GCM. Three columns were
-# not: `cdn_zones.api_key`, `git_deploys.github_token` and `servers.agent_token`
+# stored credential is encrypted at rest with AES-256-GCM. Two columns were
+# not: `git_deploys.github_token` and `servers.agent_token`
 # — the last one named in cleartext by `auto_healer`'s own comment about what a
 # panel database dump carries. The claim was false on the project's front page,
 # and no test could see it, because nothing compared the published sentence with
 # the columns.
 #
-# So this suite pins BOTH ENDS. §A–§C pin each column's writer and its single
+# So this suite pins BOTH ENDS. §B–§C pin each column's writer and its single
 # decrypting read site; §D pins the masks on the wire; §E pins the sentence
 # against the code, so the promise cannot come back without the columns, and the
 # columns cannot regress without the promise going red.
 #
 # The choke-point shape is the load-bearing one and it is deliberate: every read
-# of these three credentials funnels through exactly one function
-# (`helpers::cf_headers`, `cdn::bunny_headers`, `git_deploys::set_github_status`,
+# of these two credentials funnels through exactly one function
+# (`helpers::cf_headers`, `git_deploys::set_github_status`,
 # `AgentRegistry::for_server`), so no read site can forget to decrypt. Arms that
 # count CALL sites rather than the helper's own name are used throughout —
 # a name search is satisfied by the declaration itself, which is how a severed
@@ -33,7 +33,6 @@ eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$3', got '$2'"; }
 # real binary explicitly (dockpanel-ops-p2, s357).
 G=/usr/bin/grep
 
-CDN=panel/backend/src/routes/cdn.rs
 GITD=panel/backend/src/routes/git_deploys.rs
 SERVERS=panel/backend/src/routes/servers.rs
 AGENT=panel/backend/src/services/agent.rs
@@ -42,45 +41,25 @@ REENC=panel/backend/src/services/credential_reencrypt.rs
 SETTINGS=panel/backend/src/routes/settings.rs
 BACKUP_DEST=panel/backend/src/routes/backup_destinations.rs
 
-for f in "$CDN" "$GITD" "$SERVERS" "$AGENT" "$HELPERS" "$REENC" "$SETTINGS" "$BACKUP_DEST" README.md SECURITY.md; do
+for f in "$GITD" "$SERVERS" "$AGENT" "$HELPERS" "$REENC" "$SETTINGS" "$BACKUP_DEST" README.md SECURITY.md; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
 
 # An arm that measures an empty subject prints green for every absence below, so
 # each subject is asserted before it is measured (lesson #143).
-for pair in "$CDN:400" "$GITD:3000" "$SERVERS:400" "$AGENT:1200"; do
+for pair in "$GITD:3000" "$SERVERS:400" "$AGENT:1200"; do
   f=${pair%:*}; floor=${pair##*:}
   n=$($G -c '' "$f")
   [ "$n" -gt "$floor" ] && ok "S0 subject extracted — $f is $n lines" \
     || bad "S0 subject extracted" "$f is only $n lines (floor $floor) — arms over it examine nothing"
 done
 
-echo "── A. cdn_zones.api_key ────────────────────────────────────────────────"
-
-# A1: the WRITER binds the ciphertext variable, not the request field. Keyed on
-# the bind, not on the presence of `encrypt_credential` anywhere in the file —
-# the call could exist and the bind still carry `body.api_key`.
-eq "A1 the create writer binds the encrypted value" \
-   "$($G -c '\.bind(&api_key_enc)' "$CDN")" "1"
-API_KEY_PLAIN=$($G -c '\.bind(body\.api_key' "$CDN")
-if [ "$API_KEY_PLAIN" = "0" ]; then
-  ok "A1b no writer binds the plaintext api_key"
-else
-  bad "A1b no writer binds the plaintext api_key" "found $API_KEY_PLAIN — the column would hold cleartext"
-fi
-eq "A1-control the same bind shape DOES match another column in this file" \
-   "$([ "$($G -c '\.bind(body\.domain\.trim())' "$CDN")" -ge 1 ] && echo yes || echo no)" "yes"
-
-# A2: the single decrypting choke point. Every Bunny caller funnels through
-# `bunny_headers`, so the decrypt lives there rather than at each read site.
-eq "A2 bunny_headers decrypts" \
-   "$($G -c 'decrypt_credential_from_env(api_key)' "$CDN")" "1"
-eq "A2b every Bunny read site goes through the choke point" \
-   "$($G -c 'headers(bunny_headers(&zone\.api_key))' "$CDN")" "4"
-eq "A2c the Cloudflare half already had its own choke point" \
-   "$($G -c 'decrypt_credential_from_env(token)' "$HELPERS")" "1"
-
 echo "── B. git_deploys.github_token ─────────────────────────────────────────"
+
+# B0 (was A2c): the Cloudflare half in helpers still has its own choke point.
+# Kept here after §A (cdn_zones) was removed in R2 — its subject is helpers.rs, not cdn.rs.
+eq "B0 the Cloudflare choke point in helpers still decrypts" \
+   "$($G -c 'decrypt_credential_from_env(token)' "$HELPERS")" "1"
 
 eq "B1 both writers bind through the shared encrypting helper" \
    "$($G -c 'encrypt_stored_token(body\.github_token\.as_deref()' "$GITD")" "2"
@@ -182,18 +161,18 @@ eq "E1 README still publishes the at-rest claim" \
 eq "E1b SECURITY.md still publishes it unqualified" \
    "$($G -c 'All stored credentials encrypted with AES-256-GCM' SECURITY.md)" "1"
 
-# E2: the three columns this ship added are in the sweep's own registry. A
+# E2: the two columns this ship added are in the sweep's own registry. A
 # module named without its subject is the half-edit `subject_tokens_match_the_sweep`
 # rejects in Rust; this is the source-level mirror, so the pair cannot be
 # separated by an edit that never runs cargo test.
-for sub in '("cdn_zones", "id", "api_key")' '("git_deploys", "id", "github_token")' '("servers", "id", "agent_token")'; do
+for sub in '("git_deploys", "id", "github_token")' '("servers", "id", "agent_token")'; do
   # COUNT, never forbid: the file's own doc comment spells one of these
   # declarations in prose, so an absence test could not fail (s376 #386 family).
   n=$($G -cF "    $sub," "$REENC")
   eq "E2 the sweep re-keys $sub" "$n" "1"
 done
 eq "E2b each new column's module names it in COVERED_MODULES" \
-   "$($G -cE '\("(cdn|git_deploys|servers|agent)", "(cdn_zones\.api_key|git_deploys\.github_token|servers\.agent_token)"\),' "$REENC")" "4"
+   "$($G -cE '\("(git_deploys|servers|agent)", "(git_deploys\.github_token|servers\.agent_token)"\),' "$REENC")" "3"
 
 # E3: the module list is DERIVED from the crate, not typed. Pinned because the
 # earlier cut walked a two-element literal and asserted that literal against

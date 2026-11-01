@@ -5,7 +5,9 @@ mod auth;
 mod config;
 pub mod error;
 pub mod helpers;
+mod hosting_helpers;
 mod models;
+mod provision;
 mod routes;
 pub mod safe_cmd;
 mod services;
@@ -44,7 +46,7 @@ pub struct AppState {
     /// Rate limiter for agent endpoints: server_id -> (count, window_start)
     pub agent_rate_limits: Arc<Mutex<HashMap<uuid::Uuid, (u32, Instant)>>>,
     /// Provisioning log channels: site_id -> (step history, broadcast sender)
-    pub provision_logs: Arc<Mutex<HashMap<uuid::Uuid, (Vec<routes::sites::ProvisionStep>, tokio::sync::broadcast::Sender<routes::sites::ProvisionStep>, Instant)>>>,
+    pub provision_logs: Arc<Mutex<HashMap<uuid::Uuid, (Vec<crate::provision::ProvisionStep>, tokio::sync::broadcast::Sender<crate::provision::ProvisionStep>, Instant)>>>,
     /// OAuth CSRF state tokens: state_string -> (provider_name, created_at)
     pub oauth_states: Arc<Mutex<HashMap<String, (String, Instant)>>>,
     /// Broadcast channel for real-time panel notification delivery (SSE)
@@ -390,13 +392,6 @@ async fn main() {
     services::status_notices::start_worker(state.db.clone());
 
     // Spawn supervised background tasks
-    // Fleet-wide schedule query, so it gets the registry: a site is backed up on the
-    // server that holds its files. See `run_scheduled_backup`.
-    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
-    // The scheduler decrypts database credentials to include them in site
-    // backups, so it needs the same secret the restore path uses.
-    let s_jwt_bs = state.config.jwt_secret.clone();
-    spawn_supervised("backup_scheduler", &shutdown_tx, move |rx| services::backup_scheduler::run(s_db.clone(), s_agents.clone(), s_jwt_bs.clone(), rx));
 
     let s_db = state.db.clone();
     spawn_supervised("server_monitor", &shutdown_tx, move |rx| services::server_monitor::run(s_db.clone(), rx));
@@ -411,9 +406,6 @@ async fn main() {
 
     let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
     spawn_supervised("image_scanner", &shutdown_tx, move |rx| services::image_scanner::run(s_db.clone(), s_agents.clone(), rx));
-
-    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
-    spawn_supervised("wp_vuln_scanner", &shutdown_tx, move |rx| services::wp_vuln_scanner::run(s_db.clone(), s_agents.clone(), rx));
 
     // Its GPU, service-health and container checks each ask ONE machine what it
     // has, so each runs per online server against that server's own agent.

@@ -1,3 +1,4 @@
+pub mod acme;
 pub mod activity;
 pub mod agent_checkin;
 pub mod alerts;
@@ -7,18 +8,13 @@ pub mod auth;
 pub mod backup_destinations;
 pub mod backup_orchestrator;
 pub mod backup_schedules;
-pub mod backups;
 pub mod branding_assets;
-pub mod cdn;
 pub mod dashboard;
 pub mod oauth;
-pub mod crons;
 pub mod databases;
-pub mod deploy;
 pub mod dns;
 pub mod docker_apps;
 pub mod extensions;
-pub mod files;
 pub mod incidents;
 pub mod git_deploys;
 pub mod logs;
@@ -34,18 +30,13 @@ pub mod security_scans;
 pub mod servers;
 pub mod settings;
 pub mod stacks;
-pub mod staging;
-pub mod sites;
 pub mod system_logs;
 pub mod teams;
 pub mod tls_certificates;
-pub mod ssl;
 pub mod system;
 pub mod terminal;
 pub mod users;
-pub mod reseller_dashboard;
 pub mod migration;
-pub mod resellers;
 pub mod secrets;
 pub mod iac;
 pub mod image_scans;
@@ -55,8 +46,7 @@ pub mod prometheus;
 pub mod webhook_gateway;
 pub mod telemetry;
 pub mod update;
-pub mod whmcs;
-pub mod wordpress;
+pub mod app_migrations;
 pub mod ws_metrics;
 
 use axum::{
@@ -212,22 +202,6 @@ fn reserved_match(domain: &str, panel_host: Option<&str>, zones: &[String]) -> b
         .any(|r| d == *r || d.ends_with(&format!(".{r}")))
 }
 
-/// Validate a value destined for an nginx `add_header Name "<value>" always;`
-/// directive (CSP / Permissions-Policy). The value is rendered verbatim inside a
-/// double-quoted argument in a `.conf` template, and Tera does NOT autoescape
-/// `.conf`, so an unescaped `"` (or a trailing `\`) closes the quoted string
-/// early and lets the remainder inject arbitrary nginx directives. `;` is
-/// intentionally allowed — a real CSP uses it as a directive separator and it is
-/// inert inside the quotes.
-pub fn is_safe_header_value(v: &str) -> bool {
-    !v.contains('"')
-        && !v.contains('\\')
-        && !v.contains('\n')
-        && !v.contains('\r')
-        && !v.contains('\0')
-        && !v.contains('{')
-        && !v.contains('}')
-}
 
 /// Validate a resource name (database, app, etc.).
 pub fn is_valid_name(name: &str) -> bool {
@@ -249,15 +223,6 @@ pub fn is_valid_container_id(id: &str) -> bool {
         && id.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Validate a user-provided file path (reject traversal and injection).
-pub fn is_safe_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains('\0')
-        && !path.contains("..")
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path.len() <= 4096
-}
 
 /// Reduce ordinary shell quoting/escaping so keyword-blocklist matching sees
 /// what the shell will actually run, not what was literally typed —
@@ -580,81 +545,6 @@ pub fn validate_compose_yaml(yaml: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Validate custom nginx config blocks.
-pub fn is_safe_nginx_config(config: &str) -> Result<(), &'static str> {
-    if config.len() > 10240 {
-        return Err("Custom nginx directives must be under 10KB");
-    }
-    if config.contains('\0') {
-        return Err("Config contains null bytes");
-    }
-
-    let lower = config.to_lowercase();
-
-    let dangerous = [
-        "lua_", "content_by_lua", "access_by_lua", "rewrite_by_lua",
-        "set_by_lua", "header_filter_by_lua", "body_filter_by_lua",
-        "proxy_pass http://127.0.0.1", "proxy_pass http://localhost",
-        "proxy_pass http://0.0.0.0", "proxy_pass http://[::1]",
-        "proxy_pass http://169.254",  // AWS metadata
-        "proxy_pass http://metadata",
-        "load_module", "include /etc/", "include /root/",
-        "ssl_certificate /etc/shadow",
-        "alias /etc/", "alias /root/", "alias /home/",
-        "root /etc/", "root /root/", "root /home/",
-        // File-writing directives: an attacker chained one past the agent's
-        // per-line whitelist via ';' (e.g. "sendfile on; access_log
-        // /var/www/victim/public/shell.php;") to poison a log into another
-        // tenant's webroot. A substring match catches it regardless of position;
-        // the agent's per-statement allowlist (services/nginx.rs) is the
-        // authoritative gate.
-        "access_log", "error_log",
-    ];
-    for d in &dangerous {
-        if lower.contains(d) {
-            return Err("Custom nginx config contains dangerous directive");
-        }
-    }
-
-    // Directives the site template already writes at SERVER level, into the same
-    // `server { … }` block this text is injected into. nginx refuses a duplicate
-    // outright, so accepting one produced a configuration it rejects — and the
-    // agent's copy of this check runs inside the template RENDER, whose failure
-    // reaches the operator as `Operation failed. Reference: <uuid>` (agent_error
-    // hands a sentence through only on 4xx). Refused here so the reason survives
-    // the trip: this path answers 400 and `err(…)` carries the text.
-    //
-    // Three names, derived rather than guessed: `add_header` and `gzip_types` are
-    // emitted there too and legitimately repeat, and `expires` is emitted only
-    // inside `location` blocks, which is a different context.
-    for stmt in config.split(';') {
-        let directive = stmt
-            .trim()
-            .split(|c: char| c.is_whitespace())
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
-        match directive.as_str() {
-            "client_max_body_size" => {
-                return Err(
-                    "The site already sets 'client_max_body_size' — nginx refuses a \
-                            duplicate and the whole site would fail to load. Change the site's \
-                            maximum upload size instead; that is the control that writes it.",
-                );
-            }
-            "gzip" | "gzip_min_length" => {
-                return Err(
-                    "The site already enables gzip — nginx refuses a duplicate 'gzip' or \
-                            'gzip_min_length' and the whole site would fail to load. Compression \
-                            is on for every site already.",
-                );
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -904,56 +794,6 @@ mod tests {
         assert_eq!(panel_host_from_base_url("   "), None);
     }
 
-    // ── add_header value validation — s241 C1 ───────────────────────────
-
-    #[test]
-    fn header_value_rejects_nginx_breakout() {
-        // A real CSP (semicolons + single quotes) is accepted.
-        assert!(is_safe_header_value("default-src 'self'; script-src 'self' https:"));
-        assert!(is_safe_header_value("camera=(), microphone=(), geolocation=()"));
-        // The break-out characters that close the quoted add_header argument are rejected.
-        assert!(!is_safe_header_value("x\" always; location /pwn/ { alias /var/www/; }"));
-        assert!(!is_safe_header_value("a\\")); // trailing backslash escapes the closing quote
-        assert!(!is_safe_header_value("a\nb"));
-        assert!(!is_safe_header_value("a{b}"));
-    }
-
-    // ── custom_nginx blocklist — s241 C2 (backend defense-in-depth) ─────
-
-    #[test]
-    fn nginx_config_blocks_chained_access_log() {
-        // The ';'-chained log-poisoning payload must be rejected at the backend too.
-        assert!(is_safe_nginx_config("sendfile on; access_log /var/www/victim/public/shell.php;").is_err());
-        assert!(is_safe_nginx_config("gzip on; error_log /var/www/x/y.php;").is_err());
-        // A benign directive still passes.
-        assert!(is_safe_nginx_config("proxy_read_timeout 120s;").is_ok());
-    }
-
-    /// This asserted the OPPOSITE until v2.122.1 — that `client_max_body_size
-    /// 20m;` is valid input — matching the agent-side test that made the same
-    /// claim. The site template writes that directive at server level, into the
-    /// same block this text lands in, so nginx refuses the result and the site
-    /// stops loading. Refused HERE as well as in the agent, because only this
-    /// path can hand the reason back to the operator: the agent's copy runs
-    /// inside the template render and surfaces as a 502 with a reference.
-    #[test]
-    fn nginx_config_refuses_what_the_site_template_already_sets() {
-        for stmt in [
-            "client_max_body_size 20m;",
-            "gzip on;",
-            "gzip_min_length 512;",
-            "  Client_Max_Body_Size 50m;",
-            "proxy_read_timeout 60s; gzip off;",
-        ] {
-            let e = is_safe_nginx_config(stmt).expect_err(stmt);
-            assert!(e.contains("already"), "{stmt} -> {e}");
-        }
-        // …and the ones that legitimately repeat are still accepted.
-        assert!(is_safe_nginx_config("add_header X-Extra 1;").is_ok());
-        assert!(is_safe_nginx_config("gzip_types application/wasm;").is_ok());
-        assert!(is_safe_nginx_config("expires 1d;").is_ok());
-    }
-
     // ── Domain validation ───────────────────────────────────────────────
 
     #[test]
@@ -1025,25 +865,6 @@ mod tests {
         assert!(!is_valid_container_id(&"a".repeat(65))); // too long
     }
 
-    // ── Path traversal ──────────────────────────────────────────────────
-
-    #[test]
-    fn safe_paths() {
-        assert!(is_safe_relative_path("index.html"));
-        assert!(is_safe_relative_path("css/style.css"));
-        assert!(is_safe_relative_path("wp-content/uploads/image.png"));
-        assert!(is_safe_relative_path(".htaccess"));
-        assert!(is_safe_relative_path("."));
-    }
-
-    #[test]
-    fn unsafe_paths() {
-        assert!(!is_safe_relative_path(""));
-        assert!(!is_safe_relative_path("../etc/passwd"));
-        assert!(!is_safe_relative_path("foo/../../etc/shadow"));
-        assert!(!is_safe_relative_path("/etc/passwd")); // absolute
-        assert!(!is_safe_relative_path("file\0.txt")); // null byte
-    }
 
     // ── Pagination ──────────────────────────────────────────────────────
 
@@ -1113,78 +934,25 @@ pub fn router() -> Router<AppState> {
         .route("/api/users/{id}/toggle-suspend", post(users::toggle_suspend))
         .route("/api/users/{id}/reset-password", post(users::reset_password))
         .route("/api/users/{id}/reset-2fa", post(users::reset_2fa))
-        // Sites
-        .route("/api/sites", get(sites::list).post(sites::create))
-        // Read-only, admin-only, and the ONLY site read that looks past
-        // `user_id`. It is what makes `POST /api/sites/{id}/transfer` reversible
-        // — without it an admin who hands a site to a client cannot see the row
-        // again, and the Transfer control lives on a page that then 404s them.
-        .route("/api/admin/sites", get(sites::list_for_admin))
-        .route("/api/sites/{id}", get(sites::get_one).delete(sites::remove))
-        .route("/api/sites/{id}/provision-log", get(sites::provision_log))
-        .route("/api/sites/{id}/php", put(sites::switch_php))
-        .route("/api/sites/{id}/runtime", put(sites::switch_runtime))
-        .route("/api/sites/{id}/limits", put(sites::update_limits))
-        .route("/api/sites/{id}/bandwidth-usage", get(sites::bandwidth_usage))
-        .route("/api/sites/{id}/domain", put(sites::rename_domain))
-        .route("/api/sites/{id}/transfer", post(sites::transfer))
-        .route("/api/sites/{id}/toggle", put(sites::toggle_enabled))
-        .route("/api/sites/{id}/fastcgi-cache", put(sites::toggle_fastcgi_cache))
-        .route("/api/sites/{id}/fastcgi-cache/purge", post(sites::purge_fastcgi_cache))
-        .route("/api/sites/{id}/redis-cache", put(sites::toggle_redis_cache))
-        .route("/api/sites/{id}/redis-cache/purge", post(sites::purge_redis_cache))
-        .route("/api/sites/{id}/sftp/enable", post(sites::enable_sftp))
-        .route("/api/sites/{id}/sftp/disable", post(sites::disable_sftp))
-        .route("/api/sites/{id}/sftp/reset-password", post(sites::reset_sftp_password))
-        .route("/api/sites/{id}/waf", put(sites::toggle_waf))
-        .route("/api/sites/{id}/waf/logs", get(sites::waf_logs))
-        .route("/api/sites/{id}/optimize-images", post(sites::optimize_images))
-        .route("/api/sites/{id}/security-headers", put(sites::update_security_headers))
-        .route("/api/sites/{id}/bot-protection", put(sites::toggle_bot_protection))
-        // PHP versions
-        .route("/api/php/versions", get(sites::php_versions))
-        .route("/api/php/install", post(sites::php_install))
-        .route("/api/php/uninstall", post(sites::php_uninstall))
-        // SSL
-        .route("/api/sites/{id}/ssl", post(ssl::provision).get(ssl::status))
-        .route("/api/sites/{id}/ssl/dns01", post(ssl::provision_dns01))
-        .route("/api/ssl/{id}/renew", post(ssl::renew))
-        .route("/api/ssl/{id}", delete(ssl::revoke))
-        .route("/api/ssl/profiles", get(ssl::profiles))
-        .route("/api/preflight/dns", get(ssl::preflight_dns))
-        .route("/api/sites/{id}/preflight", get(ssl::preflight_site))
-        .route("/api/ssl/default-profile", post(ssl::set_default_profile))
+        // R3: the Sites / PHP / site-SSL / File Manager / site-Backup /
+        // site-Cron / site-Log route families died with `routes/sites.rs`
+        // and its siblings. The panel-wide ACME settings doors survived the
+        // `ssl.rs` split into `routes/acme.rs` and keep their paths.
+        // ACME (panel-wide settings)
+        .route("/api/ssl/profiles", get(acme::profiles))
+        .route("/api/preflight/dns", get(acme::preflight_dns))
+        .route("/api/ssl/default-profile", post(acme::set_default_profile))
         .route(
             "/api/ssl/contact-email",
-            get(ssl::get_contact_email).post(ssl::set_contact_email),
+            get(acme::get_contact_email).post(acme::set_contact_email),
         )
-        // File Manager
-        .route("/api/sites/{id}/files", get(files::list_dir).delete(files::delete_entry))
-        .route("/api/sites/{id}/files/read", get(files::read_file))
-        .route("/api/sites/{id}/files/download", get(files::download_file))
-        .route("/api/sites/{id}/files/write", put(files::write_file))
-        .route("/api/sites/{id}/files/upload", post(files::upload_file))
-        .route("/api/sites/{id}/files/create", post(files::create_entry))
-        .route("/api/sites/{id}/files/rename", post(files::rename_entry))
-        // Backups
-        .route("/api/sites/{id}/backups", get(backups::list).post(backups::create))
-        .route("/api/sites/{id}/backups/{backup_id}/restore", post(backups::restore))
-        .route("/api/sites/{id}/backups/{backup_id}", delete(backups::remove))
         // Backup Destinations (admin)
         .route("/api/backup-destinations", get(backup_destinations::list).post(backup_destinations::create))
         .route("/api/backup-destinations/selectable", get(backup_destinations::selectable))
         .route("/api/backup-destinations/{id}", put(backup_destinations::update).delete(backup_destinations::remove))
         .route("/api/backup-destinations/{id}/test", post(backup_destinations::test_connection))
         // Backup Schedules
-        .route("/api/sites/{id}/backup-schedule", get(backup_schedules::get_schedule).put(backup_schedules::set_schedule).delete(backup_schedules::remove_schedule))
         .route("/api/backup-setup-status", get(backup_schedules::setup_status))
-        // Crons
-        .route("/api/sites/{id}/crons", get(crons::list).post(crons::create))
-        .route("/api/sites/{id}/crons/{cron_id}", put(crons::update).delete(crons::remove))
-        .route("/api/sites/{id}/crons/{cron_id}/run", post(crons::run_now))
-        // Site Logs
-        .route("/api/sites/{id}/logs", get(logs::site_logs))
-        .route("/api/sites/{id}/logs/search", get(logs::search_site_logs))
         // Terminal
         .route("/api/terminal/token", get(terminal::ws_token))
         .route("/api/terminal/share", post(terminal::share_output))
@@ -1378,14 +1146,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/settings/oauth-redirects", get(oauth::redirect_uris))
         // DNS Management
-        // CDN Integration (BunnyCDN + Cloudflare CDN)
-        .route("/api/cdn/zones", get(cdn::list_zones).post(cdn::create_zone))
-        .route("/api/cdn/zones/{id}", put(cdn::update_zone).delete(cdn::delete_zone))
-        .route("/api/cdn/zones/{id}/purge", post(cdn::purge_cache))
-        .route("/api/cdn/zones/{id}/stats", get(cdn::zone_stats))
-        .route("/api/cdn/zones/{id}/test", post(cdn::test_credentials))
-        .route("/api/cdn/zones/{id}/pull-zones", get(cdn::list_pull_zones))
-        // DNS Management
         .route("/api/dns/zones", get(dns::list_zones).post(dns::create_zone))
         .route("/api/dns/zones/{id}", delete(dns::delete_zone))
         .route("/api/dns/zones/{id}/records", get(dns::list_records).post(dns::create_record))
@@ -1397,31 +1157,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/dns/zones/{id}/analytics", get(dns::dns_analytics))
         .route("/api/dns/zones/{id}/cf/settings", get(dns::cf_zone_settings).put(dns::cf_update_setting))
         .route("/api/dns/zones/{id}/cf/cache/purge", post(dns::cf_purge_cache))
-        // WordPress Toolkit
-        .route("/api/wordpress/sites", get(wordpress::all_wp_sites))
-        .route("/api/wordpress/bulk-update", post(wordpress::bulk_update))
-        .route("/api/wordpress/vuln-scan-settings", get(wordpress::get_scan_settings).put(wordpress::update_scan_settings))
-        .route("/api/sites/{id}/wordpress/vuln-scan", post(wordpress::vuln_scan))
-        .route("/api/sites/{id}/wordpress/security-check", get(wordpress::security_check))
-        .route("/api/sites/{id}/wordpress/hardening-history", get(wordpress::hardening_history))
-        .route("/api/sites/{id}/wordpress/harden", post(wordpress::wp_harden))
-        // WordPress Management
-        .route("/api/sites/{id}/wordpress", get(wordpress::info))
-        .route("/api/sites/{id}/wordpress/install", post(wordpress::install))
-        .route("/api/sites/{id}/wordpress/plugins", get(wordpress::plugins))
-        .route("/api/sites/{id}/wordpress/themes", get(wordpress::themes))
-        .route("/api/sites/{id}/wordpress/update/{target}", post(wordpress::update))
-        .route("/api/sites/{id}/wordpress/plugin/{action}", post(wordpress::plugin_action))
-        .route("/api/sites/{id}/wordpress/theme/{action}", post(wordpress::theme_action))
-        .route("/api/sites/{id}/wordpress/auto-update", post(wordpress::set_auto_update))
-        .route("/api/sites/{id}/wordpress/update-safe", post(wordpress::update_safe))
-        // Git Deploy
-        .route("/api/sites/{id}/deploy", get(deploy::get_config).put(deploy::set_config).delete(deploy::remove_config))
-        .route("/api/sites/{id}/deploy/trigger", post(deploy::trigger))
-        .route("/api/sites/{id}/deploy/keygen", post(deploy::keygen))
-        .route("/api/sites/{id}/deploy/logs", get(deploy::logs))
-        .route("/api/sites/{id}/deploy/releases", get(deploy::list_releases))
-        .route("/api/sites/{id}/deploy/rollback/{release_id}", post(deploy::rollback_release))
         // Uptime Monitors
         .route("/api/monitors", get(monitors::list).post(monitors::create))
         .route("/api/monitors/certificates", get(monitors::certificate_dashboard))
@@ -1459,35 +1194,6 @@ pub fn router() -> Router<AppState> {
         // Heartbeat endpoint (no auth — monitor validates by ID)
         .route("/api/heartbeat/{monitor_id}/{token}", post(monitors::heartbeat))
         // Webhooks (no auth — validated by secret/signature)
-        .route("/api/webhooks/deploy/{site_id}/{secret}", post(deploy::webhook))
-        // Staging Environments
-        .route("/api/sites/{id}/staging", get(staging::get_staging).post(staging::create).delete(staging::destroy))
-        .route("/api/sites/{id}/staging/sync", post(staging::sync_to_staging))
-        .route("/api/sites/{id}/staging/push", post(staging::push_to_prod))
-        // Redirect Rules
-        .route("/api/sites/{id}/redirects", get(sites::list_redirects).post(sites::add_redirect))
-        .route("/api/sites/{id}/redirects/remove", post(sites::remove_redirect))
-        // Password Protection
-        .route("/api/sites/{id}/password-protect", get(sites::list_protected).post(sites::add_password_protect))
-        .route("/api/sites/{id}/password-protect/remove", post(sites::remove_password_protect))
-        // Domain Aliases
-        .route("/api/sites/{id}/aliases", get(sites::list_aliases).post(sites::add_alias))
-        .route("/api/sites/{id}/aliases/remove", post(sites::remove_alias))
-        // Access Logs, Traffic Stats, PHP Errors, Health Check
-        .route("/api/sites/{id}/access-logs", get(sites::access_logs))
-        .route("/api/sites/{id}/stats", get(sites::site_stats))
-        .route("/api/sites/{id}/php-errors", get(sites::php_errors))
-        .route("/api/sites/{id}/health", get(sites::health_check))
-        .route("/api/sites/{id}/health-summary", get(sites::health_summary))
-        // Site Cloning
-        .route("/api/sites/{id}/clone", post(sites::clone_site))
-        // Custom SSL Upload
-        .route("/api/sites/{id}/ssl/upload", post(sites::upload_ssl))
-        // Environment Variables
-        .route("/api/sites/{id}/env", get(sites::get_env_vars).put(sites::set_env_vars))
-        // PHP Extensions Manager
-        .route("/api/php/extensions/{version}", get(sites::php_extensions))
-        .route("/api/php/extensions/install", post(sites::install_php_extension))
         // Agent endpoints — Bearer token from the servers table, never a cookie
         // or a user JWT. This comment used to say exactly that while
         // /api/agent/version demanded `AuthUser`, a credential an agent cannot
@@ -1602,25 +1308,19 @@ pub fn router() -> Router<AppState> {
         // IaC / Terraform provider
         .route("/api/iac/tokens", get(iac::list_tokens).post(iac::create_token))
         .route("/api/iac/tokens/{id}", delete(iac::delete_token))
-        .route("/api/iac/resources/sites", get(iac::tf_list_sites))
         .route("/api/iac/resources/databases", get(iac::tf_list_databases))
         // Auto-scaling
         .route("/api/autoscale", get(iac::list_autoscale).post(iac::create_autoscale))
         .route("/api/autoscale/{id}", put(iac::update_autoscale).delete(iac::delete_autoscale))
-        // WHMCS billing integration
-        .route("/api/whmcs/config", get(whmcs::get_config).put(whmcs::update_config).delete(whmcs::delete_config))
-        .route("/api/whmcs/webhook", post(whmcs::webhook))
-        .route("/api/whmcs/services", get(whmcs::list_services))
         // App migration between servers
-        .route("/api/migrations/apps", get(whmcs::list_migrations).post(whmcs::start_migration))
-        .route("/api/migrations/apps/{id}", get(whmcs::migration_status))
+        .route("/api/migrations/apps", get(app_migrations::list_migrations).post(app_migrations::start_migration))
+        .route("/api/migrations/apps/{id}", get(app_migrations::migration_status))
         // Secrets Manager
         .route("/api/secrets/vaults", get(secrets::list_vaults).post(secrets::create_vault))
         .route("/api/secrets/vaults/{vault_id}", delete(secrets::delete_vault).put(secrets::update_vault))
         .route("/api/secrets/vaults/{vault_id}/secrets", get(secrets::list_secrets).post(secrets::create_secret))
         .route("/api/secrets/vaults/{vault_id}/secrets/{secret_id}", put(secrets::update_secret).delete(secrets::delete_secret))
         .route("/api/secrets/vaults/{vault_id}/secrets/{secret_id}/versions", get(secrets::list_versions))
-        .route("/api/secrets/vaults/{vault_id}/inject/{site_id}", post(secrets::inject_to_site))
         .route("/api/secrets/vaults/{vault_id}/pull", get(secrets::pull))
         .route("/api/secrets/vaults/{vault_id}/export", get(secrets::export_vault))
         .route("/api/secrets/vaults/{vault_id}/import", post(secrets::import_vault))
@@ -1736,16 +1436,6 @@ pub fn router() -> Router<AppState> {
         // System Logs (admin)
         .route("/api/system-logs", get(system_logs::list))
         .route("/api/system-logs/count", get(system_logs::count))
-        // Reseller Management (admin)
-        .route("/api/resellers", get(resellers::list).post(resellers::create))
-        .route("/api/resellers/{id}", get(resellers::get).put(resellers::update).delete(resellers::remove))
-        .route("/api/resellers/{id}/servers", get(resellers::list_servers).post(resellers::allocate_server))
-        .route("/api/resellers/{id}/servers/{server_id}", delete(resellers::deallocate_server))
-        // Reseller Dashboard
-        .route("/api/reseller/dashboard", get(reseller_dashboard::dashboard))
-        .route("/api/reseller/users", get(reseller_dashboard::list_users).post(reseller_dashboard::create_user))
-        .route("/api/reseller/users/{id}", put(reseller_dashboard::update_user).delete(reseller_dashboard::delete_user))
-        .route("/api/reseller/servers", get(reseller_dashboard::list_servers))
         // Activity (admin)
         .route("/api/activity", get(activity::list))
         // Telemetry & Updates (admin)

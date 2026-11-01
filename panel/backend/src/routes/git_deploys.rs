@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::auth::{AuthUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_name, is_reserved_domain};
-use crate::routes::sites::ProvisionStep;
+use crate::provision::ProvisionStep;
 use crate::routes::stacks::{effective_tls_mode, requested_tls_mode};
 use crate::routes::tls_certificates::{
     certificate_id_for_alias, is_valid_cert_alias, require_agent_at_least, PROVIDED_TLS_MIN_AGENT,

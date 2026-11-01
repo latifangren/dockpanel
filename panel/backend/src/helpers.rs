@@ -1,88 +1,6 @@
 /// Shared helper functions used across multiple route modules.
 use sha2::{Sha256, Digest};
 
-/// Resolve a site the caller is allowed to act on, and return its domain.
-///
-/// Ownership decides whose a site is; the caller's role decides what may be
-/// reached. A site still belongs to exactly one account and a transfer still
-/// moves it — but an administrator may act on any site on the server in front of
-/// them, because an operator who runs a box has to be able to repair anything
-/// running on it. That is the same boundary the admin all-sites read already
-/// draws: what that view lists, its owner may now also act on. It stops at the
-/// server in scope and does not reach a machine somebody else registered.
-///
-/// This replaces six separately-named private copies of one query — two called
-/// `site_domain`, four called `get_site_domain` — plus the inline repeats beside
-/// them. They had drifted: exactly one of the set was also server-scoped. A
-/// guard duplicated per module is a guard that gets widened in one module.
-///
-/// ⚠ The non-admin arm is deliberately left as it was, predicate for predicate,
-/// and must NOT also become server-scoped. No non-admin can own a `servers` row
-/// — the only INSERT is admin-gated — so their scope always resolves to the
-/// local machine. Adding `server_id` on this arm would hide a client's own site
-/// whenever it lives on any other server, and it would do it by returning an
-/// empty list rather than an error, which is the direction nobody checks.
-///
-/// ⚠ That paragraph is true and its conclusion — do not filter this predicate by
-/// server — is still the right call. But it was read for years as though it also
-/// said the SITE is always local, and it does not say that. A caller's scope being
-/// local is a fact about the CALLER; the site's row names its own host and the two
-/// part company as soon as a fleet exists. Resolving WHICH SITE from here and WHICH
-/// HOST from the caller's selection is the actual defect, and filtering cannot fix
-/// it — the row has to choose the host. Use `site_agent_for_caller` below for
-/// anything that then talks to an agent.
-pub async fn site_domain_for_caller(
-    state: &crate::AppState,
-    site_id: uuid::Uuid,
-    claims: &crate::auth::Claims,
-) -> Result<String, crate::error::ApiError> {
-    let row: Option<(String,)> =
-        sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {SITE_CALLER_PREDICATE}"))
-            .bind(site_id)
-            .bind(claims.sub)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| crate::error::internal_error("resolve site for caller", e))?;
-
-    row.map(|(d,)| d)
-        .ok_or_else(|| crate::error::err(axum::http::StatusCode::NOT_FOUND, "Site not found"))
-}
-
-/// Resolve a site the caller may act on, AND the agent for the host it actually runs on.
-///
-/// "Which server did the caller select" and "which server is this site on" are different
-/// questions. They agree on a single-box install and whenever an operator happens to have
-/// the right server selected, which is why the difference stayed invisible. They disagree
-/// silently the rest of the time: the header-derived scope falls back to the local agent
-/// when a caller owns no server row, while the site's row may name a fleet member — so the
-/// panel resolves the right domain and then asks the wrong machine about it.
-///
-/// The row is the authority. That rule is already stated and followed by the webhook deploy
-/// path, by the git-deploy update path, and by every background service that walks these
-/// tables; the authenticated HTTP handlers are the layer that never adopted it. A host that
-/// will not resolve is REFUSED — never quietly replaced with this one, because the failure
-/// mode of substituting is writing one tenant's files onto another machine.
-pub async fn site_agent_for_caller(
-    state: &crate::AppState,
-    site_id: uuid::Uuid,
-    claims: &crate::auth::Claims,
-) -> Result<(String, crate::services::agent::AgentHandle), crate::error::ApiError> {
-    let row: Option<(String, Option<uuid::Uuid>)> = sqlx::query_as(&format!(
-        "SELECT s.domain, s.server_id FROM sites s WHERE {SITE_CALLER_PREDICATE}"
-    ))
-    .bind(site_id)
-    .bind(claims.sub)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| crate::error::internal_error("resolve site agent for caller", e))?;
-
-    let (domain, server_id) = row
-        .ok_or_else(|| crate::error::err(axum::http::StatusCode::NOT_FOUND, "Site not found"))?;
-
-    let agent = agent_for_site_server(state, server_id, &domain).await?;
-    Ok((domain, agent))
-}
-
 /// Resolve the agent for the server a row names, refusing rather than substituting.
 ///
 /// Split out because several handlers have already loaded the row (and so already hold its
@@ -114,61 +32,7 @@ pub async fn agent_for_site_server(
     })
 }
 
-/// Which of the caller's own sites carries this domain, if any.
-///
-/// ⚠ NOT a claim check, and must never be used as one. `domain_claim::
-/// ensure_claimable` is the single answer to "may this domain be taken", and
-/// `tests/domain-claim-pin-e2e.sh` §B2 exists because paths that answered it
-/// privately drifted apart. This answers a different question — "which existing
-/// site of mine is this" — for a caller that needs to attach something to a site
-/// the operator names by domain. It lives here, once, so it cannot become the
-/// per-path copy that pin forbids.
-///
-/// Owner-scoped rather than using [`SITE_CALLER_PREDICATE`]: the callers write a
-/// row onto the site they get back, and an administrator resolving another
-/// account's domain by name is not a capability anything needs.
-pub async fn site_id_for_owned_domain(
-    db: &sqlx::PgPool,
-    domain: &str,
-    user_id: uuid::Uuid,
-) -> Option<uuid::Uuid> {
-    let wanted = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    if wanted.is_empty() {
-        return None;
-    }
-    sqlx::query_as::<_, (uuid::Uuid,)>(
-        "SELECT id FROM sites WHERE lower(domain) = $1 AND user_id = $2",
-    )
-    .bind(&wanted)
-    .bind(user_id)
-    .fetch_optional(db)
-    .await
-    .ok()
-    .flatten()
-    .map(|(id,)| id)
-}
-
-/// The one predicate that decides whether a caller may act on a site.
-///
-/// Binds `$1` = site id, `$2` = the caller's own id — the same two parameters the
-/// owner-only predicate it replaces took, which is what let every call site adopt
-/// it without touching its binds.
-///
-/// Two ways to satisfy it: own the row, or be an administrator of the machine the
-/// row runs on. `is_local` is this box; `sv.user_id` is a member this same
-/// administrator registered. So it stops at the hardware the reader operates and
-/// does not reach a server somebody else added.
-///
-/// ⚠ The admin arm reads `users.role` from the DATABASE, deliberately, and not
-/// `claims.role` from the token. A JWT keeps asserting whatever role it was minted
-/// with until it expires, so trusting the claim would leave a demoted account
-/// acting as an administrator for the rest of its session. This costs one indexed
-/// lookup inside a query that was already running.
-pub const SITE_CALLER_PREDICATE: &str = "s.id = $1 AND (s.user_id = $2 OR EXISTS (\
-    SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
-    AND sv.id = s.server_id AND (sv.is_local OR sv.user_id = u.id)))";
-
-/// Same shape as [`SITE_CALLER_PREDICATE`], for `docker_stacks` — a database can now be
+/// Same shape as [`crate::hosting_helpers::SITE_CALLER_PREDICATE`], for `docker_stacks` — a database can now be
 /// owned by a stack instead of a site (GH #64: standalone DB provisioning for Docker Apps).
 pub const STACK_CALLER_PREDICATE: &str = "st.id = $1 AND (st.user_id = $2 OR EXISTS (\
     SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
@@ -250,8 +114,24 @@ pub async fn suspend_account(
 /// shared column — is treated exactly like no stash at all. It is never handed
 /// back verbatim: `users.role` carries a CHECK constraint, and a rejected write
 /// is a 500 on the button an administrator presses to undo their own action.
+///
+/// The ONE exception is the retired `reseller` value, and it is translated,
+/// not handed back. R2 removed `reseller` from `ASSIGNABLE_ROLES`, so the
+/// membership check below would otherwise strand every account suspended
+/// while it held that role: un-suspending could never restore anything, and
+/// the only exit would be a manual role edit. A stash of `reseller` is
+/// therefore translated FIRST, through the same `effective_role` mapping the
+/// auth boundary applies, and what comes back is `user` — an ordinary
+/// account, never the retired privilege. The translation precedes the deny
+/// check on purpose: a caller whose deny-list still names `reseller` (the
+/// WHMCS webhook, written before R2) thereby restores an ordinary user,
+/// which is the only thing billing may ever return to service, while
+/// `admin` stays denied exactly as before. Stored-value guards elsewhere
+/// (the WHMCS suspend predicate) still name `reseller` because they read
+/// the database, where the value survives until the R7 migration renames it.
 pub fn role_to_restore(stashed: Option<&str>, deny: &[&str]) -> Option<String> {
     let role = stashed?;
+    let role = crate::auth::effective_role(role);
     if !crate::routes::users::ASSIGNABLE_ROLES.contains(&role) {
         return None;
     }
@@ -425,7 +305,27 @@ mod suspend_restore_tests {
     fn a_denied_role_is_not_restored_and_the_account_stays_suspended() {
         let deny = ["admin", "reseller"];
         assert_eq!(role_to_restore(Some("admin"), &deny), None);
-        assert_eq!(role_to_restore(Some("reseller"), &deny), None);
+    }
+
+    /// R2: a stash holding the retired `reseller` value is the one case that
+    /// does NOT come back as itself — it comes back as the ordinary role the
+    /// auth boundary maps it to. The deny-list above still names `reseller`
+    /// (the webhook was written before R2); the translation runs before the
+    /// deny check, so billing restoring such an account returns an ordinary
+    /// user to service, which is the only restoration billing may perform,
+    /// and the account is not stranded suspended. Neither caller — the
+    /// panel admin with no deny-list, nor the webhook with one — can write
+    /// `reseller` back into `users.role`.
+    #[test]
+    fn a_legacy_reseller_stash_restores_as_an_ordinary_user() {
+        assert_eq!(
+            role_to_restore(Some("reseller"), &[]).as_deref(),
+            Some("user")
+        );
+        assert_eq!(
+            role_to_restore(Some("reseller"), &["admin", "reseller"]).as_deref(),
+            Some("user")
+        );
     }
 
     /// The control that keeps the test above from passing vacuously: the same
@@ -1293,177 +1193,6 @@ fn strip_zero_offset_seconds(s: &str) -> Option<String> {
     }
 }
 
-/// Days before expiry at which a DNS-01 certificate we cannot re-order over
-/// DNS-01 stops being refused and is deliberately downgraded instead.
-///
-/// Refusing is the right answer while there is still time to fix the cause, and
-/// the WRONG answer at the end. For a zone-apex wildcard, today's silent
-/// downgrade at least leaves the apex serving a valid certificate and breaks
-/// only the siblings — visibly, in a browser, each two clicks from a repair.
-/// Refusing all the way to expiry takes the apex AND every sibling down at the
-/// same moment, so a pure refusal would ENLARGE the blast radius of the very
-/// defect it was written to remove.
-///
-/// Seven days sits under the `tlsserver` and `classic` fallback margins
-/// (`auto_healer::fallback_renewal_margin`: 15 / 30), so for those the ladder
-/// has already been climbed by the time this rung is reached.
-///
-/// ⚠ It does NOT sit under `shortlived`'s margin of two days, and that sentence
-/// used to claim it did while citing the very number that refutes it. See
-/// [`dns01_last_resort_days`] — this constant is the DEFAULT, not the rung.
-pub const DNS01_LAST_RESORT_DAYS: i64 = 7;
-
-/// The last-resort rung for one site, which depends on its ACME profile.
-///
-/// ⚠ A single constant was not merely imprecise here, it was arithmetically
-/// unreachable. `days_remaining` is `num_days()` of what is left, and a
-/// `shortlived` certificate is ~160 hours — so that value is at most SIX from
-/// the instant of issuance and can never exceed seven. The `Refuse` rung was
-/// therefore dead code for the entire profile: every DNS-01 renewal for a
-/// shortlived site whose zone had gone took the silent single-name downgrade,
-/// and the operator was never told while the zone was still repairable.
-///
-/// The rung must sit STRICTLY BELOW the profile's renewal margin, or the door
-/// never runs in a window where `Refuse` can be returned — renewal begins at
-/// the margin, so a rung at or above it is unreachable by construction. That
-/// invariant, not the number, is what `dns01-renewal` §D pins.
-///
-/// Mirrors the shape of `auto_healer::fallback_renewal_margin` on purpose: the
-/// two are read together and must stay in step.
-pub fn dns01_last_resort_days(profile: Option<&str>) -> i64 {
-    match profile {
-        Some("shortlived") => 1,
-        _ => DNS01_LAST_RESORT_DAYS,
-    }
-}
-
-/// What a renewal door should DO with a site, decided before any ACME order.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RenewalPlan {
-    /// Renew over HTTP-01 against the site's own domain.
-    ///
-    /// `record_challenge` is true when nothing was recorded and this pass is the
-    /// one degraded attempt that also writes the provenance down. That is what
-    /// makes the rule CONVERGE: an unrecorded row behaves exactly as it does
-    /// today once more, and is correct for ever after. Requiring positive
-    /// evidence of `http-01` rather than absence-of-wildcard-evidence is the
-    /// only formulation that terminates — absence is also what a non-wildcard
-    /// DNS-01 certificate looks like, and that certificate is byte-identical to
-    /// an HTTP-01 one in every field the panel or the agent can read.
-    Http01 { record_challenge: bool },
-    /// Renew over DNS-01, against the name actually ordered.
-    Dns01 {
-        subject: String,
-        wildcard: bool,
-        zone_id: uuid::Uuid,
-    },
-    /// A DNS-01 certificate whose zone we cannot reach, with time still on the
-    /// clock. Refuse and say why; the operator can add the zone or the token.
-    Refuse { reason: String },
-    /// The same certificate, inside [`DNS01_LAST_RESORT_DAYS`]. Downgrade on
-    /// purpose, record it, and say exactly what was lost — never silently.
-    LastResortHttp01 { losing: String },
-}
-
-/// Decide how `site` must be renewed, from what was RECORDED at issuance.
-///
-/// ⚠ This deliberately does not consult the stored certificate path. An earlier
-/// draft used "the certificate directory is not the site's own domain" as proof
-/// of a shared zone certificate. It is not proof — but the reason first written
-/// here has since STOPPED BEING TRUE, and a guard defended by a dead reason is
-/// one refactor from being removed as obsolete.
-///
-/// ⛔ THE OLD REASON, REPEALED BY THE SAME RELEASE THAT WROTE IT: *"`rename_domain`
-/// writes only the domain while the agent MOVES the certificate directory."* Since
-/// v2.145.0 the rename rewrites that column itself (`routes/sites.rs`, the
-/// `CASE WHEN … LIKE` in the rename statement), so a renamed site's path is
-/// correct from that release on.
-///
-/// ⭐ THE REASON THAT STILL HOLDS, and it is two reasons, not one:
-///   1. That rewrite is deliberately SCOPED to the site's own old directory, so a
-///      wildcard child renamed out of its zone keeps naming the zone for ever —
-///      correctly, because the zone is where its certificate really lives.
-///   2. Any row renamed on a build at or below v2.144.x still carries the stale
-///      pre-rewrite path, and the name it points at can be handed to the NEXT
-///      site that claims it.
-/// Both shapes make a row that names a directory belonging to somebody else, and
-/// neither is distinguishable in SQL from a genuine wildcard child. Acting on it
-/// would refuse to renew healthy sites for ever.
-pub async fn renewal_plan(
-    pool: &sqlx::PgPool,
-    site: &crate::models::Site,
-    days_remaining: Option<i64>,
-) -> RenewalPlan {
-    // Positive evidence of HTTP-01, or nothing recorded at all.
-    match site.ssl_challenge.as_deref() {
-        Some("http-01") => return RenewalPlan::Http01 { record_challenge: false },
-        None => return RenewalPlan::Http01 { record_challenge: true },
-        _ => {}
-    }
-
-    let subject = site
-        .ssl_cert_subject
-        .clone()
-        .unwrap_or_else(|| site.domain.clone());
-    let wildcard = site.ssl_wildcard.unwrap_or(false);
-    let names = if wildcard {
-        format!("{subject} and *.{subject}")
-    } else {
-        subject.clone()
-    };
-
-    // The zone that ISSUED it, never a zone re-derived from a text subject.
-    // Re-deriving would let a stale string select a different tenant's
-    // Cloudflare token, and there is no caller-free zone resolver in this tree:
-    // every other `dns_zones` read is scoped `WHERE domain = $1 AND user_id = $2`.
-    let zone_id: Option<uuid::Uuid> = match site.ssl_dns_zone_id {
-        Some(id) => sqlx::query_scalar(
-            "SELECT id FROM dns_zones WHERE id = $1 AND provider = 'cloudflare' \
-             AND cf_zone_id IS NOT NULL AND cf_api_token IS NOT NULL",
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten(),
-        // Legacy row: fall back to the SITE OWNER's zones — never the actor's,
-        // never the first admin's, never an unscoped match by domain. An
-        // unattended loop has no actor, and handing one admin's Cloudflare token
-        // to a job renewing another account's site is a credential disclosure,
-        // not a convenience.
-        None => sqlx::query_scalar(
-            "SELECT id FROM dns_zones WHERE user_id = $1 AND provider = 'cloudflare' \
-             AND cf_zone_id IS NOT NULL AND cf_api_token IS NOT NULL AND domain = $2",
-        )
-        .bind(site.user_id)
-        .bind(&subject)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten(),
-    };
-
-    if let Some(zone_id) = zone_id {
-        return RenewalPlan::Dns01 { subject, wildcard, zone_id };
-    }
-
-    // No reachable zone. Refuse while that is still repairable; downgrade
-    // deliberately once it is not.
-    let last_resort = dns01_last_resort_days(site.ssl_profile.as_deref());
-    if days_remaining.is_some_and(|d| d <= last_resort) {
-        RenewalPlan::LastResortHttp01 { losing: names }
-    } else {
-        RenewalPlan::Refuse {
-            reason: format!(
-                "The certificate for {} was issued over DNS-01 and covers {}. Renewing it \
-                 needs the Cloudflare zone it was issued against, and this site's owner has \
-                 no Cloudflare zone for {} with an API token. Add it under DNS management, \
-                 or install a replacement certificate under the site's SSL tab.",
-                site.domain, names, subject
-            ),
-        }
-    }
-}
 
 /// The issuer of the certificate installed for `domain`, but ONLY when that
 /// issuer proves DockPanel did not put it there.
@@ -1949,8 +1678,8 @@ pub type ProvisionLogs = Arc<
         HashMap<
             uuid::Uuid,
             (
-                Vec<crate::routes::sites::ProvisionStep>,
-                tokio::sync::broadcast::Sender<crate::routes::sites::ProvisionStep>,
+                Vec<crate::provision::ProvisionStep>,
+                tokio::sync::broadcast::Sender<crate::provision::ProvisionStep>,
                 Instant,
             ),
         >,
@@ -2024,8 +1753,8 @@ pub fn open_provision_log(
     missing: &str,
 ) -> Result<
     (
-        Vec<crate::routes::sites::ProvisionStep>,
-        tokio::sync::broadcast::Receiver<crate::routes::sites::ProvisionStep>,
+        Vec<crate::provision::ProvisionStep>,
+        tokio::sync::broadcast::Receiver<crate::provision::ProvisionStep>,
     ),
     crate::error::ApiError,
 > {
@@ -2212,7 +1941,7 @@ mod provision_log_tests {
         {
             let mut map = logs.lock().unwrap();
             let (history, tx, _) = map.get_mut(&id).unwrap();
-            let ev = crate::routes::sites::ProvisionStep {
+            let ev = crate::provision::ProvisionStep {
                 step: "s".into(),
                 label: "l".into(),
                 status: "done".into(),
@@ -2247,3 +1976,4 @@ mod provision_log_tests {
         );
     }
 }
+

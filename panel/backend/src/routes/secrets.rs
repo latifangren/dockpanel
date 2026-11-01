@@ -6,9 +6,8 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{internal_error, err, agent_error, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
-use crate::services::extensions::fire_event;
 use crate::services::secrets_crypto;
 use crate::AppState;
 
@@ -114,7 +113,7 @@ async fn assert_site_reachable(
 ) -> Result<(), ApiError> {
     let found: Option<(Uuid,)> = sqlx::query_as(&format!(
         "SELECT s.id FROM sites s WHERE {}",
-        crate::helpers::SITE_CALLER_PREDICATE
+        crate::hosting_helpers::SITE_CALLER_PREDICATE
     ))
     .bind(site_id)
     .bind(user_id)
@@ -548,81 +547,6 @@ pub async fn list_versions(
     .map_err(|e| internal_error("list versions", e))?;
 
     Ok(Json(versions))
-}
-
-// ── Inject into Site ────────────────────────────────────────────────────────
-
-/// POST /api/secrets/vaults/{vault_id}/inject/{site_id} — Inject auto-inject secrets into site .env.
-pub async fn inject_to_site(
-    State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
-    Path((vault_id, site_id)): Path<(Uuid, Uuid)>,
-    headers: axum::http::HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    verify_vault(&state, vault_id, claims.sub).await?;
-
-    // This writes DECRYPTED secrets into a site's nginx env on whichever host the
-    // handle points at. Taking that from the caller's selection meant one tenant's
-    // secrets could be written into the env of a machine their site does not run on
-    // — the one member of this family where a misdispatch is a disclosure and not
-    // merely a wrong answer. The row names the host.
-    let (domain, agent) =
-        crate::helpers::site_agent_for_caller(&state, site_id, &claims).await?;
-
-    // Get all auto-inject secrets
-    let rows: Vec<SecretRow> = sqlx::query_as(
-        "SELECT * FROM secrets WHERE vault_id = $1 AND auto_inject = TRUE ORDER BY key"
-    )
-    .bind(vault_id)
-    .fetch_all(&state.db).await
-    .map_err(|e| internal_error("inject to site", e))?;
-
-    if rows.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "No auto-inject secrets in this vault"));
-    }
-
-    // Decrypt and build env content
-    let mut env_pairs = Vec::new();
-    for row in &rows {
-        let value = secrets_crypto::decrypt_vault(&row.encrypted_value, &state.config.jwt_secret)
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
-        env_pairs.push(serde_json::json!({ "key": row.key, "value": value }));
-    }
-
-    // Write to site via agent
-    let body = serde_json::json!({ "vars": env_pairs });
-    agent.put(&format!("/nginx/env/{}", domain), body).await
-        .map_err(|e| agent_error("Inject secrets", e))?;
-
-    let ip = crate::routes::client_ip(&headers);
-
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "secrets.inject",
-        Some("site"), Some(&domain), Some(&format!("{} secrets", rows.len())), ip.as_deref(), claims.key_id,
-    ).await;
-
-    crate::services::security_hardening::audit_log(
-        &state.db,
-        "secrets.inject",
-        Some(&claims.email),
-        ip.as_deref(),
-        Some("site"),
-        Some(&domain),
-        Some(&format!("{} secrets", rows.len())),
-        None,
-        "warning",
-        claims.key_id,
-    ).await;
-
-    fire_event(&state.db, "secrets.injected", serde_json::json!({
-        "site_id": site_id, "domain": &domain, "count": rows.len(),
-    }));
-
-    Ok(Json(serde_json::json!({
-        "ok": true,
-        "injected": rows.len(),
-        "domain": domain,
-    })))
 }
 
 // ── Pull (get all secrets as env format) ────────────────────────────────────

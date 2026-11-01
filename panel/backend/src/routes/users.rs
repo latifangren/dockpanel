@@ -73,12 +73,20 @@ pub async fn list(
 /// Public because `helpers::unsuspend_account` validates a stashed role against
 /// it. It is deliberately shared rather than copied — a fourth copy is how the
 /// first three got out of step.
-pub const ASSIGNABLE_ROLES: [&str; 4] = ["admin", "reseller", "user", "client"];
+///
+/// R2 (hosting removal): `reseller` was removed from this list. It can no
+/// longer be assigned by `create` or `update`, and no new reseller account
+/// can be minted from this module. A STORED `reseller` value from before R2
+/// is still possible until the R7 migration renames it; it is translated to
+/// `user` at the auth boundary (`crate::auth::effective_role`), and a
+/// stashed `reseller` restored by `helpers::role_to_restore` comes back as
+/// `user`, never as `reseller` again.
+pub const ASSIGNABLE_ROLES: [&str; 3] = ["admin", "user", "client"];
 
 /// The message that names them. `err` takes a `&str`, so this cannot be built
 /// from the list at runtime — a unit test asserts it mentions every one instead,
 /// which is the same guarantee by a different route.
-const ASSIGNABLE_ROLES_MSG: &str = "Role must be one of: admin, reseller, user, client";
+const ASSIGNABLE_ROLES_MSG: &str = "Role must be one of: admin, user, client";
 
 /// True when `target` is another administrator — the caller's peer, not their
 /// subordinate. `AdminUser` below is a role check ONLY, so without this every
@@ -249,12 +257,13 @@ pub async fn update(
         // can never orphan the panel of admins (the row updates only if the new role is
         // admin, the current role isn't admin, or more than one admin remains); this is
         // atomic-as-a-statement rather than the check-then-act it replaced. Clearing
-        // reseller_id on promotion keeps a tenant-root from staying owned by another
-        // reseller (PRIV-03).
+        // reseller_id on promotion to admin keeps a tenant-root from staying owned by another
+        // reseller (PRIV-03). There is no promotion to `reseller` any more (R2:
+        // the role is no longer assignable), so the CASE names `admin` only.
         if role_changed {
             let res = sqlx::query(
                 "UPDATE users SET role = $1, \
-                 reseller_id = CASE WHEN $1 IN ('reseller','admin') THEN NULL ELSE reseller_id END, \
+                 reseller_id = CASE WHEN $1 = 'admin' THEN NULL ELSE reseller_id END, \
                  updated_at = NOW() \
                  WHERE id = $2 \
                    AND ($1 = 'admin' OR role <> 'admin' OR (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1)",
@@ -734,6 +743,16 @@ mod tests {
         // role. Allowing it here would suspend an account without recording what
         // to restore it to.
         assert!(!ASSIGNABLE_ROLES.contains(&"suspended"));
+    }
+
+    #[test]
+    fn reseller_is_not_assignable_after_the_hosting_removal() {
+        // R2: the role was retired. `create`/`update` refuse it through this
+        // list, and the auth boundary maps any stored value to `user` — so
+        // no path in this module can mint a reseller account, and no stored
+        // reseller can regain the privilege by being re-assigned its old role.
+        assert!(!ASSIGNABLE_ROLES.contains(&"reseller"));
+        assert!(!ASSIGNABLE_ROLES_MSG.contains("reseller"));
     }
 
     #[test]

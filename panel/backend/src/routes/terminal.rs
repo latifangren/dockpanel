@@ -11,6 +11,7 @@ use crate::AppState;
 
 #[derive(serde::Deserialize)]
 pub struct TerminalQuery {
+    /// R3: accepted only to reject it — site shells are gone (see `ws_token`).
     pub site_id: Option<String>,
 }
 
@@ -82,8 +83,8 @@ struct TerminalTicket {
     /// signed ticket because the browser dials the agent directly — as a query
     /// param the user could suppress the recording of their own session.
     record: bool,
-    /// The shell this ticket authorises: a site's domain, or `@server` for the
-    /// admin root shell. It rides inside the signed ticket for the SAME reason
+    /// The shell this ticket authorises: `@server` for the admin root shell.
+    /// (R3: site shells died with sites.) It rides inside the signed ticket for the SAME reason
     /// `record` does, and it is the fix for a real escalation: the agent used to
     /// read the scope from a `?domain=` query param the browser controls, and an
     /// EMPTY domain there spawns a root shell with no privilege drop. So any
@@ -138,6 +139,16 @@ pub async fn ws_token(
         ));
     }
 
+    // R3: site shells died with sites. A `site_id` can no longer name
+    // anything the panel serves; refuse it rather than minting a server
+    // ticket for a site request.
+    if q.site_id.is_some() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Site shells were removed with sites; only the administrator server shell remains.",
+        ));
+    }
+
     // Answer here rather than minting a ticket the receiving agent must reject.
     crate::helpers::require_local_agent_scope(&state, server_id, "The web terminal").await?;
 
@@ -146,58 +157,36 @@ pub async fn ws_token(
     // decision never travelled to the agent, so a site owner could drop the scope
     // and reach a root shell. It stays exactly as strict as it is.
     //
-    // What it should NOT do is read like a dead end. A site owner has a shell on
-    // every site they own; the page simply used to ask for the wrong one by
-    // default. Name the thing that works, the way the disabled-switch message
-    // below names its switch.
-    if q.site_id.is_none() && claims.role != "admin" {
+    // R3: the paragraph that used to name the per-site shell as the thing that
+    // works died with site shells — there is nothing left to name here.
+    if claims.role != "admin" {
         return Err(err(
             StatusCode::FORBIDDEN,
-            "The server shell is available to administrators only. \
-             Choose one of your own sites in the selector to open a shell inside it.",
+            "The server shell is available to administrators only.",
         ));
     }
 
     // Block server terminal when disabled via settings (e.g., demo mode)
-    if q.site_id.is_none() {
-        let disabled: Option<(String,)> =
-            sqlx::query_as("SELECT value FROM settings WHERE key = 'server_terminal_disabled'")
-                .fetch_optional(&state.db)
-                .await
-                .map_err(|e| internal_error("ws token", e))?;
-        if disabled.map(|r| r.0 == "true").unwrap_or(false) {
-            // Name the switch and where it lives. The page cannot read this
-            // setting itself, so this sentence is the only thing that tells an
-            // operator the shell is off by choice rather than broken.
-            return Err(err(
-                StatusCode::FORBIDDEN,
-                "The server shell is switched off for this panel \
-                 (Settings → Security → Server terminal). Per-site shells are unaffected.",
-            ));
-        }
+    let disabled: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM settings WHERE key = 'server_terminal_disabled'")
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("ws token", e))?;
+    if disabled.map(|r| r.0 == "true").unwrap_or(false) {
+        // Name the switch and where it lives. The page cannot read this
+        // setting itself, so this sentence is the only thing that tells an
+        // operator the shell is off by choice rather than broken.
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "The server shell is switched off for this panel \
+             (Settings → Security → Server terminal).",
+        ));
     }
 
-    // Optionally resolve domain from site_id
-    let domain = if let Some(ref sid) = q.site_id {
-        let site_id: uuid::Uuid = sid
-            .parse()
-            .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid site_id"))?;
-
-        let row: Option<(String,)> =
-            sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
-                .bind(site_id)
-                .bind(claims.sub)
-                .fetch_optional(&state.db)
-                .await
-                .map_err(|e| internal_error("ws token", e))?;
-
-        match row {
-            Some((d,)) => Some(d),
-            None => return Err(err(StatusCode::FORBIDDEN, "Site not found or not owned by you")),
-        }
-    } else {
-        None
-    };
+    // R3: the only shell left is the server shell — see the `site_id`
+    // rejection above. `domain` stays `None` so the ticket scope below is
+    // always `SERVER_SHELL_SCOPE` and the response keeps its shape.
+    let domain: Option<String> = None;
 
     // Generate a short-lived JWT ticket (60 seconds) signed with the agent token
     let record = crate::services::security_hardening::get_setting_bool(
@@ -206,12 +195,9 @@ pub async fn ws_token(
         true,
     )
     .await;
-    // `domain` is Some only for a site shell whose ownership was checked above,
-    // and None only on the admin-gated server-shell branch — so this is the
-    // authorisation decision, signed, not a hint the client can override.
-    let scope = domain
-        .clone()
-        .unwrap_or_else(|| SERVER_SHELL_SCOPE.to_string());
+    // The scope is the authorisation decision, signed, not a hint the client
+    // can override. It is always the server shell now (R3).
+    let scope = SERVER_SHELL_SCOPE.to_string();
     let ticket = TerminalTicket {
         sub: claims.email,
         purpose: "terminal".to_string(),

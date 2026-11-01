@@ -27,6 +27,7 @@ pub struct SearchQuery {
 
 #[derive(serde::Deserialize)]
 pub struct StreamTokenQuery {
+    /// R3: accepted only to reject it — site streaming is gone (see `stream_token`).
     pub site_id: Option<String>,
     #[serde(rename = "type")]
     pub log_type: Option<String>,
@@ -37,8 +38,8 @@ struct StreamTicket {
     sub: String,
     purpose: String,
     exp: usize,
-    /// The logs this ticket authorises: a site's domain, or `@system` for the
-    /// admin-only host logs. It rides INSIDE the signature exactly as the
+    /// The logs this ticket authorises: `@system` for the admin-only host logs.
+    /// (R3: the site-domain scope died with sites.) It rides INSIDE the signature exactly as the
     /// terminal ticket's `scope` does, and it is the fix for the same
     /// escalation the terminal had: the agent used to read the scope from the
     /// `?domain=` query param AND the log type from `?type=`, both
@@ -76,37 +77,6 @@ pub async fn system_logs(
     Ok(Json(result))
 }
 
-/// GET /api/sites/{id}/logs — Site-specific logs.
-pub async fn site_logs(
-    State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
-    Path(id): Path<uuid::Uuid>,
-    Query(q): Query<LogQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    // Asking the wrong host for a site's logs does not fail. That machine has no
-    // vhost by this name, so it answers with nothing, and nothing is exactly what a
-    // quiet site looks like — the operator reads "no traffic" instead of "wrong
-    // question". The row names the host.
-    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
-
-    let log_type = q.log_type.as_deref().unwrap_or("access");
-    if !["access", "error"].contains(&log_type) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid site log type"));
-    }
-    let lines = q.lines.unwrap_or(100).max(1).min(1000);
-    let mut agent_path = format!("/logs/{}?type={}&lines={}", domain, log_type, lines);
-    if let Some(ref filter) = q.filter {
-        agent_path.push_str(&format!("&filter={}", urlencoding::encode(filter)));
-    }
-
-    let result = agent
-        .get(&agent_path)
-        .await
-        .map_err(|e| agent_error("Site logs", e))?;
-
-    Ok(Json(result))
-}
-
 /// GET /api/logs/search — Search system logs with grep/regex (admin only).
 pub async fn search_system_logs(
     State(_state): State<AppState>,
@@ -140,46 +110,6 @@ pub async fn search_system_logs(
     Ok(Json(result))
 }
 
-/// GET /api/sites/{id}/logs/search — Search site logs with grep/regex.
-pub async fn search_site_logs(
-    State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
-    Path(id): Path<uuid::Uuid>,
-    Query(q): Query<SearchQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    // Same as the reader above, and a search is the worse of the two: "no matching
-    // lines" is a confident negative answer, and an operator searching a remote
-    // site's access log for an attack would have got one.
-    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
-
-    let log_type = q.log_type.as_deref().unwrap_or("access");
-    let full_type = match log_type {
-        "access" => format!("nginx_access:{domain}"),
-        "error" => format!("nginx_error:{domain}"),
-        _ => return Err(err(StatusCode::BAD_REQUEST, "Invalid site log type")),
-    };
-
-    let pattern = q.pattern.as_deref().unwrap_or("");
-    if pattern.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "Pattern is required"));
-    }
-
-    let max = q.max.unwrap_or(500).max(1).min(5000);
-    let agent_path = format!(
-        "/logs/search?type={}&pattern={}&max={}",
-        urlencoding::encode(&full_type),
-        urlencoding::encode(pattern),
-        max
-    );
-
-    let result = agent
-        .get(&agent_path)
-        .await
-        .map_err(|e| agent_error("Site log search", e))?;
-
-    Ok(Json(result))
-}
-
 /// GET /api/logs/stream/token — Generate a short-lived JWT for WebSocket log streaming.
 pub async fn stream_token(
     State(state): State<AppState>,
@@ -190,38 +120,29 @@ pub async fn stream_token(
     // Answer here rather than minting a ticket the receiving agent must reject.
     crate::helpers::require_local_agent_scope(&state, server_id, "Live log streaming").await?;
 
+    // R3: site-scoped streaming died with sites. A `site_id` can no longer
+    // name anything the panel serves; refuse it rather than minting a
+    // system ticket for a site request.
+    if q.site_id.is_some() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Site log streaming was removed with sites; system log streaming remains available to administrators.",
+        ));
+    }
+
     // System-level streaming requires admin
-    if q.site_id.is_none() && claims.role != "admin" {
+    if claims.role != "admin" {
         return Err(err(
             StatusCode::FORBIDDEN,
             "Admin access required for system log streaming",
         ));
     }
 
-    let mut domain: Option<String> = None;
+    // R3: the only scope left is `@system` — see the `site_id` rejection above.
+    let domain: Option<String> = None;
 
-    // Resolve domain from site_id if provided
-    if let Some(ref sid) = q.site_id {
-        let site_id: uuid::Uuid = sid
-            .parse()
-            .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid site_id"))?;
-
-        let row: Option<(String,)> =
-            sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
-                .bind(site_id)
-                .bind(claims.sub)
-                .fetch_optional(&state.db)
-                .await
-                .map_err(|e| internal_error("stream token", e))?;
-
-        domain = row.map(|(d,)| d);
-        if domain.is_none() {
-            return Err(err(StatusCode::NOT_FOUND, "Site not found"));
-        }
-    }
-
-    // The scope is the SIGNED decision, not `?domain=`/`?type=`. A site ticket
-    // is bound to its own domain; a system ticket (admin only, checked above)
+    // The scope is the SIGNED decision, not `?domain=`/`?type=`. The ticket
+    // (admin only, checked above)
     // carries the `@system` sentinel so the agent knows the host logs are
     // allowed without trusting any query param.
     let scope = domain.clone().unwrap_or_else(|| "@system".to_string());
@@ -295,7 +216,7 @@ pub async fn log_stats(
                 .map(|(id,)| id)
                 .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
             let resolved =
-                crate::helpers::site_domain_for_caller(&state, site_id, &claims).await?;
+                crate::hosting_helpers::site_domain_for_caller(&state, site_id, &claims).await?;
             format!("?domain={resolved}")
         }
         None => String::new(),

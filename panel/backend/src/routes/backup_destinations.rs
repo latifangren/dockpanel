@@ -9,18 +9,14 @@ use crate::auth::{AdminUser, AuthUser};
 use crate::error::{internal_error, err, agent_actionable, agent_error, ApiError};
 use crate::AppState;
 
-/// Which destinations a caller may send a site's backups to. `$1` is the caller.
+/// Which destinations a caller may send backups to. `$1` is the caller.
 ///
-/// The writer decided this first: `backup_schedules::set_schedule` accepts an
-/// unscoped destination from any authenticated caller, on the stated grounds
-/// that destinations are created and deleted through admin-only routes, so a
-/// site owner can upload to one but never read it. That was the right call and
-/// it shipped — but the only route that could tell a caller WHICH destinations
-/// those are stayed `AdminUser`, so a non-admin's picker was empty and the
-/// permission the writer granted could not be exercised. Reader and writer now
-/// interpolate this one string, the way every site route shares
-/// [`crate::helpers::SITE_CALLER_PREDICATE`], so the set a caller may CHOOSE
-/// from cannot drift from the set the writer will ACCEPT.
+/// R3: the per-site schedule writer that first motivated this predicate
+/// (`backup_schedules::set_schedule`) is removed with the site kind; the
+/// remaining reader is `selectable` below, and backup policies choose
+/// destinations through their own fields. The predicate itself is
+/// unchanged: a destination pinned to no server is unscoped, and one
+/// pinned to a server must belong to this user.
 ///
 /// Requires `LEFT JOIN servers s ON bd.server_id = s.id` in scope.
 pub const DESTINATION_CALLER_PREDICATE: &str = "(bd.server_id IS NULL OR s.user_id = $1)";
@@ -118,13 +114,14 @@ pub async fn list(
 }
 
 /// GET /api/backup-destinations/selectable — the destinations this caller may
-/// schedule a site backup to, id/name/type only.
+/// schedule a backup to, id/name/type only.
 ///
-/// `AuthUser`, deliberately: the per-site schedule form is reachable by a site
-/// owner and its writer already admits one, so refusing to name the choices was
-/// the half that had never been connected. An administrator gets the same rows
-/// this returns to anyone else plus their own servers' pinned destinations —
-/// the predicate does the deciding, so there is no role branch to keep in step.
+/// `AuthUser`, deliberately: the schedule/policy forms are reachable by a
+/// non-admin caller and their writers already admit an unscoped destination,
+/// so refusing to name the choices was the half that had never been connected.
+/// An administrator gets the same rows this returns to anyone else plus their
+/// own servers' pinned destinations — the predicate does the deciding, so
+/// there is no role branch to keep in step.
 pub async fn selectable(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,

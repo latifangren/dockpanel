@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
 use crate::error::{agent_error, err, internal_error, ApiError};
-use crate::routes::sites::ProvisionStep;
+use crate::provision::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
 use crate::AppState;
@@ -96,145 +96,96 @@ pub async fn diagnostics_fix(
     let fix_id = body.get("fix_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
     if let Some(domain) = fix_id.strip_prefix("renew-ssl:") {
-        // Resolution is two statements on purpose, and it lives HERE rather than
-        // behind a helper because this is the handler that chooses a destination:
-        // a reader — and the wrong-host-dispatch census — must be able to see the
-        // host being named without following a call.
+        // R3: the site half of this branch died with `routes/sites.rs` and
+        // `routes/ssl.rs` — a `renew-ssl:` fix can no longer renew anything.
+        // Every domain lands on the claimant probe below, which names
+        // whoever actually holds the name and tells the operator how that
+        // holder reissues its certificate.
+        // A certificate under /etc/dockpanel/ssl with no `sites` row. Still a
+        // refusal, but a 4xx with a sentence, so `agent_error`'s sibling rule
+        // cannot later collapse it into an incident id the way the agent's 500
+        // did.
         //
-        // The first statement names the row ON THE HOST THAT RAISED THE FINDING.
-        // `sites.domain` is unique only per server (`idx_sites_domain_server`), so
-        // a lookup on the name alone can hand back a different machine's site and
-        // this handler would renew the wrong one — the same defect this ship fixes
-        // in `security_scanner`. The second re-reads it through
-        // `SITE_CALLER_PREDICATE`, the shared authorisation every other site
-        // handler uses, so this new door decides nothing about who may open it:
-        // reuse carries the mechanism, never the gate.
-        let site_id: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM sites WHERE domain = $1 AND server_id = $2",
+        // ⚠ It must NOT claim the certificate came from outside DockPanel,
+        // because very often it did not: the agent issues certificates for
+        // Docker apps, Compose stacks, Git deploys and mail domains, and NONE
+        // of those becomes a `sites` row — a Docker app has no table at all, it
+        // exists only as a labelled container. Saying "whatever put it there is
+        // what renews it" to an operator whose own panel put it there is the
+        // same species of defect as the button this branch replaced. So the
+        // refusal names what the panel actually found, and stops there.
+        //
+        // These lookups are deliberately not server-scoped. `mail_domains.server_id`
+        // was NULL on every panel-created row for five months and
+        // `git_deploys.domain` is nullable, so a server term here would turn a
+        // true "a mail domain claims this name" into a silent "nothing does" —
+        // trading a wrong sentence for a wronger one. Naming the owner
+        // approximately is worth more than naming nothing precisely.
+        let claimed_by: Option<(String,)> = sqlx::query_as(
+            "SELECT 'mail domain' FROM mail_domains WHERE domain = $1 \
+             UNION ALL SELECT 'Git deploy' FROM git_deploys WHERE domain = $1 \
+             UNION ALL SELECT 'Docker app' FROM container_sleep_config WHERE domain = $1 \
+             UNION ALL SELECT 'Compose stack' FROM docker_stacks WHERE lower(domain) = lower($1) \
+             LIMIT 1",
         )
         .bind(domain)
-        .bind(server_id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| crate::error::internal_error("diagnostics ssl fix lookup", e))?;
+        .unwrap_or(None);
 
-        let Some((site_id,)) = site_id else {
-            // A certificate under /etc/dockpanel/ssl with no `sites` row. Still a
-            // refusal, but a 4xx with a sentence, so `agent_error`'s sibling rule
-            // cannot later collapse it into an incident id the way the agent's 500
-            // did.
-            //
-            // ⚠ It must NOT claim the certificate came from outside DockPanel,
-            // because very often it did not: the agent issues certificates for
-            // Docker apps, Compose stacks, Git deploys and mail domains, and NONE
-            // of those becomes a `sites` row — a Docker app has no table at all, it
-            // exists only as a labelled container. Saying "whatever put it there is
-            // what renews it" to an operator whose own panel put it there is the
-            // same species of defect as the button this branch replaced. So the
-            // refusal names what the panel actually found, and stops there.
-            //
-            // These lookups are deliberately not server-scoped. `mail_domains.server_id`
-            // was NULL on every panel-created row for five months and
-            // `git_deploys.domain` is nullable, so a server term here would turn a
-            // true "a mail domain claims this name" into a silent "nothing does" —
-            // trading a wrong sentence for a wronger one. Naming the owner
-            // approximately is worth more than naming nothing precisely.
-            let claimed_by: Option<(String,)> = sqlx::query_as(
-                "SELECT 'mail domain' FROM mail_domains WHERE domain = $1 \
-                 UNION ALL SELECT 'Git deploy' FROM git_deploys WHERE domain = $1 \
-                 UNION ALL SELECT 'Docker app' FROM container_sleep_config WHERE domain = $1 \
-                 UNION ALL SELECT 'Compose stack' FROM docker_stacks WHERE lower(domain) = lower($1) \
-                 LIMIT 1",
+        // A stack is the one claimant whose answer depends on its TLS MODE.
+        // "DockPanel issued this and a redeploy reissues it" is true of an
+        // `acme` stack and FALSE of a `provided` one, whose live certificate
+        // is the operator's own, served from the registry — the expiring
+        // file this button was clicked about is then a leftover under the
+        // per-domain tree, and redeploying reissues nothing. Telling that
+        // operator to redeploy is the same species of wrong sentence this
+        // whole branch exists to stop.
+        //
+        // ⛔ Read through `effective_tls_mode`, never a CASE in the SQL
+        // above: the NULL⇒ssl_email rule has ONE spelling, and a second one
+        // here would drift exactly where it decides what to tell an
+        // operator about their own certificate. Unscoped by server for the
+        // same reason as the claimant probe above.
+        let stack_mode = if claimed_by.as_ref().map(|(k,)| k.as_str()) == Some("Compose stack") {
+            let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT tls_mode, ssl_email FROM docker_stacks WHERE lower(domain) = lower($1)",
             )
             .bind(domain)
             .fetch_optional(&state.db)
             .await
             .unwrap_or(None);
-
-            // A stack is the one claimant whose answer depends on its TLS MODE.
-            // "DockPanel issued this and a redeploy reissues it" is true of an
-            // `acme` stack and FALSE of a `provided` one, whose live certificate
-            // is the operator's own, served from the registry — the expiring
-            // file this button was clicked about is then a leftover under the
-            // per-domain tree, and redeploying reissues nothing. Telling that
-            // operator to redeploy is the same species of wrong sentence this
-            // whole branch exists to stop.
-            //
-            // ⛔ Read through `effective_tls_mode`, never a CASE in the SQL
-            // above: the NULL⇒ssl_email rule has ONE spelling, and a second one
-            // here would drift exactly where it decides what to tell an
-            // operator about their own certificate. Unscoped by server for the
-            // same reason as the claimant probe above.
-            let stack_mode = if claimed_by.as_ref().map(|(k,)| k.as_str()) == Some("Compose stack") {
-                let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-                    "SELECT tls_mode, ssl_email FROM docker_stacks WHERE lower(domain) = lower($1)",
-                )
-                .bind(domain)
-                .fetch_optional(&state.db)
-                .await
-                .unwrap_or(None);
-                row.map(|(m, e)| {
-                    crate::routes::stacks::effective_tls_mode(m.as_deref(), e.as_deref())
-                })
-            } else {
-                None
-            };
-
-            let tail = match claimed_by {
-                Some((_,)) if matches!(stack_mode, Some(mode) if mode != "acme") => {
-                    "A Compose stack in this panel uses that name, but it serves a registered \
-                     certificate rather than a Let's Encrypt one — so this expiring file is a \
-                     leftover from before that change, and nothing renews it because nothing \
-                     serves it. Removing it is safe; the stack is unaffected."
-                        .to_string()
-                }
-                Some((kind,)) => format!(
-                    "A {kind} in this panel uses that name, and DockPanel issued this \
-                     certificate for it — but only certificates attached to a SITE can be \
-                     renewed from here. Redeploy that {kind} to reissue it."
-                ),
-                None => "No site, mail domain, Git deploy, Docker app or Compose stack in \
-                         this panel claims that name — so this is a certificate DockPanel \
-                         does not manage, such as a DNS-01 wildcard or one installed by \
-                         hand, and it is renewed wherever it was issued."
-                    .to_string(),
-            };
-
-            return Err(crate::error::err(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                &format!("No site named {domain} is registered on this server. {tail}"),
-            ));
+            row.map(|(m, e)| {
+                crate::routes::stacks::effective_tls_mode(m.as_deref(), e.as_deref())
+            })
+        } else {
+            None
         };
 
-        let site: crate::models::Site = sqlx::query_as(&format!(
-            "SELECT s.* FROM sites s WHERE {}",
-            crate::helpers::SITE_CALLER_PREDICATE
-        ))
-        .bind(site_id)
-        .bind(claims.sub)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| crate::error::internal_error("diagnostics ssl fix", e))?
-        .ok_or_else(|| crate::error::err(StatusCode::NOT_FOUND, "Site not found"))?;
+        let tail = match claimed_by {
+            Some((_,)) if matches!(stack_mode, Some(mode) if mode != "acme") => {
+                "A Compose stack in this panel uses that name, but it serves a registered \
+                 certificate rather than a Let's Encrypt one — so this expiring file is a \
+                 leftover from before that change, and nothing renews it because nothing \
+                 serves it. Removing it is safe; the stack is unaffected."
+                    .to_string()
+            }
+            Some((kind,)) => format!(
+                "A {kind} in this panel uses that name, and DockPanel issued this \
+                 certificate for it. Redeploy that {kind} to reissue it."
+            ),
+            None => "No mail domain, Git deploy, Docker app or Compose stack in \
+                     this panel claims that name — so this is a certificate DockPanel \
+                     does not manage, such as a DNS-01 wildcard or one installed by \
+                     hand, and it is renewed wherever it was issued."
+                .to_string(),
+        };
 
-        // The renewal's own `{ok, domain}` body is deliberately dropped: this
-        // endpoint answers the Diagnostics screen, which reads `{success, message}`.
-        // The `?` is the load-bearing part — a PRECONDITION_FAILED from
-        // `resolve_acme_contact`, or a 4xx the agent authored, reaches the operator
-        // as that sentence instead of a reference id.
-        let _renewed =
-            crate::routes::ssl::renew_for_site(&state, &site, claims.sub, &claims.email).await?;
+        return Err(crate::error::err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!("No certificate for {domain} can be renewed from here. {tail}"),
+        ));
 
-        activity::log_activity_on_server(
-            &state.db, claims.sub, &claims.email, "diagnostics.fix",
-            Some("renew-ssl"), Some(domain), None, None, Some(server_id), claims.key_id,
-        ).await;
-
-        // The shape the Diagnostics screen reads.
-        return Ok(Json(serde_json::json!({
-            "success": true,
-            "message": format!("Renewed the certificate for {domain}"),
-        })));
     }
 
     let data = agent

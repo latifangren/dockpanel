@@ -11,7 +11,8 @@ pub async fn intelligence(
     ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
-    // 1. Get firing alerts count (scoped to user's sites)
+    // 1. Get firing alerts count (scoped to the user: alerts carry their own
+    //    user_id/server_id, so no sites table is read here)
     let (firing_count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM alerts WHERE status = 'firing' \
          AND (server_id = $1 OR server_id IS NULL) AND user_id = $2",
@@ -33,19 +34,16 @@ pub async fn intelligence(
     .await
     .map_err(|e| internal_error("intelligence", e))?;
 
-    // 3. Get SSL expiry data — scoped to user's sites AND their Docker Compose
-    //    stacks. Both feed the SAME `ssl_countdowns` list, so making stacks
-    //    visible here is enough to make them count in the health score
-    //    (section 9) and recommendations (section 10) below too, with no
-    //    further change to either loop.
-    let ssl_sites: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT domain, ssl_expiry FROM sites WHERE ssl_enabled = TRUE AND ssl_expiry IS NOT NULL AND server_id = $1 AND user_id = $2 ORDER BY ssl_expiry ASC LIMIT 5",
-    )
-    .bind(server_id)
-    .bind(claims.sub)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| internal_error("intelligence", e))?;
+    // 3. Get SSL expiry data — scoped to the user's Docker Compose stacks
+    //    only. The sites-table half of this list was removed with hosting
+    //    removal: there is no non-site source for site certificates, and
+    //    `tls_certificates` is deliberately NOT substituted here — that
+    //    registry holds stack certificates, a different meaning, so its
+    //    rows would mislabel stack expiries as site expiries. The stacks
+    //    query below is now the sole feed of the `ssl_countdowns` list, and
+    //    it already drives the health score (section 9) and recommendations
+    //    (section 10) below too, with no further change to either loop.
+    //    The site half is gone entirely (R3): no placeholder is kept.
 
     // `tls_mode`/`ssl_email` come along only to apply the SAME "an ACME stack
     // is ours" rule `certificate_dashboard_for_admin` and `check_stack_ssl_expiry`
@@ -81,29 +79,12 @@ pub async fn intelligence(
         }
     };
 
-    // Sorted by (expiry, candidate) so the merged top-5 stays soonest-first
-    // regardless of which table a row came from, then trimmed to 5 — each
-    // source query is already capped at 5, so at most 10 candidates are ever
-    // built here.
-    let mut countdowns: Vec<(chrono::DateTime<chrono::Utc>, serde_json::Value)> = ssl_sites
-        .iter()
-        .map(|(domain, expiry)| {
-            let days_left = expiry.map(|e| (e - now).num_days()).unwrap_or(0);
-            (
-                expiry.unwrap_or(now),
-                serde_json::json!({
-                    "domain": domain,
-                    "days_left": days_left,
-                    "severity": ssl_severity(days_left),
-                    "expiry": expiry,
-                    // Always on the wire, even as null — a field present on some
-                    // rows and absent on others reaches TypeScript as `undefined`,
-                    // and `undefined !== null` is true.
-                    "stack_id": serde_json::Value::Null,
-                }),
-            )
-        })
-        .collect();
+    // Sorted by (expiry, candidate) so the top-5 stays soonest-first, then
+    // trimmed to 5 — the stacks query above is already capped at 5. (The
+    // sites-table candidates that used to merge in here were removed; see
+    // section 3.)
+    // R3: no site candidates remain; the stacks feed below is the sole source.
+    let mut countdowns: Vec<(chrono::DateTime<chrono::Utc>, serde_json::Value)> = Vec::new();
 
     countdowns.extend(
         ssl_stacks
@@ -157,17 +138,13 @@ pub async fn intelligence(
         .collect();
 
     // Every read below this line is HOST-level, not tenant-level: the agent's own
-    // diagnostics, the server's backup freshness, the server's last security scan.
+    // diagnostics and the server's last security scan.
     // Sections 1-4 above are already `user_id = $2` for everyone, admin included —
-    // this handler has always been "your alerts, your certificates". These three were
-    // the exceptions, and each one reached a non-admin: `/diagnostics` is `AdminUser`
-    // on its own route and was being forwarded verbatim; `stale_backups` counted every
-    // tenant's sites on the box; `security_scans` has no user column to filter by at
+    // this handler has always been "your alerts, your certificates". The two
+    // host-level reads below each reached a non-admin: `/diagnostics` is `AdminUser`
+    // on its own route and was being forwarded verbatim; `security_scans` has no user column to filter by at
     // all. So the scope is decided ONCE here rather than per-query.
     let host_scoped = claims.role == "admin";
-    // A non-admin's user_id, or NULL for an admin — the `$2 IS NULL OR` arm below is
-    // what keeps this ONE query instead of two divergent ones.
-    let tenant: Option<uuid::Uuid> = if host_scoped { None } else { Some(claims.sub) };
 
     // 5. Get diagnostics from agent (admin only — `system::diagnostics` is AdminUser on
     //    its own route, and this handler must not be the way around that.)
@@ -178,23 +155,14 @@ pub async fn intelligence(
         }
     }
 
-    // 6. Backup freshness — sites with no backup in the last 7 days.
-    //    Server-wide for an admin; only the caller's own sites for anyone else.
-    //
-    //    A row whose schedule had a destination and whose upload failed does NOT
-    //    count as a backup here. It is on local disk only, which is the one place
-    //    a disk failure takes with it — the case this tile exists to warn about.
-    let (stale_backups,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM sites s WHERE s.status = 'active' AND s.server_id = $1 \
-         AND ($2::uuid IS NULL OR s.user_id = $2) \
-         AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '7 days' \
-                         AND (b.destination_id IS NULL OR b.uploaded))",
-    )
-    .bind(server_id)
-    .bind(tenant)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or((0,));
+    // 6. Backup freshness — formerly the count of active sites with no backup
+    //    in the last 7 days, read from the sites table (via backups.site_id).
+    //    With the sites table no longer read there is no site population to
+    //    count stale against, so this is 0: no stale-site warning is claimed.
+    //    The `stale_backups` field, the score penalty, and the recommendation
+    //    below are kept so the response shape is unchanged; with this value
+    //    they never fire.
+    let stale_backups: i64 = 0;
 
     // 7. Security scan — latest scan critical/warning counts. `security_scans` is keyed
     //    by server and has NO user column (20260312991000_security_scans.sql), so there
@@ -493,48 +461,56 @@ pub async fn timeline(
     let tenant: Option<uuid::Uuid> = if claims.role == "admin" { None } else { Some(claims.sub) };
     let mut events: Vec<serde_json::Value> = Vec::new();
 
-    // Recent deploys (join sites for domain; fleet-wide for an admin, else
-    // filtered by user ownership)
-    let deploys: Vec<(String, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT dl.status, s.domain, dl.created_at \
-         FROM deploy_logs dl \
-         JOIN sites s ON s.id = dl.site_id \
-         WHERE ($1::uuid IS NULL OR s.user_id = $1) \
-         ORDER BY dl.created_at DESC LIMIT 10",
-    )
-    .bind(tenant)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    // Recent deploys — formerly joined sites for the domain and scoped by
+    // s.user_id. deploy_logs carries only site_id (no user_id/server_id), so
+    // without the sites table there is no non-site ownership scope and no
+    // domain to show. Admins (tenant is None) keep the fleet-wide rows with
+    // a null target; non-admins get none, rather than other tenants' rows.
+    // The rows themselves are kept: status and time are deploy_logs' own.
+    let deploys: Vec<(String, chrono::DateTime<chrono::Utc>)> = if tenant.is_none() {
+        sqlx::query_as(
+            "SELECT dl.status, dl.created_at \
+             FROM deploy_logs dl \
+             ORDER BY dl.created_at DESC LIMIT 10",
+        )
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
-    for (status, domain, created_at) in &deploys {
+    for (status, created_at) in &deploys {
         events.push(serde_json::json!({
             "type": "deploy",
             "detail": status,
-            "target": domain,
+            "target": serde_json::Value::Null,
             "created_at": created_at.to_rfc3339(),
         }));
     }
 
-    // Recent backups (join sites for domain; fleet-wide for an admin, else
-    // filtered by user ownership)
-    let backups: Vec<(String, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT b.filename, s.domain, b.created_at \
-         FROM backups b \
-         JOIN sites s ON s.id = b.site_id \
-         WHERE ($1::uuid IS NULL OR s.user_id = $1) \
-         ORDER BY b.created_at DESC LIMIT 10",
-    )
-    .bind(tenant)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    // Recent backups — same shape as deploys above: backups carries only
+    // site_id, so without the sites table there is no ownership scope and
+    // no domain. Admins keep the fleet-wide rows with a null target;
+    // non-admins get none.
+    let backups: Vec<(String, chrono::DateTime<chrono::Utc>)> = if tenant.is_none() {
+        sqlx::query_as(
+            "SELECT b.filename, b.created_at \
+             FROM backups b \
+             ORDER BY b.created_at DESC LIMIT 10",
+        )
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
-    for (filename, domain, created_at) in &backups {
+    for (filename, created_at) in &backups {
         events.push(serde_json::json!({
             "type": "backup",
             "detail": filename,
-            "target": domain,
+            "target": serde_json::Value::Null,
             "created_at": created_at.to_rfc3339(),
         }));
     }
@@ -612,7 +588,7 @@ pub async fn timeline(
 }
 
 /// GET /api/dashboard/fleet — Unified health across all servers (admin only).
-/// Aggregates firing alerts, active incidents, sites, databases, and latest
+/// Aggregates firing alerts, active incidents, and latest
 /// metrics for EVERY server on the install — not just the ones the calling
 /// admin happens to have registered.
 ///
@@ -633,16 +609,22 @@ pub async fn fleet_overview(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Single query replaces N+1 pattern (was: 5 queries per server in a loop).
     // Uses LEFT JOIN with subqueries to aggregate all data in one round trip.
+    // The site and database counts are no longer read from the sites table:
+    // site_count has no non-site source, and databases has no server_id, so
+    // a per-server database count cannot be derived without the sites join
+    // either. Both are reported as 0 — "not counted after hosting removal",
+    // not a claim that no databases exist — and the `sites`, `databases`,
+    // and `total_sites` fields are kept so the response shape (and the
+    // frontend FleetServer type) is unchanged. No other fleet logic is
+    // touched: firing alerts and latest metrics still aggregate per server.
     let rows: Vec<(uuid::Uuid, String, Option<String>, i64, i64, i64, Option<f32>, Option<f32>, Option<f32>)> = sqlx::query_as(
         "SELECT s.id, s.name, s.ip_address, \
          COALESCE(a.firing, 0) AS firing_alerts, \
-         COALESCE(si.cnt, 0) AS site_count, \
-         COALESCE(d.cnt, 0) AS db_count, \
+         0::bigint AS site_count, \
+         0::bigint AS db_count, \
          m.cpu_pct, m.mem_pct, m.disk_pct \
          FROM servers s \
          LEFT JOIN LATERAL (SELECT COUNT(*) AS firing FROM alerts WHERE server_id = s.id AND status = 'firing') a ON true \
-         LEFT JOIN LATERAL (SELECT COUNT(*) AS cnt FROM sites WHERE server_id = s.id AND status = 'active') si ON true \
-         LEFT JOIN LATERAL (SELECT COUNT(*) AS cnt FROM databases WHERE site_id IN (SELECT id FROM sites WHERE server_id = s.id)) d ON true \
          LEFT JOIN LATERAL (SELECT cpu_pct, mem_pct, disk_pct FROM metrics_history WHERE server_id = s.id ORDER BY created_at DESC LIMIT 1) m ON true \
          ORDER BY s.name",
     )

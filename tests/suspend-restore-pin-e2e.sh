@@ -46,11 +46,10 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
 HELPERS=panel/backend/src/helpers.rs
 USERS=panel/backend/src/routes/users.rs
 AUTH=panel/backend/src/routes/auth.rs
-WHMCS=panel/backend/src/routes/whmcs.rs
 MODELS=panel/backend/src/models.rs
 MIGDIR=panel/backend/migrations
 
-for f in "$HELPERS" "$USERS" "$AUTH" "$WHMCS" "$MODELS"; do
+for f in "$HELPERS" "$USERS" "$AUTH" "$MODELS"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -121,7 +120,6 @@ fn_body() { awk -v pat="$1" '$0 ~ pat {f=1} f {print} f && /^\}/ {exit}' <<< "$2
 HELPERS_S=$(subj "$HELPERS" || true)
 USERS_S=$(subj "$USERS" || true)
 AUTH_S=$(subj "$AUTH" || true)
-WHMCS_S=$(subj "$WHMCS" || true)
 MODELS_S=$(subj "$MODELS" || true)
 
 echo "§A  the stash has a column of its own, and the migration is guarded"
@@ -277,21 +275,6 @@ else
   bad "C4 the suspend statement has no role <> 'suspended' guard — re-suspending destroys the stash permanently"
 fi
 
-# C5 — the billing webhook may not RESTORE a privileged role. Its suspend arm has
-# always refused to touch an `admin`; without a matching deny-list on the way back
-# the same webhook secret hands `admin` to an account the PANEL suspended, with no
-# activity-log row anywhere. That direction never had a guard at all, and the
-# shared helper made it reachable for the first time.
-if [ -z "$WHMCS_S" ]; then
-  bad "C5 could not read $WHMCS"
-elif ! has "$WHMCS_S" 'unsuspend_account'; then
-  bad "C5 whmcs does not un-suspend at all — this arm is measuring nothing"
-elif has "$WHMCS_S" 'unsuspend_account\(&state, user_id, &\["admin", "reseller"\]\)'; then
-  ok "C5 the billing webhook cannot restore a privileged role"
-else
-  bad "C5 the billing webhook restores whatever was recorded — including admin, to an account the panel suspended"
-fi
-
 # C6 — suspending must cut the account's live sessions, and it has to happen HERE
 # rather than in each caller. The JWT middleware refuses a token whose CLAIM says
 # suspended; a token minted while the account was a `user` keeps saying `user`
@@ -391,7 +374,7 @@ fi
 
 echo "§E  one statement each, not a private copy per caller"
 
-# E1 — both suspenders reach the shared statement. This is the arm that would
+# E1 — the remaining suspender reaches the shared statement. This is the arm that would
 # catch the next module growing its own copy, which is how the site-ownership
 # query became eight helpers under three names, exactly one of which had drifted.
 # ⚠ Both arms census CODE, not raw bytes. E1 previously used `grep -rl` and was
@@ -400,11 +383,11 @@ echo "§E  one statement each, not a private copy per caller"
 # separately: an OR let a file reaching only one of the two count as reaching both.
 E1_SUS=$(files_matching 'helpers::suspend_account\(' panel/backend/src/routes/*.rs)
 E1_UNS=$(files_matching 'helpers::unsuspend_account\(' panel/backend/src/routes/*.rs)
-EXPECTED="panel/backend/src/routes/users.rs panel/backend/src/routes/whmcs.rs "
+EXPECTED="panel/backend/src/routes/users.rs "
 if [ "$E1_SUS" = "$EXPECTED" ] && [ "$E1_UNS" = "$EXPECTED" ]; then
-  ok "E1 the panel and the billing webhook each reach BOTH shared statements"
+  ok "E1 the panel reaches BOTH shared statements"
 else
-  bad "E1 the suspend paths are not the expected pair — suspend:[${E1_SUS:-<none>}] unsuspend:[${E1_UNS:-<none>}]"
+  bad "E1 the suspend paths are not the expected single caller — suspend:[${E1_SUS:-<none>}] unsuspend:[${E1_UNS:-<none>}]"
 fi
 
 # E2 — nobody writes the suspended status by hand any more.
@@ -412,8 +395,8 @@ fi
 # ⚠ Keyed on the ASSIGNMENT, not on `SET role = 'suspended'`. The first draft
 # matched only that exact word order and was green against
 # `SET updated_at = NOW(), role = 'suspended'` — the same order-dependence that
-# made B1 vacuous. Stripped too, so the comments in whmcs.rs and users.rs that
-# discuss the old statement do not count as one.
+# made B1 vacuous. Stripped too, so the comment in users.rs that
+# discusses the old statement does not count as one.
 HANDROLLED=""
 for f in $BACKEND_RS; do
   case "$f" in */helpers.rs) continue ;; esac

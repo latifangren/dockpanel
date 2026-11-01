@@ -330,9 +330,6 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
     // the next scheduled run try again from scratch.
     let mut destination_down = false;
 
-    // Remote retention is reported once per run, not once per resource.
-    let mut remote_prune_warned = false;
-
     // Get encryption key if encrypt is enabled. Use the shared derivation (single source of
     // truth) keyed on the jwt_secret passed into the executor — which equals the
     // state.config.jwt_secret the restore path uses — NOT a separate std::env read that could
@@ -344,162 +341,13 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
     };
 
     // The key reaches the database dump and nothing else — the agent has no
-    // encryption path for a site or volume archive, so there is nowhere to send
-    // it. Say so per run rather than letting the flag imply cover it does not
-    // give: a site archive is the whole webroot, and since v2.34.0 it also
-    // carries a dump of every database attached to that site, which means an
-    // encrypted policy ships an encrypted copy of that data and an unencrypted
-    // one to the same destination.
-    if policy.encrypt && (policy.backup_sites || policy.backup_volumes) {
+    // encryption path for a volume archive, so there is nowhere to send it.
+    // Say so per run rather than letting the flag imply cover it does not give.
+    if policy.encrypt && policy.backup_volumes {
         tracing::warn!(
-            "Policy '{}': encryption applies to database dumps only — this policy's site/volume archives are stored and uploaded unencrypted",
+            "Policy '{}': encryption applies to database dumps only — this policy's volume archives are stored and uploaded unencrypted",
             policy.name
         );
-    }
-
-    // Backup sites
-    if policy.backup_sites {
-        // `server_id` rides along: a site is archived on the host that holds its
-        // files. NOT NULL, so there is no ambiguous case to default.
-        let sites: Vec<(Uuid, String, Uuid)> = sqlx::query_as(
-            "SELECT id, domain, server_id FROM sites WHERE user_id = $1"
-        )
-        .bind(policy.user_id)
-        .fetch_all(db).await.unwrap_or_default();
-
-        for (site_id, domain, site_server_id) in &sites {
-            // Resolve THIS site's host. Never fall back to local: archiving a member's
-            // site against the panel's own /var/www either fails every night for ever,
-            // or — where the same domain legally exists on both hosts — silently tars
-            // the wrong machine's files and prunes the member's real off-site copies.
-            let agent = match agents.for_server(*site_server_id).await {
-                Ok(a) => a,
-                Err(e) => {
-                    failures += 1;
-                    tracing::warn!(
-                        "Policy '{}': skipping site {domain} — its server {site_server_id} \
-                         is unreachable ({e}). Not archiving it on another host.",
-                        policy.name
-                    );
-                    continue;
-                }
-            };
-            let agent = &agent;
-            // WITH the site's databases — a policy-driven backup that omitted
-            // them would reintroduce, on the automated path, exactly the gap
-            // v2.34.0 closed on the manual one.
-            let site_dbs = crate::routes::backups::site_database_specs(db, jwt_secret, *site_id).await;
-            let db_expected = site_dbs.expected() as i32;
-            let agent_body = serde_json::json!({ "databases": site_dbs.specs });
-
-            let mut result = agent.post(&format!("/backups/{domain}/create"), Some(agent_body.clone())).await;
-            // Retry once on failure
-            if result.is_err() {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                result = agent.post(&format!("/backups/{domain}/create"), Some(agent_body)).await;
-            }
-            match result {
-                Ok(resp) => {
-                    let filename = resp.get("filename").and_then(|v| v.as_str()).unwrap_or("");
-                    let size_bytes = resp.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
-
-                    // Same read the database and volume branches below already do
-                    // off their own agent responses. This branch had the field in
-                    // scope and never looked at it, so a site archived by a policy
-                    // carried no integrity hash while its db and volume siblings
-                    // in this very function did (#114). Read before the upload, as
-                    // they do.
-                    let sha256_hash = resp
-                        .get("sha256")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let previous_hash: Option<String> = sqlx::query_scalar::<_, Option<String>>(
-                        "SELECT sha256_hash FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
-                    ).bind(site_id).fetch_optional(db).await.unwrap_or(None).flatten();
-
-                    let mut uploaded = false;
-                    if let (Some(dest), false) = (&destination, destination_down) {
-                        let filepath = format!("/var/backups/dockpanel/{domain}/{filename}");
-                        uploaded = upload_to_destination(agent, dest, &filepath, &format!("site {domain}")).await;
-                        if uploaded {
-                            // Enforce remote retention too, or the destination grows
-                            // without bound. Same call the scheduler makes.
-                            //
-                            // The agent returns 200 with a `message` when it cannot
-                            // prune (SFTP has no supported path), so a discarded body
-                            // left the policy showing an enforced retention count over
-                            // a destination that never deletes anything. Reported once
-                            // per run — a forty-site policy should not write forty
-                            // identical rows.
-                            match agent.post("/backups/prune", Some(serde_json::json!({
-                                "destination": dest.payload,
-                                "domain": domain,
-                                "retention": policy.retention_count,
-                            }))).await {
-                                Ok(resp) => {
-                                    if let Some(msg) = resp.get("message").and_then(|v| v.as_str()) {
-                                        if !remote_prune_warned {
-                                            remote_prune_warned = true;
-                                            // "warning", not "warn" — the API filters and
-                                            // counts on the former, so a "warn" row was
-                                            // uncountable in the Warnings tile and grey in
-                                            // the list. Its sibling at backup_scheduler.rs
-                                            // already spelled it the long way twice.
-                                            crate::services::system_log::log_event(
-                                                db,
-                                                "warning",
-                                                "backup_policy_executor",
-                                                &format!("Policy '{}': remote retention was not enforced", policy.name),
-                                                Some(msg),
-                                            ).await;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Policy '{}': remote prune failed for {domain}: {e}", policy.name);
-                                }
-                            }
-                        } else {
-                            upload_failures += 1;
-                            destination_down = true;
-                        }
-                    } else if destination.is_some() {
-                        // Breaker already open — count it, don't dial.
-                        upload_failures += 1;
-                    }
-
-                    // A backup the panel cannot record is a backup the operator
-                    // cannot find or restore: every list and restore path keys off
-                    // this row. Discarding the Result reported the run green over
-                    // an archive that exists on disk and nowhere in the product.
-                    // The realistic trigger is not "the database is down" — it is
-                    // deleting a backup destination mid-run, which makes every
-                    // remaining insert in that run a foreign-key violation.
-                    match sqlx::query(
-                        "INSERT INTO backups (site_id, filename, size_bytes, destination_id, uploaded, databases_included, databases_expected, sha256_hash, previous_hash) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
-                    )
-                    .bind(site_id).bind(filename).bind(size_bytes)
-                    .bind(destination.as_ref().map(|d| d.id)).bind(uploaded)
-                    .bind(resp.get("databases_included").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as i32)
-                    .bind(db_expected)
-                    .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
-                    .bind(previous_hash.as_deref())
-                    .execute(db).await {
-                        Ok(_) => successes += 1,
-                        Err(e) => {
-                            tracing::error!("Policy '{}': site backup for {domain} was created but could not be recorded: {e}", policy.name);
-                            failures += 1;
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Policy '{}': site backup failed for {domain} (after retry): {e}", policy.name);
-                    failures += 1;
-                }
-            }
-        }
     }
 
     // Backup databases

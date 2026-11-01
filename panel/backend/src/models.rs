@@ -78,81 +78,6 @@ pub struct EscalationStep {
     pub route: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Site {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub server_id: Option<Uuid>,
-    pub domain: String,
-    pub runtime: String,
-    pub status: String,
-    pub proxy_port: Option<i32>,
-    pub php_version: Option<String>,
-    pub root_path: Option<String>,
-    pub ssl_enabled: bool,
-    pub ssl_cert_path: Option<String>,
-    pub ssl_key_path: Option<String>,
-    pub ssl_expiry: Option<DateTime<Utc>>,
-    pub ssl_profile: Option<String>,
-    pub ssl_renewal_at: Option<DateTime<Utc>>,
-    pub ssl_renewal_checked_at: Option<DateTime<Utc>>,
-    /// Which ACME challenge issued the installed certificate: `http-01` or
-    /// `dns-01`. NULL means "not recorded" — a row that predates the provenance
-    /// migration and that the activity-log backfill could not prove. Renewal
-    /// treats NULL as unknown and never as `http-01`; see
-    /// [`crate::helpers::renewal_plan`].
-    pub ssl_challenge: Option<String>,
-    /// The name the certificate was actually ORDERED for. Equal to `domain`
-    /// except for a wildcard, where it is the Cloudflare zone — the certificate
-    /// covers `{subject}` and `*.{subject}`, never `*.{domain}`.
-    pub ssl_cert_subject: Option<String>,
-    /// Three-state on purpose: `Some(true)` wildcard, `Some(false)` not, `None`
-    /// not recorded. A default `false` would assert "not a wildcard" over every
-    /// legacy apex wildcard, which is exactly the row that cannot be identified.
-    pub ssl_wildcard: Option<bool>,
-    /// The `dns_zones` row whose Cloudflare credential issued this certificate.
-    /// Renewal uses THIS row rather than re-deriving a zone from the subject, so
-    /// the credential that renews is provably the credential that issued and no
-    /// text match can select another tenant's token.
-    pub ssl_dns_zone_id: Option<Uuid>,
-    pub rate_limit: Option<i32>,
-    pub max_upload_mb: i32,
-    pub php_memory_mb: i32,
-    pub php_max_workers: i32,
-    pub custom_nginx: Option<String>,
-    pub php_preset: Option<String>,
-    pub app_command: Option<String>,
-    pub parent_site_id: Option<Uuid>,
-    pub synced_at: Option<DateTime<Utc>>,
-    pub enabled: bool,
-    pub fastcgi_cache: bool,
-    pub redis_cache: bool,
-    pub redis_db: i32,
-    pub waf_enabled: bool,
-    pub waf_mode: String,
-    pub csp_policy: Option<String>,
-    pub permissions_policy: Option<String>,
-    pub bot_protection: String,
-    /// Monthly bandwidth cap in MB. NULL = unlimited (default). Read by
-    /// `traffic_accounting_scheduler` against the current month's
-    /// `site_traffic_usage` row.
-    pub bandwidth_quota_mb: Option<i32>,
-    /// Set the instant the scheduler auto-disables this site for exceeding
-    /// `bandwidth_quota_mb`; the only thing distinguishing that from a manual
-    /// disable. Cleared by a manual re-enable, a quota raise/removal, or a new
-    /// calendar month.
-    pub bandwidth_suspended_at: Option<DateTime<Utc>>,
-    /// Opt-in per site. Enabling it is the one moment DockPanel restructures an
-    /// existing site's docroot (content moves under a writable subdirectory so
-    /// the OpenSSH chroot boundary can stay root-owned) — see
-    /// `services::sftp_accounts` on the agent.
-    pub sftp_enabled: bool,
-    pub sftp_uid: Option<i32>,
-    pub sftp_gid: Option<i32>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
 /// Phase 4 W4: persistent panel snapshot (binaries + DB dump + /etc/dockpanel).
 /// Survives past update.sh's `.bak` files (deleted on success at
 /// `scripts/update.sh:499`) so an operator can roll back hours later.
@@ -226,3 +151,4 @@ mod tests {
         assert!(UpdateChannel::validate("stable ").is_err());
     }
 }
+

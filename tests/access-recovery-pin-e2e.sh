@@ -195,7 +195,6 @@ done
 # match" at every call site.
 for f in "$BE/routes/auth.rs" "$BE/routes/oauth.rs" "$BE/routes/passkeys.rs" \
          "$BE/routes/mod.rs" "$BE/routes/security.rs" "$BE/routes/users.rs" \
-         "$BE/routes/reseller_dashboard.rs" "$BE/routes/whmcs.rs" \
          "$BE/services/activity.rs" "$BE/services/auto_healer.rs" \
          "$AG/routes/security.rs" "$GUIDE"; do
   [ -f "$f" ] || { echo "missing file: $f — refusing to report a clean sweep"; exit 1; }
@@ -442,6 +441,8 @@ echo "── §D s333: the OTHER doors that create an account, and the doors tha
 # the COLUMN NAME, and a name-grep is structurally blind to an INSERT that omits the
 # column: the two doors that were still broken (`users::create` and
 # `reseller_dashboard::create_user`) are exactly the two files that never spell it.
+# (The reseller_dashboard door was deleted with the reseller system in R2; the
+# enumeration below is derived, so it shrinks on its own — only this note stays.)
 # §A was green on both of them for a whole release. So D1 asks the question in the
 # only order that can work — find every writer FIRST, then ask each one about the
 # column (#341: an arm must ask whether EVERY member has the property, never pick a
@@ -461,10 +462,10 @@ n_ins=$(printf '%s' "$INSERTS" | grep -c . || true)
 # D2 FIRST, because every other arm here is worthless if the enumeration is empty. An
 # arm that enumerates its own subjects must prove the list is real before reporting on
 # it (#143 — two absence arms once printed green having examined zero files).
-if [ "$n_ins" -ge 5 ]; then
+if [ "$n_ins" -ge 4 ]; then  # R2: was 5; the whmcs webhook writer is deleted, 4 retained statements remain
   ok "D2 the account-writer enumeration found $n_ins INSERT INTO users statements — non-vacuous"
 else
-  bad "D2 only $n_ins INSERT INTO users statements found (expected >= 5) — the extractor is broken and every §D arm below is meaningless"
+  bad "D2 only $n_ins INSERT INTO users statements found (expected >= 4) — the extractor is broken and every §D arm below is meaningless"
 fi
 
 # D1. Each writer must either mark the account verified, or issue it a token so the
@@ -477,7 +478,7 @@ fi
 # with neither column and requires this predicate to name it.
 offenders=$(printf '%s\n' "$INSERTS" | grep -v 'email_verified' | grep -v 'email_token' \
             | cut -f1 | sort -u | tr '\n' ' ' | sed 's/ *$//')
-if [ "$n_ins" -ge 5 ] && [ -z "$offenders" ]; then
+if [ "$n_ins" -ge 4 ] && [ -z "$offenders" ]; then
   ok "D1 every door that creates an account either verifies it or issues it a verification token"
 else
   bad "D1 these doors create accounts that can never verify and can never sign in once SMTP is set: ${offenders:-<enumeration failed>} (#100, in a door nobody reported)"
@@ -692,7 +693,6 @@ fi
 LINEDRIFT=""
 for f in "$BE/routes/auth.rs" "$BE/routes/oauth.rs" "$BE/routes/passkeys.rs" \
          "$BE/routes/mod.rs" "$BE/routes/security.rs" "$BE/routes/users.rs" \
-         "$BE/routes/reseller_dashboard.rs" "$BE/routes/whmcs.rs" \
          "$BE/services/activity.rs" "$BE/services/auto_healer.rs" \
          "$AG/routes/security.rs" "$GUIDE" tests/access-recovery-pin-e2e.sh; do
   a=$(wc -l < "$f"); b=$(code_lines "$f" | wc -l)
@@ -750,8 +750,6 @@ PINNED=(
   "$BE/services/auto_healer.rs|-F|audit_failed"
   "$BE/services/auto_healer.rs|-F|audit_dir = \"/var/lib/dockpanel/audit\""
   "$BE/routes/users.rs|-F|INSERT INTO users"
-  "$BE/routes/reseller_dashboard.rs|-F|INSERT INTO users"
-  "$BE/routes/whmcs.rs|-F|INSERT INTO users"
   "$MIG_PIN|-F|email_token IS NULL"
   "$MIG_PIN|-F|email_verified"
 )

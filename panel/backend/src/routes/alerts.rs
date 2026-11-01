@@ -366,7 +366,7 @@ pub async fn update_rules(
 /// FLEET-WIDE AGGREGATE with no mandatory per-resource ID (`dashboard.rs`'s
 /// `fleet_overview`/`metrics_history`/`gpu_metrics_history`/`timeline`,
 /// `drift.rs`) — there an admin legitimately needs the whole install's data
-/// in one read. `helpers::SITE_CALLER_PREDICATE`'s admin arm looks like a
+/// in one read. `hosting_helpers::SITE_CALLER_PREDICATE`'s admin arm looks like a
 /// third case (a WRITE that DOES widen) but isn't a counterexample to either
 /// rule above — it's site-specific: a site's owner (often a `client`
 /// account) and the admin who registered the underlying SERVER are

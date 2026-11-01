@@ -442,7 +442,9 @@ pub async fn login(
         "user": {
             "id": user.id,
             "email": user.email,
-            "role": user.role,
+            // R2: report the effective role, matching the session just
+            // minted — a stored-`reseller` account answers as `user`.
+            "role": crate::auth::effective_role(&user.role),
         }
     });
 
@@ -538,10 +540,18 @@ pub fn issue_session_pub(
 ) -> Result<(String, String, String), ApiError> {
     let now = chrono::Utc::now();
     let jti = uuid::Uuid::new_v4().to_string();
+    // R2: mint the EFFECTIVE role, not the stored one — a stored-`reseller`
+    // account's fresh session says `user`, so it never carries the retired
+    // privilege even before it is re-checked by `AuthUser`. The stored value
+    // is renamed only by the R7 migration; see `crate::auth::effective_role`
+    // for the exact login behaviour. This is the single minting point for
+    // the password, 2FA-verify, and passkey doors; the OAuth door builds its
+    // `Claims` directly in `routes/oauth.rs` and is normalised at extraction
+    // instead, which covers it on every request.
     let claims = Claims {
         sub: user.id,
         email: user.email.clone(),
-        role: user.role.clone(),
+        role: crate::auth::effective_role(&user.role).to_owned(),
         iat: now.timestamp() as usize,
         exp: (now + chrono::Duration::hours(2)).timestamp() as usize,
         jti: Some(jti.clone()),
@@ -1603,7 +1613,8 @@ pub async fn twofa_verify(
             "user": {
                 "id": user.id,
                 "email": user.email,
-                "role": user.role,
+                // R2: effective role, as in `login` above.
+                "role": crate::auth::effective_role(&user.role),
             }
         })),
     ))
@@ -2102,9 +2113,10 @@ pub async fn export_my_data(
     ).bind(claims.sub).fetch_one(&state.db).await
     .map_err(|e| internal_error("export user data", e))?;
 
-    let sites: Vec<(String, String)> = sqlx::query_as(
-        "SELECT domain, runtime FROM sites WHERE user_id = $1"
-    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+    // No `sites` section in the export below: the sites table is no longer
+    // read (hosting removal), so there is no site list of this user's to
+    // export. No replacement field is added; the export carries the user's
+    // account, activity, sessions, and passkeys only.
 
     let activity: Vec<(String, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT action, target_name, created_at FROM activity_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100"
@@ -2125,7 +2137,6 @@ pub async fn export_my_data(
 
     Ok(Json(serde_json::json!({
         "user": { "email": user.0, "role": user.1, "oauth_provider": user.2, "2fa_enabled": user.3, "created_at": user.4 },
-        "sites": sites.iter().map(|(d,r)| serde_json::json!({"domain": d, "runtime": r})).collect::<Vec<_>>(),
         "recent_activity": activity.iter().map(|(a,t,c)| serde_json::json!({"action": a, "target": t, "at": c})).collect::<Vec<_>>(),
         "sessions": sessions.iter().map(|(ip,ua,c)| serde_json::json!({"ip": ip, "user_agent": ua, "at": c})).collect::<Vec<_>>(),
         "passkeys": passkeys.iter().map(|(n,c)| serde_json::json!({"name": n, "at": c})).collect::<Vec<_>>(),

@@ -1137,7 +1137,7 @@ pub async fn fire_alert(
 /// fired first muted the other four for twelve hours — four of them `critical`.
 ///
 /// The pairing that made this fatal is sequential, not coincidental.
-/// `RenewalPlan::Refuse` alerts every twelve hours for as long as a DNS-01 zone
+/// A refused DNS-01 renewal alerts every twelve hours for as long as a DNS-01 zone
 /// stays unreachable, and the downgrade it ends in fires only once that same
 /// refusal reaches the certificate's last week. The warning is therefore always
 /// inside the window that hid the critical, and the alert saying which names
@@ -1193,11 +1193,11 @@ pub mod ssl_renewal_key {
 /// Whether a SUCCESSFUL renewal for the site disproves the alert raised under
 /// `key`.
 ///
-/// Pure, and the whole decision of [`resolve_ssl_renewal_failure`] lives here so
-/// it can be tested one key at a time. Three of the six say a renewal DID NOT
+/// Pure, and the whole decision lives here so it can be tested one
+/// key at a time. Three of the six say a renewal DID NOT
 /// HAPPEN, and a renewal happening is what makes them false. The other three
 /// describe the certificate that is installed NOW, and a later renewal does not
-/// contradict any of them — see the doc on the resolver for why
+/// contradict any of them — see `ssl_renewal_key` for why
 /// `DNS01_DOWNGRADED` in particular must stay out.
 ///
 /// ⚠ The fall-through is `false`, so a key added later is NOT resolved until
@@ -1209,70 +1209,6 @@ pub fn renewal_success_clears(key: &str) -> bool {
         key,
         ssl_renewal_key::FAILED | ssl_renewal_key::BLOCKED | ssl_renewal_key::DNS01_DECLINED
     )
-}
-
-/// Clear the `ssl_renewal_failure` alerts that a SUCCESSFUL renewal disproves.
-///
-/// `ssl_expiry` learned to resolve itself long ago — `ssl_decision` in
-/// `alert_engine.rs` records why, in its own words: *"Nothing used to resolve an ssl_expiry row, so a cert
-/// renewed weeks ago left a 'firing' row that check_escalations re-paged every
-/// 30 minutes forever and the purge (resolved-only) never collected."*
-/// `ssl_renewal_failure` never learned. Every key below is raised by a loop that
-/// has no resolving counterpart, so a certificate that failed, was fixed and then
-/// renewed left the critical alert firing: the panel said *"valid again"* on the
-/// expiry alert while the renewal alert kept paging, and the Alerts list could
-/// never return to green because retention only collects `status = 'resolved'`.
-///
-/// ⚠ THREE of the six keys, and the split is the whole point. These three say a
-/// renewal DID NOT HAPPEN, and a renewal happening is what makes them false:
-///
-///   * `FAILED` — attempted, failed.
-///   * `BLOCKED` — could not be attempted at all.
-///   * `DNS01_DECLINED` — declined while there is still time to fix the zone.
-///
-/// The other three are standing descriptions of the certificate installed NOW,
-/// and a later renewal does not contradict any of them:
-///
-///   * `DNS01_DOWNGRADED` — names really did stop being covered, and they stay
-///     uncovered until a wildcard is re-issued. It is also RAISED on this very
-///     success path when the plan downgraded, and `fire_alert_deduped` windows on
-///     `created_at` regardless of status — so resolving it here would let the
-///     re-fire land inside its own 12-hour window and be swallowed. The alert
-///     naming what stopped being covered would resolve itself and never come back.
-///   * `DECLINED` — the installed certificate is somebody else's. Still true.
-///   * `MAIL_HOST_CONFLICT` — a mail host's certificate was refused to protect a
-///     wildcard. Renewing that wildcard does not remove the conflict.
-///
-/// ⚠ Scoped by `site_id` with `server_id: None` ON PURPOSE. `resolve_alert` picks
-/// its arm on `server_id.is_some()` FIRST, so passing a server id would build a
-/// `WHERE server_id = $2` that misses every row the security scanner raised —
-/// that loop fires with `None`, while `auto_healer`'s FAILED fires with
-/// `Some(server_id)`. The same logical alert exists in two shapes; only the
-/// site arm matches both, and every producer passes a site.
-///
-/// `resolve_alert` no-ops when nothing is firing (it returns on
-/// `rows_affected == 0` before any notification), so calling it for a key that
-/// was never raised costs one UPDATE and sends nothing.
-pub async fn resolve_ssl_renewal_failure(pool: &PgPool, user_id: Uuid, site_id: Uuid, domain: &str) {
-    for key in ssl_renewal_key::ALL
-        .into_iter()
-        .filter(|k| renewal_success_clears(k))
-    {
-        resolve_alert(
-            pool,
-            user_id,
-            None,
-            Some(site_id),
-            "ssl_renewal_failure",
-            key,
-            &format!("SSL renewal recovered: {domain}"),
-            &format!(
-                "The certificate for {domain} renewed successfully, so the earlier renewal \
-                 alert no longer applies."
-            ),
-        )
-        .await;
-    }
 }
 
 

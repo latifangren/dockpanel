@@ -46,6 +46,50 @@ pub struct Claims {
     pub key_id: Option<Uuid>,
 }
 
+/// The effective role of an account for every authorisation decision.
+///
+/// R2 (hosting removal): the stored role `reseller` no longer exists as a
+/// privilege. Until the R7 migration renames the stored value, an account
+/// whose `users.role` is still `reseller` is treated — at the auth boundary
+/// only — as an ordinary `user`: it keeps its password, its login, and its
+/// own resources, and it loses every reseller privilege (the reseller
+/// dashboard routes are gone, and the reseller-or-admin extractor is gone
+/// with them). Every other stored value passes through unchanged, including
+/// `suspended`, which the extractors below still refuse on their own terms.
+///
+/// This is deliberately the ONE translation. It is applied where a role
+/// enters the request — [`AuthUser::from_request_parts`] after decoding the
+/// JWT, `authenticate_api_key` after reading the row, and
+/// `routes::auth::issue_session_pub` when a session is minted — plus the
+/// OAuth door, which builds its `Claims` directly in `routes/oauth.rs`
+/// and applies the same translation at mint time — so a token
+/// minted before R2, a token minted by the OAuth door, and a
+/// fresh login all agree, and no handler downstream ever sees `reseller`
+/// as an effective role. Code that acts on the STORED value must NOT use
+/// this: the WHMCS suspend/unsuspend guards and `helpers::role_to_restore`
+/// read `users.role`/`prior_role` from the database, where `reseller` is
+/// still a real value until R7 renames it; see `role_to_restore` for the
+/// one place a stored legacy value is translated on write.
+///
+/// R7 follow-up: rename `users.role = 'reseller'` to `'user'` (and
+/// `prior_role` likewise), drop the reseller tables/`reseller_id` handling,
+/// and narrow the `users.role` CHECK constraint. Until then the stored
+/// value remains, the mapping above is what keeps it from being a privilege.
+///
+/// Login behaviour after R2, exactly: a stored-`reseller` account signs in
+/// with its existing password (or passkey/OAuth) and receives a normal
+/// session whose claims say `user`; it is NOT rejected, NOT suspended, and
+/// NOT told to re-register. Its pre-R2 tokens keep working until they
+/// expire, with the same effective role, because the translation happens
+/// on every request, not only at login.
+pub fn effective_role(stored_role: &str) -> &str {
+    if stored_role == "reseller" {
+        "user"
+    } else {
+        stored_role
+    }
+}
+
 /// JWT extractor — reads token from Authorization header or `token` cookie.
 pub struct AuthUser(pub Claims);
 
@@ -107,13 +151,19 @@ impl FromRequestParts<AppState> for AuthUser {
         validation.validate_exp = true;
         validation.leeway = 0;
 
-        let claims = decode::<Claims>(
+        let mut claims = decode::<Claims>(
             &token,
             &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
             &validation,
         )
         .map_err(|_| session_invalid("Invalid or expired token"))?
         .claims;
+
+        // R2: translate a retired stored role at the boundary, so a token
+        // minted before the reseller role was removed — or by a door that
+        // still mints the stored value verbatim — never reaches a handler
+        // as a privilege. See `effective_role`.
+        claims.role = effective_role(&claims.role).to_owned();
 
         // Check token blacklist (revoked JTIs)
         if let Some(ref jti) = claims.jti {
@@ -196,6 +246,11 @@ async fn authenticate_api_key(state: &AppState, key: &str) -> Result<Claims, Api
     let (email, role) =
         user.ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?;
 
+    // R2: same boundary translation as the JWT path above — an API key
+    // minted for a stored-`reseller` account authenticates as `user`.
+    // See `effective_role`.
+    let role = effective_role(&role).to_owned();
+
     // Parity with the JWT path's own post-decode check (this file, below) — an
     // account suspended after a key was minted must not keep authenticating.
     if role == "suspended" {
@@ -248,28 +303,6 @@ impl FromRequestParts<AppState> for AdminUser {
         }
 
         Ok(AdminUser(claims))
-    }
-}
-
-/// Reseller-or-admin JWT extractor — allows role == "admin" OR role == "reseller".
-/// Used for endpoints accessible to both admins and resellers.
-pub struct ResellerUser(pub Claims);
-
-impl FromRequestParts<AppState> for ResellerUser {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        // Same rationale as AdminUser: keep the inner rejection intact.
-        let AuthUser(claims) = AuthUser::from_request_parts(parts, state).await?;
-
-        if claims.role != "admin" && claims.role != "reseller" {
-            return Err(err(StatusCode::FORBIDDEN, "Admin or reseller access required"));
-        }
-
-        Ok(ResellerUser(claims))
     }
 }
 
@@ -475,5 +508,33 @@ mod session_marker_tests {
         let e = err(StatusCode::UNAUTHORIZED, "Invalid token");
         assert_eq!(e.0, StatusCode::UNAUTHORIZED);
         assert!(body(&e).get("code").is_none());
+    }
+}
+
+#[cfg(test)]
+mod effective_role_tests {
+    use super::effective_role;
+
+    /// R2: the retired stored role maps to the ordinary role that already
+    /// exists, and nothing else moves. Login stays a login; privilege goes.
+    #[test]
+    fn a_stored_reseller_is_an_ordinary_user_at_the_auth_boundary() {
+        assert_eq!(effective_role("reseller"), "user");
+    }
+
+    #[test]
+    fn every_other_stored_value_passes_through_unchanged() {
+        for role in ["admin", "user", "client", "suspended", "", "superuser"] {
+            assert_eq!(effective_role(role), role, "role {role:?} must not be rewritten");
+        }
+    }
+
+    #[test]
+    fn the_mapping_is_idempotent() {
+        assert_eq!(
+            effective_role(effective_role("reseller")),
+            "user",
+            "a token minted after R2 already says user; re-mapping it must be a no-op"
+        );
     }
 }

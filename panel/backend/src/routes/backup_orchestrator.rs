@@ -19,6 +19,11 @@ pub struct BackupPolicy {
     pub user_id: Uuid,
     pub server_id: Option<Uuid>,
     pub name: String,
+    /// R3: the site kind is removed. Always FALSE for policies created or
+    /// updated after R3; a stored TRUE on an older, never-edited policy is
+    /// a legacy row until the executor's site sweep is neutralised (outside
+    /// this file) and the column drops in R7. Kept in the struct because
+    /// `SELECT *`/`RETURNING *` still return the column.
     pub backup_sites: bool,
     pub backup_databases: bool,
     pub backup_volumes: bool,
@@ -41,7 +46,12 @@ pub struct BackupPolicy {
 pub struct CreatePolicyRequest {
     pub name: String,
     pub server_id: Option<Uuid>,
-    pub backup_sites: Option<bool>,
+    // R3: no `backup_sites` field. The site kind is removed; a policy covers
+    // databases and volumes only. The `backup_sites` COLUMN still exists
+    // until the R7 migration (and `BackupPolicy` still carries it, always
+    // false for policies created or updated after R3), but the API no
+    // longer accepts a value for it — a client-sent field is ignored by
+    // serde, and the INSERT below binds FALSE.
     pub backup_databases: Option<bool>,
     pub backup_volumes: Option<bool>,
     pub schedule: Option<String>,
@@ -78,7 +88,9 @@ pub struct UpdatePolicyRequest {
     pub name: String,
     #[serde(default, deserialize_with = "de_double_option")]
     pub server_id: Option<Option<Uuid>>,
-    pub backup_sites: Option<bool>,
+    // R3: no `backup_sites` field — see `CreatePolicyRequest`. An update
+    // forces the stored column to FALSE (below); it can no longer be
+    // re-enabled through this endpoint.
     pub backup_databases: Option<bool>,
     pub backup_volumes: Option<bool>,
     pub schedule: Option<String>,
@@ -215,6 +227,10 @@ pub struct UnifiedBackupsResponse {
 
 #[derive(serde::Serialize)]
 pub struct BackupHealth {
+    /// R3: always 0. The field stays so the response shape (asserted by
+    /// tests/full-e2e.sh) does not change; the site kind it counted is gone,
+    /// and legacy rows in the `backups` table are no longer reported as
+    /// live site backups.
     pub total_site_backups: i64,
     pub total_db_backups: i64,
     pub total_volume_backups: i64,
@@ -264,21 +280,24 @@ pub struct ServerSla {
     pub lag_p95_hours: Option<f64>,
 }
 
-/// GET /api/backup-orchestrator/all — Unified fleet-wide backup list across site, database, and volume backups.
+/// GET /api/backup-orchestrator/all — Unified fleet-wide backup list across database and volume backups.
 ///
 /// Scoped, not truly fleet-wide despite the name: an admin sees the local server plus any
 /// server THEY registered, same predicate `list_volume_backups`/`chain_report` use (v2.184.0
 /// / this session). Before this fix `AdminUser` alone gated it — a flat, unscoped CTE handing
-/// every admin account the backup ids and resource names (site domains, db/container:volume
+/// every admin account the backup ids and resource names (db/container:volume
 /// names, filenames, sizes) of the ENTIRE fleet, including servers another admin registered.
 /// That id was also the exact discovery channel a caller needed to walk into the (now also
 /// fixed) unscoped chain-report endpoints.
 ///
-/// Optional filters: `kind` (site|database|volume) and `server_id`.
-/// Site backups derive their server via `sites.server_id`; database and volume backups carry
-/// `server_id` directly (nullable — a NULL row predates the fleet backfill and is treated as
-/// local, matching the COALESCE default below; it is visible to every admin the same as any
-/// other local-server row, never scoped away).
+/// Optional filters: `kind` (database|volume) and `server_id`.
+/// Database and volume backups carry `server_id` directly (nullable — a NULL row predates
+/// the fleet backfill and is treated as local, matching the COALESCE default below; it is
+/// visible to every admin the same as any other local-server row, never scoped away).
+/// R1 removed site backups from the list (their resource name and server both lived
+/// only in `sites`, and neither was fabricated). R3 removes the site kind itself:
+/// `kind=site` is now rejected as an unknown kind, and an unfiltered list contains
+/// only database and volume rows.
 pub async fn list_all_backups(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
@@ -288,25 +307,23 @@ pub async fn list_all_backups(
 
     let kind_filter = match params.kind.as_deref() {
         None => None,
-        Some("site") | Some("database") | Some("volume") => params.kind.clone(),
+        Some("database") | Some("volume") => params.kind.clone(),
         Some(_) => {
             return Err(err(
                 StatusCode::BAD_REQUEST,
-                "kind must be one of: site, database, volume",
+                "kind must be one of: database, volume",
             ));
         }
     };
 
-    // CTE unions the three backup tables into a common shape.
-    // - Site backups: server_id derived from sites (backups table has no server_id column).
+    // CTE unions the backup tables into a common shape.
+    // - Site backups: removed in R1 from the list, and the kind itself is
+    //   rejected above in R3. The `backups` table has no server_id column
+    //   and its domain lived only in `sites`, so no honest site arm can be
+    //   written without joining that table.
     // - Database backups: server_id nullable on table; falls through to local via LEFT JOIN.
     // - Volume backups: server_id nullable on table.
     let cte = "WITH unified AS ( \
-         SELECT b.id, 'site'::text AS kind, b.site_id AS resource_id, s.domain AS resource_name, \
-                b.filename, b.size_bytes, b.created_at, s.server_id, \
-                FALSE AS encrypted, b.uploaded, NULL::text AS extra_type \
-           FROM backups b JOIN sites s ON s.id = b.site_id \
-         UNION ALL \
          SELECT db.id, 'database'::text, db.database_id, db.db_name, \
                 db.filename, db.size_bytes, db.created_at, db.server_id, \
                 db.encrypted, db.uploaded, db.db_type \
@@ -377,8 +394,17 @@ pub async fn preflight(
 
     let db = &state.db;
 
-    let (sites,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sites")
-        .fetch_one(db).await.map_err(|e| internal_error("preflight", e))?;
+    // R1 set the sites count to 0 because it lived only in the `sites` table,
+    // which this file no longer queries. R3 leaves that in place and does NOT
+    // rework the check: `check_any_policy_enabled` (services/prerequisites,
+    // outside this worker's scope) renders its count as "hosts {sites}
+    // site(s)", so passing a database/stack count would print a fabricated
+    // number, and its copy + outcomes live in that module. Until that module
+    // is reworked, preflight's first check always reports "Nothing to back
+    // up yet" — including on panels that host databases/stacks. DEFERRED to
+    // the worker owning services/prerequisites; the site kind itself is
+    // removed from every other branch in this file.
+    let sites: usize = 0;
     let (destinations,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backup_destinations")
         .fetch_one(db).await.map_err(|e| internal_error("preflight", e))?;
 
@@ -394,7 +420,7 @@ pub async fn preflight(
     .await
     .map_err(|e| internal_error("preflight policies", e))?;
 
-    let mut checks = vec![check_any_policy_enabled(policies.len(), sites as usize)];
+    let mut checks = vec![check_any_policy_enabled(policies.len(), sites)];
 
     for (name, destination_id, destination_name) in policies {
         checks.push(check_backup_destination(&PolicyDestinationFacts {
@@ -415,8 +441,10 @@ pub async fn health(
 ) -> Result<Json<BackupHealth>, ApiError> {
     let db = &state.db;
 
-    let (total_site,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backups")
-        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
+    // R3: no query against the `backups` (site) table. `total_site_backups`
+    // is reported as 0 below, and site storage no longer enters
+    // `total_storage_bytes`. The table itself survives until the R7
+    // migration; its rows are legacy site backups whose routes are gone.
     let (total_db,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM database_backups")
         .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (total_vol,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM volume_backups")
@@ -425,22 +453,21 @@ pub async fn health(
     // SUM(BIGINT) returns NUMERIC in postgres — cast back to bigint so sqlx can
     // decode into Option<i64>. Empty rowsets give NULL, populated ones used to
     // 500 with "INT8 not compatible with NUMERIC" until this cast was added.
-    let (site_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes)::bigint FROM backups")
-        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (db_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes)::bigint FROM database_backups")
         .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (vol_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes)::bigint FROM volume_backups")
         .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
-    let total_storage = site_storage.unwrap_or(0) + db_storage.unwrap_or(0) + vol_storage.unwrap_or(0);
+    let total_storage = db_storage.unwrap_or(0) + vol_storage.unwrap_or(0);
 
-    // Count successful schedules in last 24h
-    let (success_24h,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM backup_schedules WHERE last_status = 'success' AND last_run > NOW() - INTERVAL '24 hours'"
-    ).fetch_one(db).await.map_err(|e| internal_error("health", e))?;
-    let (failed_24h,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM backup_schedules WHERE last_status = 'failed' AND last_run > NOW() - INTERVAL '24 hours'"
-    ).fetch_one(db).await.map_err(|e| internal_error("health", e))?;
+    // R3: the last-24h counts read `backup_schedules.last_status`, which is
+    // written only by the per-site schedule sweep
+    // (services/backup_scheduler). That sweep is site-only, so these counts
+    // were a site-only signal; policy runs record their outcome on
+    // `backup_policies`, not here. Reported as 0 rather than counting
+    // legacy per-site schedule rows.
+    let success_24h: i64 = 0;
+    let failed_24h: i64 = 0;
 
     let (policies_active,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backup_policies WHERE enabled = TRUE")
         .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
@@ -452,58 +479,22 @@ pub async fn health(
     let (verif_failed,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backup_verifications WHERE status = 'failed'")
         .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
-    // Find stale sites (no backup in > 7 days)
-    //
-    // The join admits only archives that landed where they were meant to. An
-    // upload that exhausted its retries still writes a row — that row is what
-    // makes the local file reapable — but it is not off-site, so counting it as
-    // a fresh backup would quietly disarm this list for exactly the site whose
-    // destination is down.
-    //
-    // `last_backup` is Option because the HAVING clause deliberately admits sites
-    // that have NEVER been backed up — those are the ones that matter most — and
-    // a LEFT JOIN miss makes MAX() NULL. Decoding that into a bare DateTime made
-    // `fetch_all` fail on the FIRST row (NULLS FIRST sorts them to the front),
-    // and `unwrap_or_default` then blanked the entire warning, including the
-    // genuinely-stale sites that decoded fine.
-    let stale_sites: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT s.domain, MAX(b.created_at) as last_backup \
-         FROM sites s LEFT JOIN backups b ON b.site_id = s.id \
-                                        AND (b.destination_id IS NULL OR b.uploaded) \
-         GROUP BY s.id, s.domain \
-         HAVING MAX(b.created_at) IS NULL OR MAX(b.created_at) < NOW() - INTERVAL '7 days' \
-         ORDER BY MAX(b.created_at) NULLS FIRST LIMIT 10"
-    ).fetch_all(db).await
-    .map_err(|e| { tracing::error!("backup health: stale-site query failed: {e}"); e })
-    .unwrap_or_default();
-
-    let now = chrono::Utc::now();
-    let stale_backups: Vec<StaleBackup> = stale_sites.into_iter().map(|(domain, last)| {
-        StaleBackup {
-            resource_type: "site".into(),
-            resource_name: domain,
-            // None = never backed up at all. `days_since` is left null rather
-            // than faked from epoch so the UI can say so instead of printing an
-            // arithmetic artefact like "20789 days".
-            days_since: last.map(|l| (now - l).num_days()),
-            last_backup: last,
-        }
-    }).collect();
+    // R1 emptied the stale-sites list (it enumerated the `sites` table).
+    // R3 removes the site kind entirely: `stale_backups` is empty, full
+    // stop. A stale list for the surviving kinds is new behaviour and is
+    // not built here.
+    let stale_backups: Vec<StaleBackup> = Vec::new();
 
     // ── SLA windowed view (W1.1) ────────────────────────────────────────────
     // "Of the last N backups across all kinds, how many are verified?"
     // Latest verification per (kind, backup_id) wins (re-verifications supersede).
     const SLA_WINDOW: i64 = 30;
-    // `backups` has NO server_id column — a site reaches its server through
-    // `sites`, exactly as the unified list query above does. Selecting it
-    // directly made this statement fail at PLAN time, on every request, on every
-    // install, from the day the card shipped.
+    // `backups` (site) rows are excluded entirely in R3: the site kind is
+    // removed, so the window covers database and volume backups only. The
+    // per-server breakdown below already excluded them in R1.
     let mut sla_unavailable = false;
     let (sla_verified, sla_failed, sla_pending): (i64, i64, i64) = sqlx::query_as(
         "WITH all_backups AS ( \
-            SELECT b.id, b.created_at, s.server_id, 'site'::text AS kind \
-              FROM backups b JOIN sites s ON s.id = b.site_id \
-            UNION ALL \
             SELECT id, created_at, server_id, 'database'::text FROM database_backups \
             UNION ALL \
             SELECT id, created_at, server_id, 'volume'::text FROM volume_backups \
@@ -534,8 +525,6 @@ pub async fn health(
     // for backups created in the last 30 days that have a passed verification.
     let (lag_p50, lag_p95): (Option<f64>, Option<f64>) = sqlx::query_as(
         "WITH all_backups AS ( \
-            SELECT id, created_at, 'site'::text AS kind FROM backups \
-            UNION ALL \
             SELECT id, created_at, 'database'::text FROM database_backups \
             UNION ALL \
             SELECT id, created_at, 'volume'::text FROM volume_backups \
@@ -558,8 +547,6 @@ pub async fn health(
     // Oldest unverified backup age in days (across all kinds, ignoring backups > 90d old).
     let oldest_unverified_days: Option<i64> = sqlx::query_scalar(
         "WITH all_backups AS ( \
-            SELECT id, created_at, 'site'::text AS kind FROM backups \
-            UNION ALL \
             SELECT id, created_at, 'database'::text FROM database_backups \
             UNION ALL \
             SELECT id, created_at, 'volume'::text FROM volume_backups \
@@ -578,11 +565,12 @@ pub async fn health(
     // Per-server SLA: same windowed view, grouped by server_id.
     // Bigger window (90d) here so the breakdown isn't dominated by whichever
     // server happened to back up most recently.
+    // R1 excluded site backups from this breakdown (grouping them would
+    // require a server_id they no longer had). R3 removes the site kind
+    // from the windowed view above too, so this query and that one now
+    // cover the same two kinds.
     let per_server_rows: Vec<(Option<Uuid>, String, i64, i64, Option<f64>)> = sqlx::query_as(
         "WITH all_backups AS ( \
-            SELECT b.id, b.created_at, s.server_id, 'site'::text AS kind \
-              FROM backups b JOIN sites s ON s.id = b.site_id \
-            UNION ALL \
             SELECT id, created_at, server_id, 'database'::text FROM database_backups \
             UNION ALL \
             SELECT id, created_at, server_id, 'volume'::text FROM volume_backups \
@@ -639,7 +627,7 @@ pub async fn health(
     .unwrap_or((0, 0));
 
     Ok(Json(BackupHealth {
-        total_site_backups: total_site,
+        total_site_backups: 0,
         total_db_backups: total_db,
         total_volume_backups: total_vol,
         total_storage_bytes: total_storage,
@@ -714,7 +702,7 @@ pub async fn create_policy(
     .bind(claims.sub)
     .bind(req.server_id)
     .bind(&req.name)
-    .bind(req.backup_sites.unwrap_or(true))
+    .bind(false)
     .bind(req.backup_databases.unwrap_or(true))
     .bind(req.backup_volumes.unwrap_or(false))
     .bind(&schedule)
@@ -785,7 +773,7 @@ pub async fn update_policy(
         "UPDATE backup_policies SET \
          name = COALESCE(NULLIF($2, ''), name), \
          server_id = $3, \
-         backup_sites = COALESCE($4, backup_sites), \
+         backup_sites = $4, \
          backup_databases = COALESCE($5, backup_databases), \
          backup_volumes = COALESCE($6, backup_volumes), \
          schedule = COALESCE(NULLIF($7, ''), schedule), \
@@ -802,7 +790,10 @@ pub async fn update_policy(
     .bind(id)
     .bind(&req.name)
     .bind(server_id)
-    .bind(req.backup_sites)
+    // R3: $4 forces `backup_sites` FALSE on every update. The placeholder
+    // stays so $5..$14 keep their numbering; no value from the request
+    // can re-enable the removed site kind.
+    .bind(false)
     .bind(req.backup_databases)
     .bind(req.backup_volumes)
     .bind(req.schedule.as_deref().unwrap_or(""))
@@ -861,10 +852,13 @@ pub async fn protect_all(
             &format!("Policy '{}' already exists (id: {})", policy_name, existing_id)));
     }
 
+    // R3: "Protect Everything" covers databases and volumes only. The
+    // first TRUE below used to enable site backups; it now binds FALSE
+    // for the `backup_sites` column, which survives until R7.
     let policy: BackupPolicy = sqlx::query_as(
         "INSERT INTO backup_policies (user_id, name, backup_sites, backup_databases, backup_volumes, \
          schedule, retention_count, encrypt, verify_after_backup, enabled) \
-         VALUES ($1, $2, TRUE, TRUE, TRUE, '0 2 * * *', 7, FALSE, TRUE, TRUE) \
+         VALUES ($1, $2, FALSE, TRUE, TRUE, '0 2 * * *', 7, FALSE, TRUE, TRUE) \
          RETURNING *"
     )
     .bind(claims.sub)
@@ -885,7 +879,7 @@ pub async fn protect_all(
         "id": policy.id,
         "name": policy_name,
         "schedule": "0 2 * * *",
-        "backup_sites": true,
+        "backup_sites": false,
         "backup_databases": true,
         "backup_volumes": true,
         "retention_count": 7,
@@ -906,11 +900,19 @@ pub async fn create_db_backup(
     AuthUser(claims): AuthUser,
     Json(req): Json<CreateDbBackupRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    // Fetch database details (join with sites for user ownership and server_id)
+    // Fetch database details. Ownership and server_id resolve through the
+    // database's STACK owner only: site-kind resolution was removed in R1,
+    // so the `sites` arm of the owner pattern used in routes/databases.rs
+    // (COALESCE of the site and stack owners) is gone here, and the site
+    // kind itself is removed in R3. A site-owned database therefore matches
+    // no row and 404s below, exactly as a stack-owned database did before
+    // this change (the old inner join to `sites` dropped rows whose
+    // `site_id` was NULL); a stack-owned database now resolves, via
+    // `docker_stacks`, where it previously could not.
     let row: Option<(Uuid, String, String, String, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT d.id, d.name, d.engine, d.db_user, d.db_password_enc, s.server_id \
-         FROM databases d JOIN sites s ON d.site_id = s.id \
-         WHERE d.id = $1 AND s.user_id = $2"
+        "SELECT d.id, d.name, d.engine, d.db_user, d.db_password_enc, st.server_id \
+         FROM databases d JOIN docker_stacks st ON d.stack_id = st.id \
+         WHERE d.id = $1 AND st.user_id = $2"
     )
     .bind(req.database_id).bind(claims.sub)
     .fetch_optional(&state.db).await
@@ -919,8 +921,8 @@ pub async fn create_db_backup(
     let (db_id, db_name, engine, user, password_enc, server_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
 
-    // Dump on the host the SITE lives on. This handler already held the answer: the
-    // join above reads `s.server_id` and the INSERT below stamps the new row with it,
+    // Dump on the host the database's STACK lives on. This handler already held the answer: the
+    // join above reads `st.server_id` and the INSERT below stamps the new row with it,
     // while the dump itself went to whatever agent the caller's server switcher named
     // (an HTTP header with a local-agent fallback). So the archive was written on host
     // A and the row claimed host B — a guaranteed lie the moment the two disagree, and
@@ -936,8 +938,9 @@ pub async fn create_db_backup(
     // secret it has no business holding. Resolving before the decrypt keeps a refusal
     // from ever unwrapping it.
     //
-    // `backup_policy_executor` runs this exact dump from the same join and has always
-    // resolved `agents.for_server(s.server_id)` for it. The scheduled path was right and
+    // `backup_policy_executor` runs this exact dump from the owner join (sites +
+    // stacks) and has always resolved `agents.for_server(<owner server_id>)` for it.
+    // The scheduled path was right and
     // the operator-pressed button never adopted it — that asymmetry is the whole defect.
     let agent = crate::helpers::agent_for_site_server(
         &state, server_id, &format!("database {db_name}"),
@@ -1016,9 +1019,16 @@ pub async fn list_db_backups(
 ) -> Result<Json<Vec<DatabaseBackup>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
 
+    // R1: ownership resolves through the stack owner only (see create_db_backup
+    // above). Backups of site-owned databases are no longer listed; backups of
+    // stack-owned databases are now listed, where the old inner join to `sites`
+    // dropped them. Scoping by the backup row's own `server_id` instead was
+    // rejected: it would widen a non-admin caller to every local-server backup
+    // regardless of owner, and the credentials lookup in restore_db_backup
+    // below is gated only by this lookup.
     let backups: Vec<DatabaseBackup> = sqlx::query_as(
         "SELECT db.* FROM database_backups db \
-         JOIN databases d ON d.id = db.database_id JOIN sites s ON d.site_id = s.id AND s.user_id = $1 \
+         JOIN databases d ON d.id = db.database_id JOIN docker_stacks st ON st.id = d.stack_id AND st.user_id = $1 \
          ORDER BY db.created_at DESC LIMIT $2 OFFSET $3"
     )
     .bind(claims.sub).bind(limit).bind(offset)
@@ -1034,9 +1044,10 @@ pub async fn delete_db_backup(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // R1: stack-owner scoping only; site-owned backups now 404 (see list_db_backups).
     let backup: Option<DatabaseBackup> = sqlx::query_as(
         "SELECT db.* FROM database_backups db \
-         JOIN databases d ON d.id = db.database_id JOIN sites s ON d.site_id = s.id AND s.user_id = $1 \
+         JOIN databases d ON d.id = db.database_id JOIN docker_stacks st ON st.id = d.stack_id AND st.user_id = $1 \
          WHERE db.id = $2"
     )
     .bind(claims.sub).bind(id)
@@ -1082,10 +1093,11 @@ pub async fn restore_db_backup(
     Path(id): Path<Uuid>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Look up the backup record, verify ownership
+    // Look up the backup record, verify ownership.
+    // R1: stack-owner scoping only; site-owned backups now 404 (see list_db_backups).
     let backup: Option<DatabaseBackup> = sqlx::query_as(
         "SELECT db.* FROM database_backups db \
-         JOIN databases d ON d.id = db.database_id JOIN sites s ON d.site_id = s.id AND s.user_id = $1 \
+         JOIN databases d ON d.id = db.database_id JOIN docker_stacks st ON st.id = d.stack_id AND st.user_id = $1 \
          WHERE db.id = $2"
     )
     .bind(claims.sub).bind(id)
@@ -1438,10 +1450,21 @@ async fn agent_for_backup(
     backup_type: &str,
     backup_id: Uuid,
 ) -> Result<(Option<Uuid>, crate::services::agent::AgentHandle), ApiError> {
-    // `backups` carries no server_id of its own — a site backup reaches its host through
-    // the site, the same hop the unified list and the SLA queries above already make.
+    // `backups` carries no server_id of its own, and a site backup reached its
+    // host only through the site row. Site-kind resolution was removed in
+    // R1 and the site kind itself is removed in R3: there is no server to
+    // resolve a site backup to, and none is fabricated. This rejection
+    // stays as the gate for both handlers below even though their own
+    // site arms are gone — a `backup_type` of "site" fails here, before
+    // any verification/drill row is written, rather than acting through
+    // a guessed host.
+    if backup_type == "site" {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "Site backup not found: site-kind host resolution was removed",
+        ));
+    }
     let sql = match backup_type {
-        "site" => "SELECT s.server_id FROM backups b JOIN sites s ON s.id = b.site_id WHERE b.id = $1",
         "database" => "SELECT server_id FROM database_backups WHERE id = $1",
         "volume" => "SELECT server_id FROM volume_backups WHERE id = $1",
         _ => return Err(err(StatusCode::BAD_REQUEST, "Invalid backup type")),
@@ -1461,7 +1484,7 @@ async fn agent_for_backup(
 
 #[derive(serde::Deserialize)]
 pub struct VerifyRequest {
-    pub backup_type: String, // site, database, volume
+    pub backup_type: String, // database, volume
     pub backup_id: Uuid,
 }
 
@@ -1503,23 +1526,9 @@ pub async fn trigger_verify(
     // Run verification async
     tokio::spawn(async move {
         let result: Result<serde_json::Value, String> = match backup_type.as_str() {
-            "site" => {
-                let row = sqlx::query_as::<_, (String, String)>(
-                    "SELECT s.domain, b.filename FROM backups b JOIN sites s ON s.id = b.site_id WHERE b.id = $1"
-                ).bind(backup_id).fetch_optional(&db).await;
-
-                match row {
-                    Ok(Some((domain, filename))) => {
-                        let body = serde_json::json!({ "domain": domain, "filename": filename });
-                        agent.post("/backups/verify/site", Some(body)).await.map_err(|e| e.to_string())
-                    }
-                    Ok(None) => Err("Backup not found".to_string()),
-                    Err(e) => {
-                        tracing::warn!("DB error fetching site backup for verification: {e}");
-                        Err(format!("Database error: {e}"))
-                    }
-                }
-            }
+            // R3: no "site" arm. `agent_for_backup` above already rejects
+            // the site kind before this task spawns; anything else unknown
+            // falls through to the `_` arm below.
             "database" => {
                 let row = sqlx::query_as::<_, (String, String, String)>(
                     "SELECT db_type, db_name, filename FROM database_backups WHERE id = $1"
@@ -1644,19 +1653,20 @@ pub async fn list_verifications(
 
 #[derive(serde::Deserialize)]
 pub struct DrillRequest {
-    pub backup_type: String, // site | database | volume
+    pub backup_type: String, // database | volume
     pub backup_id: Uuid,
 }
 
 /// POST /api/backup-orchestrator/drill — Trigger an on-demand backup drill.
-/// Supports `backup_type = "site"` (W1.2.a), `"database"` (W1.2.b),
-/// and `"volume"` (W1.2.c).
+/// Supports `backup_type = "database"` (W1.2.b) and `"volume"` (W1.2.c).
+/// R3: the `"site"` kind (W1.2.a) is removed; it is rejected below as an
+/// unsupported backup type, before any drill row is written.
 pub async fn trigger_drill(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
     Json(req): Json<DrillRequest>,
 ) -> Result<(StatusCode, Json<BackupDrill>), ApiError> {
-    if req.backup_type != "site" && req.backup_type != "database" && req.backup_type != "volume" {
+    if req.backup_type != "database" && req.backup_type != "volume" {
         return Err(err(StatusCode::BAD_REQUEST, "Unsupported backup_type"));
     }
 
@@ -1698,24 +1708,9 @@ pub async fn trigger_drill(
     // handlers with.
     tokio::spawn(async move {
         let result: Result<serde_json::Value, String> = match backup_type.as_str() {
-            "site" => {
-                let row = sqlx::query_as::<_, (String, String)>(
-                    "SELECT s.domain, b.filename FROM backups b \
-                     JOIN sites s ON s.id = b.site_id WHERE b.id = $1"
-                ).bind(backup_id).fetch_optional(&db).await;
-
-                match row {
-                    Ok(Some((domain, filename))) => {
-                        let body = serde_json::json!({ "domain": domain, "filename": filename });
-                        agent.post_long("/backups/drill/site", Some(body), crate::services::agent::DRILL_TIMEOUT_SECS).await.map_err(|e| e.to_string())
-                    }
-                    Ok(None) => Err("Site backup not found".to_string()),
-                    Err(e) => {
-                        tracing::warn!("DB error fetching site backup for drill: {e}");
-                        Err(format!("Database error: {e}"))
-                    }
-                }
-            }
+            // R3: no "site" arm. The validation above rejects the site
+            // kind, and `agent_for_backup` rejects it too; a drill is a
+            // real restore and must never run on a guessed host.
             "database" => {
                 let row = sqlx::query_as::<_, (String, String, String)>(
                     "SELECT db_type, db_name, filename FROM database_backups WHERE id = $1"
@@ -1829,10 +1824,10 @@ pub async fn list_drills(
 
 #[derive(serde::Serialize)]
 pub struct ChainReportBackup {
-    /// One of "site" | "database" | "volume". The typst template branches on this.
+    /// One of "database" | "volume". The typst template branches on this.
     pub kind: String,
     pub id: Uuid,
-    /// Domain for site, db_name for database, "container:volume" for volume.
+    /// db_name for database, "container:volume" for volume.
     pub resource_name: String,
     pub filename: String,
     pub size_bytes: i64,
@@ -1840,6 +1835,9 @@ pub struct ChainReportBackup {
     pub previous_hash: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     // Kind-specific extras — exactly one set is populated, the others are None.
+    // `site_id` is always None since R3 (the site kind is removed); the
+    // field stays so the JSON shape does not change for database/volume
+    // reports.
     pub site_id: Option<Uuid>,
     pub database_id: Option<Uuid>,
     pub container_id: Option<String>,
@@ -1901,10 +1899,12 @@ pub struct ChainReport {
 /// don't drift.
 fn parse_chain_kind(kind: &str) -> Result<&'static str, ApiError> {
     match kind {
-        "site" => Ok("site"),
+        // R3: "site" is no longer a kind. It is rejected here with the same
+        // 400 as any unknown kind (previously it passed this gate and 404'd
+        // in `build_chain_report`).
         "database" => Ok("database"),
         "volume" => Ok("volume"),
-        _ => Err(err(StatusCode::BAD_REQUEST, "kind must be one of: site, database, volume")),
+        _ => Err(err(StatusCode::BAD_REQUEST, "kind must be one of: database, volume")),
     }
 }
 
@@ -1924,42 +1924,17 @@ async fn build_chain_report(
     // caller_id` — the same predicate `list_volume_backups`/`restore_volume_backup`
     // already established for this exact fleet (v2.184.0). Before this fix `AdminUser`
     // alone gated these two handlers, and every query here was a bare `WHERE id = $1`:
-    // any admin could pull another admin's backup provenance (site domain, db/container
+    // any admin could pull another admin's backup provenance (db/container
     // names, filenames, full hash chain, every verification and drill) as JSON or PDF —
     // the same bug `list_all_backups` below carries, just reached through a different
-    // route. A `server_id` predating the fleet backfill (NULL, database/volume only —
-    // `sites.server_id` is NOT NULL) fails closed via the JOIN rather than falling back
-    // to "visible to nobody in particular", matching the established precedent.
+    // route. A `server_id` predating the fleet backfill (NULL, database/volume only)
+    // fails closed via the JOIN rather than falling back to "visible to nobody in
+    // particular", matching the established precedent.
+    // R3: there is no site branch. It was removed in R1 (its resource name
+    // and server scope both lived only in `sites`) and the kind itself is
+    // rejected by `parse_chain_kind`; the database/volume branches are
+    // unchanged.
     let backup = match kind {
-        "site" => {
-            let row: Option<(
-                Uuid, Uuid, String, String, i64,
-                Option<String>, Option<String>,
-                chrono::DateTime<chrono::Utc>,
-            )> = sqlx::query_as(
-                "SELECT b.id, b.site_id, s.domain, b.filename, b.size_bytes, \
-                        b.sha256_hash, b.previous_hash, b.created_at \
-                   FROM backups b JOIN sites s ON s.id = b.site_id \
-                   JOIN servers sv ON sv.id = s.server_id AND (sv.is_local OR sv.user_id = $2) \
-                  WHERE b.id = $1"
-            )
-            .bind(backup_id)
-            .bind(caller_id)
-            .fetch_optional(&state.db).await
-            .map_err(|e| internal_error("chain report: load site backup", e))?;
-
-            let (id, site_id, resource_name, filename, size_bytes, sha256_hash, previous_hash, created_at) =
-                row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
-
-            ChainReportBackup {
-                kind: "site".into(),
-                id, resource_name, filename, size_bytes,
-                sha256_hash, previous_hash,
-                created_at,
-                site_id: Some(site_id),
-                database_id: None, container_id: None, volume_name: None, db_type: None,
-            }
-        }
         "database" => {
             let row: Option<(
                 Uuid, Uuid, String, String, String, i64,
@@ -2102,7 +2077,7 @@ fn short_id(id: Uuid) -> String {
     id.to_string().chars().take(8).collect()
 }
 
-/// Helper: sanitise a site name into a filesystem-safe slug for the PDF
+/// Helper: sanitise a resource name into a filesystem-safe slug for the PDF
 /// filename. Keeps alphanum + dashes; collapses other chars to "-".
 fn slug(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -2120,7 +2095,7 @@ fn slug(s: &str) -> String {
 }
 
 /// GET /api/backup-orchestrator/chain-report/{kind}/{id} — Chain-of-trust
-/// JSON for one backup of any kind (site | database | volume). Single
+/// JSON for one backup of any kind (database | volume). Single
 /// artifact, full provenance chain (backup integrity hashes + every
 /// verification + every restore drill).
 pub async fn chain_report_json(

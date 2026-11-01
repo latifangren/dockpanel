@@ -46,7 +46,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
 
             if needs_scan {
                 tracing::info!("Running scheduled weekly security scan on {}", member.name);
-                run_scan(&pool, &member, agents.jwt_secret()).await;
+                run_scan(&pool, &member).await;
             }
         }
 
@@ -61,7 +61,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
     }
 }
 
-async fn run_scan(pool: &PgPool, member: &FleetMember, jwt_secret: &str) {
+async fn run_scan(pool: &PgPool, member: &FleetMember) {
     let agent = &member.agent;
 
     // Create scan record, naming the host it is a scan OF.
@@ -214,7 +214,7 @@ async fn run_scan(pool: &PgPool, member: &FleetMember, jwt_secret: &str) {
 
     // Auto-fix safe findings (non-destructive only)
     if let Some(findings) = findings {
-        auto_fix_safe_findings(pool, member, findings, jwt_secret).await;
+        auto_fix_safe_findings(pool, member, findings).await;
     }
 
     // Keep only last 90 days of scans
@@ -288,164 +288,6 @@ async fn run_scan(pool: &PgPool, member: &FleetMember, jwt_secret: &str) {
     }
 }
 
-/// Raise an alert when a certificate this scanner found to be expiring cannot be
-/// renewed. Deduped per site so the six-hourly scan cannot stack up duplicates
-/// alongside the auto-healer's own alert for the same certificate.
-/// A renewal DockPanel deliberately did not perform, because the certificate is
-/// not one it issued.
-///
-/// Deliberately NOT `ssl_renewal_alert`. That helper's words are
-/// "SSL renewal failed", "could not renew it automatically" and severity
-/// `critical` — three statements that are all false here. Nothing failed and
-/// nothing was prevented: the panel declined, correctly, to overwrite somebody
-/// else's certificate. Sending that operator a critical page about a failure
-/// would be the same defect this release exists to remove, one layer further
-/// out — and it would train them to ignore the alert that means their site is
-/// about to go dark.
-///
-/// The `alert_type` is unchanged so routing, dedupe and every notification lane
-/// behave exactly as before; only the wording and the severity differ.
-async fn ssl_renewal_declined_alert(
-    pool: &PgPool,
-    user_id: uuid::Uuid,
-    site_id: uuid::Uuid,
-    domain: &str,
-    issuer: &str,
-) {
-    notifications::fire_alert_deduped(
-        pool,
-        user_id,
-        None,
-        Some(site_id),
-        "ssl_renewal_failure",
-        notifications::ssl_renewal_key::DECLINED,
-        "warning",
-        &format!("SSL certificate for {domain} needs renewing by you"),
-        &format!(
-            "The certificate for {domain} is expiring, and DockPanel did not renew it \
-             because it did not issue it: it was issued by {issuer}. Renewing here would \
-             have replaced your certificate with a Let's Encrypt one. Renew it wherever it \
-             was issued and upload the replacement under the site's SSL tab."
-        ),
-        12,
-    )
-    .await;
-}
-
-async fn ssl_renewal_alert(
-    pool: &PgPool,
-    user_id: uuid::Uuid,
-    site_id: uuid::Uuid,
-    domain: &str,
-    reason: &str,
-) {
-    notifications::fire_alert_deduped(
-        pool,
-        user_id,
-        None,
-        Some(site_id),
-        "ssl_renewal_failure",
-        notifications::ssl_renewal_key::FAILED,
-        "critical",
-        &format!("SSL renewal failed: {domain}"),
-        &format!(
-            "The certificate for {domain} is expiring and DockPanel could not renew \
-             it automatically: {reason}. The site will stop loading when the \
-             certificate expires."
-        ),
-        12,
-    )
-    .await;
-}
-
-/// A DNS-01 certificate this loop DECLINED to renew, while the cause is still
-/// fixable.
-///
-/// ⚠ Not `ssl_renewal_alert`. That helper says "SSL renewal failed" and pages at
-/// `critical`; neither is true of a refusal the panel made on purpose. This is
-/// the same split `ssl_renewal_declined_alert` draws for a foreign issuer, and
-/// `ssl-correctness` pins the failure helper's count with a comment saying in so
-/// many words that a decline wired back into the failure wording is a defect.
-async fn ssl_dns01_declined_alert(
-    pool: &PgPool,
-    user_id: uuid::Uuid,
-    site_id: uuid::Uuid,
-    domain: &str,
-    reason: &str,
-) {
-    notifications::fire_alert_deduped(
-        pool,
-        user_id,
-        None,
-        Some(site_id),
-        "ssl_renewal_failure",
-        notifications::ssl_renewal_key::DNS01_DECLINED,
-        "warning",
-        &format!("SSL certificate for {domain} needs a Cloudflare zone"),
-        reason,
-        12,
-    )
-    .await;
-}
-
-/// A DNS-01 certificate downgraded to a single name on purpose, in its last
-/// week. `critical`, because names stopped being covered — but never worded as a
-/// failure, because a certificate WAS installed.
-async fn ssl_dns01_downgraded_alert(
-    pool: &PgPool,
-    user_id: uuid::Uuid,
-    site_id: uuid::Uuid,
-    domain: &str,
-    losing: &str,
-) {
-    notifications::fire_alert_deduped(
-        pool,
-        user_id,
-        None,
-        Some(site_id),
-        "ssl_renewal_failure",
-        notifications::ssl_renewal_key::DNS01_DOWNGRADED,
-        "critical",
-        &format!("SSL certificate downgraded: {domain}"),
-        &format!(
-            "The certificate for {domain} covered {losing} and could not be re-ordered over \
-             DNS-01 before it expired, so DockPanel issued a single-name certificate for \
-             {domain} instead. Any other name it covered is no longer covered."
-        ),
-        12,
-    )
-    .await;
-}
-
-/// Give every currently-deployed Docker App with a domain an owner row in
-/// `docker_app_domains`, if it doesn't already have one.
-///
-/// Migration `20260905180000_docker_app_ssl_domains.sql` only writes this
-/// table going FORWARD — `routes::docker_apps::deploy`'s INSERT. Any app
-/// deployed before that migration landed, or restored from a backup taken
-/// before it, never gets a row and stays exactly as invisible to
-/// [`renew_docker_app_certificate`] as it was before the migration shipped —
-/// the same gap the migration's own commit claims to have closed, just moved
-/// to "before my first upgrade" instead of "always". Unlike `docker_stacks`'
-/// analogous migration (`20260826000000_tls_certificate_registry.sql`), which
-/// backfilled with a plain `UPDATE` because every stack already had a row to
-/// update, a Docker app has no pre-existing row — `domain_claim`'s own
-/// comment: "Docker apps are not rows" — so recovering one means asking the
-/// agent what is actually running, the same call `routes::docker_apps::list_apps`
-/// already makes.
-///
-/// Deliberately conservative: `tls_mode`/`ssl_email` are left NULL (unknown)
-/// rather than guessed from the container, so a reconciled row can never be
-/// mistaken for a confirmed ACME certificate and trigger a renewal over an
-/// operator-provided one. [`renew_docker_app_certificate`] treats a NULL
-/// `tls_mode` as "unconfirmed" and declines, distinctly from a real `none`.
-/// `ON CONFLICT DO NOTHING`: an existing row already carries real deploy-time
-/// values and must never be clobbered by a reconciliation pass.
-///
-/// Runs once per scheduled scan (weekly per host, gated by `run`'s own
-/// cadence check) rather than once at backend startup, so a row lost to a
-/// database restore self-heals on the next scan instead of needing its own
-/// schedule to stay correct.
 async fn reconcile_docker_app_domains(pool: &PgPool, member: &FleetMember) {
     let apps = match member.agent.get("/apps").await {
         Ok(v) => v,
@@ -509,12 +351,7 @@ pub(crate) async fn auto_fix_safe_findings(
     pool: &PgPool,
     member: &FleetMember,
     findings: &[serde_json::Value],
-    // The key stored credentials are encrypted under, threaded from `run` so a
-    // DNS-01 renewal here can open the Cloudflare token that ISSUED the
-    // certificate. This loop has no `AppState` and no session.
-    jwt_secret: &str,
 ) {
-    let agent = &member.agent;
     for f in findings {
         let check_type = f["check_type"].as_str().unwrap_or("");
         match check_type {
@@ -543,352 +380,22 @@ pub(crate) async fn auto_fix_safe_findings(
                 // certificate that was actually renewed kept counting down), and
                 // pushed that host's full vhost through THIS host's agent.
                 // Unattended, on the scan loop's own schedule.
-                let site: Option<(
-                    uuid::Uuid,
-                    String,
-                    Option<i32>,
-                    Option<String>,
-                    Option<String>,
-                    uuid::Uuid,
-                    Option<String>,
-                )> = sqlx::query_as(
-                    "SELECT s.id, s.runtime, s.proxy_port, s.php_version, s.root_path, s.user_id, \
-                            s.ssl_profile \
-                     FROM sites s WHERE s.domain = $1 AND s.server_id = $2 AND s.ssl_enabled = TRUE",
-                )
-                .bind(domain)
-                .bind(member.id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
-
-                let Some((site_id, runtime, proxy_port, php_version, root_path, user_id, ssl_profile)) =
-                    site
-                else {
-                    // The subject came from the agent's FILESYSTEM walk of
-                    // /etc/dockpanel/ssl, which is where a Compose stack's ACME
-                    // certificate — and a Docker app's — also lands. Neither a
-                    // stack's domain nor an app's can ever own a `sites` row
-                    // (`domain_claim::find_occupant` returns `Occupant::Stack`/
-                    // `Occupant::DockerApp` and every `INSERT INTO sites` goes
-                    // through `ensure_claimable`), so this read cannot ever
-                    // match either. Until v2.161.0 a stack fell out of this loop
-                    // here with no log, no alert and no renewal; a Docker app
-                    // had the identical gap until this fallback existed at all
-                    // (no `docker_apps`/`deployed_apps` table ever gave it a row
-                    // to be found by) — in both cases the panel raised a
-                    // critical `ssl_expiry` finding naming the domain every
-                    // week and then had nothing behind it.
-                    if !renew_stack_certificate(pool, member, domain).await
-                        && !renew_docker_app_certificate(pool, member, domain).await
-                    {
-                        tracing::info!(
-                            "Auto-fix: {domain} is expiring on {} but matches neither a site, a \
-                             Compose stack, nor a Docker app on that host — nothing here can \
-                             renew it",
-                            member.name
-                        );
-                    }
-                    continue;
-                };
-
-                // Look up owner email for ACME registration
-                let email: Option<String> = sqlx::query_scalar(
-                    "SELECT email FROM users WHERE id = $1",
-                )
-                .bind(user_id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
-
-                let Some(owner_email) = email else {
-                    tracing::warn!("Auto-fix: cannot renew SSL for {domain} — owner email not found");
-                    ssl_renewal_alert(
-                        pool,
-                        user_id,
-                        site_id,
-                        domain,
-                        "the site's owner account has no email address on file",
-                    )
-                    .await;
-                    continue;
-                };
-
-                // Resolve through the SAME path issuance uses. Without this the
-                // panel-wide `acme_contact_email` rescue applies only when a human
-                // clicks, so a box whose owner address cannot be an ACME contact
-                // (reserved TLD, typo) issues fine and then silently fails to renew
-                // ~60 days later.
-                let email = match crate::routes::ssl::resolve_acme_contact(pool, &owner_email).await {
-                    Ok(addr) => addr,
-                    Err(reason) => {
-                        tracing::warn!("Auto-fix: cannot renew SSL for {domain} — {reason}");
-                        ssl_renewal_alert(pool, user_id, site_id, domain, &reason).await;
-                        continue;
-                    }
-                };
-
-                // ⛔ DO NOT REPLACE A CERTIFICATE THIS PRODUCT DID NOT ISSUE.
-                //
-                // This is the ONLY automatic renewal on a stock install and it is
-                // reached with no opt-in at all, so what it does unattended is what
-                // the product does by default. What it did was a full ACME order
-                // writing the same `fullchain.pem` an uploaded certificate occupies:
-                // the finding it acts on comes from the AGENT walking
-                // `/etc/dockpanel/ssl` with `openssl -checkend`, which never looks at
-                // the issuer and never consults the database — so a commercial
-                // wildcard, a Cloudflare Origin CA certificate or a corporate PKI
-                // certificate uploaded through the panel's own "upload certificate"
-                // control was silently destroyed roughly a month before it expired,
-                // every week, on every install. The operator's evidence was a working
-                // site that had quietly stopped presenting the certificate they paid
-                // for.
-                //
-                // `None` means "not proven foreign" — an unreachable agent, an
-                // unreadable certificate — and MUST still renew. Refusing on doubt
-                // would let a genuine Let's Encrypt certificate lapse, which is the
-                // failure this loop exists to prevent.
-                if let Some(issuer) =
-                    crate::helpers::foreign_cert_issuer(agent, domain).await
+                // R3: sites are gone, so there is no `sites` row left to resolve
+                // a domain to. A name the agent's filesystem walk reports can
+                // now only belong to a Compose stack or a Docker app — try
+                // those two renewal doors directly, exactly as the old
+                // no-site fallback did.
+                if !renew_stack_certificate(pool, member, domain).await
+                    && !renew_docker_app_certificate(pool, member, domain).await
                 {
                     tracing::info!(
-                        "Auto-fix: NOT renewing {domain} — the installed certificate was \
-                         issued by {issuer}, not by DockPanel. Renewing would replace it."
+                        "Auto-fix: {domain} is expiring on {} but matches neither a \
+                         Compose stack nor a Docker app on that host — nothing here can \
+                         renew it",
+                        member.name
                     );
-                    ssl_renewal_declined_alert(pool, user_id, site_id, domain, &issuer).await;
-                    continue;
                 }
-
-                tracing::info!("Auto-fix: renewing expiring SSL certificate for {domain}");
-
-                let mut agent_body = serde_json::json!({
-                    "email": email,
-                    "runtime": runtime,
-                });
-                if let Some(port) = proxy_port {
-                    agent_body["proxy_port"] = serde_json::json!(port);
-                }
-                if let Some(php) = &php_version {
-                    agent_body["php_socket"] =
-                        serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
-                }
-                if let Some(root) = &root_path {
-                    agent_body["root"] = serde_json::json!(root);
-                }
-                // The site's chosen certificate profile travels with the renewal,
-                // exactly as it does on the two hand-driven paths. Omitting it does
-                // not fail: the CA quietly issues its DEFAULT profile instead, so a
-                // site the operator put on `shortlived` or `tlsserver` comes back on
-                // the default one while the column still names the retired choice —
-                // and the cooldown and margin helpers keep reading that stale column,
-                // applying a short-lived certificate's renewal margin to a 90-day one.
-                // This is the ONLY automatic renewal on a stock install, so the
-                // downgrade is silent, permanent and unattended.
-                if let Some(profile) = ssl_profile.as_deref() {
-                    agent_body["profile"] = serde_json::json!(profile);
-                }
-
-                // WHICH CHALLENGE ISSUED THIS CERTIFICATE decides which door
-                // renews it — and this is the door that matters most, because it
-                // is the ONLY automatic renewal on a stock install and it is
-                // reached with no opt-in at all. `/ssl/provision/{domain}` is
-                // the HTTP-01 provisioner, single identifier, writing over
-                // `/etc/dockpanel/ssl/{domain}/fullchain.pem`. For a zone-apex
-                // wildcard that file is the shared certificate every sibling
-                // vhost in the zone is serving.
-                let full: Option<crate::models::Site> =
-                    sqlx::query_as("SELECT * FROM sites WHERE id = $1")
-                        .bind(site_id)
-                        .fetch_optional(pool)
-                        .await
-                        .ok()
-                        .flatten();
-                let Some(full) = full else { continue };
-                let days_remaining = full
-                    .ssl_expiry
-                    .map(|e| (e - chrono::Utc::now()).num_days());
-                let plan = crate::helpers::renewal_plan(pool, &full, days_remaining).await;
-
-                if let crate::helpers::RenewalPlan::Refuse { reason } = &plan {
-                    // ⚠ A DIFFERENT sentence from the foreign-issuer stop above.
-                    // That line is pinned at exactly one occurrence, and a second
-                    // copy of its wording here would let either stop satisfy the
-                    // arm written for the other.
-                    tracing::warn!("Auto-fix: DNS-01 renewal declined for {domain} — {reason}");
-                    ssl_dns01_declined_alert(pool, user_id, site_id, domain, reason).await;
-                    continue;
-                }
-
-                // ⛔ `post_long` with the shared budget, not `post`. Plain `post`
-                // caps at 60s and a wildcard DNS-01 order budgets ~260s in the
-                // agent alone.
-                let outcome: Result<serde_json::Value, String> = match &plan {
-                    crate::helpers::RenewalPlan::Dns01 { subject, wildcard, zone_id } => {
-                        crate::routes::ssl::renew_over_dns01(
-                            pool,
-                            jwt_secret,
-                            &agent,
-                            subject,
-                            *wildcard,
-                            *zone_id,
-                            user_id,
-                            ssl_profile.as_deref(),
-                        )
-                        .await
-                    }
-                    _ => agent
-                        .post_long(
-                            &format!("/ssl/provision/{domain}"),
-                            Some(agent_body),
-                            crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
-                        )
-                        .await
-                        .map_err(|e| e.to_string()),
-                };
-
-                match outcome {
-                    Ok(result) => {
-                        tracing::info!("Auto-fix: SSL renewed successfully for {domain}");
-
-                        // Record the certificate we just installed. The agent
-                        // returns `expiry` and every other renewal path stores
-                        // it; this one dropped it, so the panel's view stayed
-                        // frozen at the value written when the certificate was
-                        // first issued. The dashboard countdown ran to zero and
-                        // `check_ssl_expiry` walked the whole warning ladder
-                        // down to the EXPIRED sentinel on a certificate that had
-                        // renewed perfectly — and could never recover, because
-                        // `ssl_decision` resolves only when `days_left` RISES,
-                        // which cannot happen while nothing rewrites this
-                        // column.
-                        //
-                        // This is the ONLY automatic renewal on a stock install
-                        // (`auto_heal_enabled` is seeded false) and it runs for
-                        // every host in `online_fleet()`, the panel's own
-                        // included — so the stale value was not a fleet-only
-                        // condition.
-                        //
-                        // All three columns move together, as in
-                        // `auto_healer::auto_renew_ssl` and `ssl::renew`: a
-                        // surviving `ssl_renewal_at` is an ARI window computed
-                        // for the certificate this one just replaced.
-                        match result
-                            .get("expiry")
-                            .and_then(|v| v.as_str())
-                            .and_then(crate::helpers::parse_agent_cert_expiry)
-                        {
-                            Some(expiry) => {
-                                let _ = sqlx::query(
-                                    "UPDATE sites SET ssl_expiry = $1, ssl_renewal_at = NULL, \
-                                     ssl_renewal_checked_at = NULL, updated_at = NOW() WHERE id = $2",
-                                )
-                                .bind(expiry)
-                                .bind(site_id)
-                                .execute(pool)
-                                .await;
-                            }
-                            None => {
-                                tracing::warn!(
-                                    "Auto-fix: renewed {domain} but could not read the new expiry \
-                                     from the agent (raw: {:?}) — the countdown and the expiry \
-                                     alert will keep describing the retired certificate",
-                                    result.get("expiry")
-                                );
-                            }
-                        }
-
-                        // Only after success: a failed HTTP-01 attempt on an
-                        // unrecorded row must stay unrecorded, because the
-                        // likeliest reason it failed is that this site cannot
-                        // answer HTTP-01 — the case that made DNS-01 right.
-                        crate::routes::ssl::record_renewal_provenance(pool, site_id, domain, &plan)
-                            .await;
-                        if let crate::helpers::RenewalPlan::LastResortHttp01 { losing } = &plan {
-                            ssl_dns01_downgraded_alert(pool, user_id, site_id, domain, losing)
-                                .await;
-                        }
-
-                        // Same as the auto-healer's success branch: a renewal that
-                        // succeeded disproves the alerts saying one had not, and
-                        // leaves the downgrade alert above alone.
-                        notifications::resolve_ssl_renewal_failure(pool, user_id, site_id, domain)
-                            .await;
-
-                        // Preserve the site's full config (WAF/CSP/Permissions-
-                        // Policy/rate-limit/custom_nginx/bot-protection) — the
-                        // agent's provision only renders a subset. Best-effort.
-                        //
-                        // Keyed on the id already resolved above, not on the
-                        // domain: `domain` is unique only per server
-                        // (`idx_sites_domain_server`), so a lookup on it could
-                        // hand back another host's row and push that host's
-                        // vhost through THIS host's agent.
-                        if let Ok(site) = sqlx::query_as::<_, crate::models::Site>("SELECT * FROM sites WHERE id = $1")
-                            .bind(site_id)
-                            .fetch_one(pool)
-                            .await
-                        {
-                            // A site the operator disabled must not be put back
-                            // into service by a renewal nobody watched. The
-                            // rebuild used to go out unconditionally, and the
-                            // agent wrote it straight over the maintenance
-                            // response — so a deliberately offline site came
-                            // back on the internet on this loop's own schedule,
-                            // while the panel went on showing it as disabled.
-                            //
-                            // Agents from v2.74.0 park the body instead of
-                            // serving it, but this loop runs against every host
-                            // in the fleet and an agent is only updated when
-                            // somebody updates it. Declining here is what makes
-                            // the fix arrive with the PANEL.
-                            //
-                            // ⛔ RETRACTED at v2.145.0. This comment used to end
-                            // "Nothing is lost by skipping: renewal does not
-                            // change what the vhost contains, since the
-                            // certificate paths it names are stable symlinks."
-                            // Both halves are false. Nothing in this tree writes
-                            // a symlink under /etc/dockpanel/ssl — both
-                            // provisioners `create_dir_all` then `fs::write`
-                            // plain files — and a renewal CAN change which path
-                            // is correct, because the DNS-01 door writes under
-                            // the ZONE apex while the HTTP-01 door writes under
-                            // the site's own name. The skip is still right, but
-                            // only because a disabled site is not serving:
-                            // "nothing is lost" was never the reason.
-                            if !site.enabled {
-                                tracing::info!(
-                                    "Auto-fix: renewed SSL for {} but skipped the vhost rebuild — the site is disabled",
-                                    site.domain
-                                );
-                            } else if let Err(e) = agent
-                                .put(
-                                    &format!("/nginx/sites/{}", site.domain),
-                                    crate::routes::sites::build_nginx_body(&site),
-                                )
-                                .await
-                            {
-                                tracing::warn!("Auto-fix: full vhost rebuild after SSL renewal failed for {}: {e}", site.domain);
-                            }
-                        }
-
-                        crate::services::system_log::log_event(
-                            pool,
-                            "info",
-                            "security_scanner",
-                            &format!("Auto-renewed SSL certificate for {domain}"),
-                            None,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Auto-fix: SSL renewal failed for {domain}: {e}");
-                        // The auto-healer alerts when its own renewal fails; this
-                        // path used to end at the log line, so whether a failing
-                        // renewal was visible depended on which loop reached the
-                        // certificate first.
-                        ssl_renewal_alert(pool, user_id, site_id, domain, &e.to_string()).await;
-                    }
-                }
+                continue;
             }
             // Security headers — log as recommendation only
             "security_headers" => {
@@ -1227,7 +734,7 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
         .post_long(
             &format!("/ssl/{domain}/renew"),
             Some(serde_json::json!({ "email": contact })),
-            crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
+            crate::routes::acme::DNS01_ORDER_TIMEOUT_SECS,
         )
         .await
         .map_err(|e| e.to_string());
@@ -1528,7 +1035,7 @@ async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domai
         .post_long(
             &format!("/ssl/{domain}/renew"),
             Some(serde_json::json!({ "email": contact })),
-            crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
+            crate::routes::acme::DNS01_ORDER_TIMEOUT_SECS,
         )
         .await
         .map_err(|e| e.to_string());

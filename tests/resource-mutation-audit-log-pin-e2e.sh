@@ -55,10 +55,10 @@ MIGRATION=panel/backend/migrations/20260324000000_security_enhancements.sql
 code() { sed 's://.*$::' "$1"; }
 
 # ── 0. Files exist ──────────────────────────────────────────────────────
-FILES="api_keys auth backup_orchestrator backups cdn crons databases dns \
+FILES="api_keys auth backup_orchestrator backups crons databases dns \
 docker_apps extensions git_deploys iac logs mail oauth passkeys \
-reseller_dashboard resellers secrets security servers settings sites ssl \
-stacks staging system teams tls_certificates users webhook_gateway whmcs"
+secrets security servers settings sites ssl \
+stacks staging system teams tls_certificates users webhook_gateway"
 
 for f in $FILES; do
   [ -f "$ROUTES/$f.rs" ] || { echo "missing $ROUTES/$f.rs"; exit 1; }
@@ -88,7 +88,6 @@ check_count api_keys 3
 check_count auth 11
 check_count backup_orchestrator 2
 check_count backups 2
-check_count cdn 1
 check_count crons 1
 check_count databases 2
 check_count dns 3
@@ -100,8 +99,6 @@ check_count logs 1
 check_count mail 7
 check_count oauth 3
 check_count passkeys 6
-check_count reseller_dashboard 2
-check_count resellers 5
 check_count secrets 1
 check_count security 15
 check_count servers 5
@@ -115,7 +112,6 @@ check_count teams 1
 check_count tls_certificates 3
 check_count users 6
 check_count webhook_gateway 1
-check_count whmcs 2
 
 # ── 2. Grand total — independent of how the per-file counts above sum ──
 TOTAL=0
@@ -123,10 +119,10 @@ for f in $FILES; do
   n=$(code "$ROUTES/$f.rs" | grep -c "audit_log(")
   TOTAL=$((TOTAL + n))
 done
-if [ "$TOTAL" -eq 113 ]; then
-  ok "grand total audit_log() calls across all 32 files is 113 (13 pre-existing + 97 from this session's own extension + 3 from the later SFTP feature's own enable/disable/reset-password credential-lifecycle events)"
+if [ "$TOTAL" -eq 103 ]; then
+  ok "grand total audit_log() calls across all 28 files is 103 (13 pre-existing + 97 from this session's own extension + 3 from the later SFTP feature's own enable/disable/reset-password credential-lifecycle events, minus 10 in the 4 files removed by R2: cdn 1, reseller_dashboard 2, resellers 5, whmcs 2)"
 else
-  bad "grand total audit_log() calls: expected 113, found $TOTAL"
+  bad "grand total audit_log() calls: expected 103, found $TOTAL"
 fi
 
 # ── 3. Targeted content checks — the highest-value / trickiest sites ───

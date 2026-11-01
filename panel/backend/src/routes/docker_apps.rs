@@ -14,7 +14,7 @@ use crate::auth::AuthUser;
 use crate::auth::ServerScope;
 use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_container_id, is_valid_name};
-use crate::routes::sites::ProvisionStep;
+use crate::provision::ProvisionStep;
 use crate::services::activity;
 use crate::services::expected_stops;
 use crate::services::extensions::fire_event;
@@ -854,9 +854,9 @@ pub struct AppPreflightQuery {
 /// Gather everything the app checks need, in as few agent round-trips as
 /// possible, and never let a missing fact become a refusal.
 async fn gather_app_facts(
-    db: &sqlx::PgPool,
+    _db: &sqlx::PgPool,
     agent: &crate::services::agent::AgentHandle,
-    server_id: uuid::Uuid,
+    _server_id: uuid::Uuid,
     port: u16,
 ) -> crate::services::prerequisites::apps::HostFacts {
     use crate::services::prerequisites::apps::{HostFacts, PortHolder};
@@ -888,28 +888,14 @@ async fn gather_app_facts(
         }
     }
 
-    // Sites that proxy to a local port hold one too — but only on the host these
-    // facts describe. The read was fleet-wide, so a port occupied by a site on
-    // another machine was reported as taken here: the preflight refused a free
-    // port, and did so more often the larger the fleet grew. "Which ports are in
-    // use" is a question about ONE box.
-    let site_ports: Vec<(Option<i32>, String)> = sqlx::query_as(
-        "SELECT proxy_port, domain FROM sites WHERE proxy_port IS NOT NULL AND server_id = $1",
-    )
-    .bind(server_id)
-    .fetch_all(db)
-    .await
-    .unwrap_or_default();
-    for (p, domain) in site_ports {
-        if let Some(p) = p {
-            if p > 0 && p <= u16::MAX as i32 {
-                facts.used_ports.push(PortHolder {
-                    port: p as u16,
-                    description: format!("the site {domain}"),
-                });
-            }
-        }
-    }
+    // R1 (hosting removal): sites that proxy to a local port used to be
+    // reported as taken here, so an app deploy could not collide with a
+    // site's proxy port. The site ports lived only in the `sites` table,
+    // which this file no longer reads, so that signal is gone: `used_ports`
+    // carries only container ports. The agent's live port probe further
+    // down still interrogates the host for the requested port, so a port a
+    // listener actually holds is still refused. The site kind itself is
+    // removed in R3.
 
     if let Ok(info) = agent.get("/system/info").await {
         facts.mem_total_mb = info.get("mem_total_mb").and_then(|v| v.as_u64());

@@ -39,8 +39,6 @@ const SIMPLE_SUBJECTS: &[(&str, &str, &str)] = &[
     ("mail_domains", "id", "dkim_private_key"),
     ("dns_zones", "id", "cf_api_token"),
     ("users", "id", "totp_secret"),
-    ("whmcs_config", "id", "api_secret_encrypted"),
-    ("cdn_zones", "id", "api_key"),
     ("git_deploys", "id", "github_token"),
     ("servers", "id", "agent_token"),
     ("alert_rules", "id", "notify_pagerduty_key"),
@@ -51,7 +49,6 @@ const SIMPLE_SUBJECTS: &[(&str, &str, &str)] = &[
     ("monitors", "id", "alert_discord_url"),
     ("webhook_endpoints", "id", "verify_secret"),
     ("extensions", "id", "webhook_secret"),
-    ("whmcs_config", "id", "webhook_secret"),
     ("deploy_configs", "id", "webhook_secret"),
     ("git_deploys", "id", "webhook_secret"),
 ];
@@ -84,15 +81,12 @@ const SPECIAL_SUBJECTS: &[&str] = &[
 pub const COVERED_MODULES: &[(&str, &str)] = &[
     ("settings", "settings.value"),
     ("databases", "databases.db_password_enc"),
-    ("whmcs", "whmcs_config.api_secret_encrypted"),
     ("system", "settings.value"),
-    ("sites", "databases.db_password_enc"),
     ("migration", "databases.db_password_enc"),
     ("mail", "mail_domains.dkim_private_key"),
     ("dns", "dns_zones.cf_api_token"),
     ("backup_destinations", "backup_destinations.config"),
     ("auth", "users.totp_secret"),
-    ("cdn", "cdn_zones.api_key"),
     ("git_deploys", "git_deploys.github_token"),
     ("servers", "servers.agent_token"),
     ("agent", "servers.agent_token"),
@@ -104,8 +98,6 @@ pub const COVERED_MODULES: &[(&str, &str)] = &[
     ("monitors", "monitors.alert_discord_url"),
     ("webhook_gateway", "webhook_endpoints.verify_secret"),
     ("extensions", "extensions.webhook_secret"),
-    ("whmcs", "whmcs_config.webhook_secret"),
-    ("deploy", "deploy_configs.webhook_secret"),
     ("git_deploys", "git_deploys.webhook_secret"),
 ];
 
@@ -176,8 +168,8 @@ impl SubjectReport {
 }
 
 /// Sweep every subject. Never fails the whole run because one subject failed —
-/// a missing optional table (whmcs on an install that never configured it) must
-/// not stop the rest, and a partially-completed sweep is safe to re-run.
+/// a missing optional table must not stop the rest, and a partially-completed
+/// sweep is safe to re-run.
 pub async fn reencrypt_all(pool: &PgPool, jwt_secret: &str) -> Vec<SubjectReport> {
     let mut reports = Vec::new();
 
@@ -602,8 +594,8 @@ mod tests {
     /// Every subject a module is paired with must be one the sweep really visits.
     ///
     /// This is the arm that makes the pairing load-bearing rather than
-    /// decorative. Adding `("cdn", "cdn_zones.api_key")` without also adding
-    /// `("cdn_zones", "id", "api_key")` to SIMPLE_SUBJECTS fails HERE — which is
+    /// decorative. Adding `("dns", "dns_zones.cf_api_token")` without also adding
+    /// `("dns_zones", "id", "cf_api_token")` to SIMPLE_SUBJECTS fails HERE — which is
     /// the whole reason the pairing exists, because the old bare-name registry
     /// went green on exactly that half-edit and the column was then skipped by
     /// every re-key.
