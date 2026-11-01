@@ -251,7 +251,7 @@ interface DeployedAppLite {
 /* Lite home gauge: an SVG ring, accent-coloured, with the value in the middle.
    The ring fraction is the percentage passed in; for Load the caller converts
    load_avg_1 to a percentage of cpu_count first. */
-function Gauge({ label, value, display, sub }: { label: string; value: number; display: string; sub: string }) {
+function Gauge({ label, value, display, sub, extra }: { label: string; value: number; display: string; sub: string; extra?: string }) {
   const C = 2 * Math.PI * 52;
   const pct = Math.max(0, Math.min(100, value));
   return (
@@ -265,6 +265,7 @@ function Gauge({ label, value, display, sub }: { label: string; value: number; d
           <div>
             <div className={`text-lg font-bold leading-none ${pctColor(pct)}`}>{display}</div>
             <div className="text-[11px] text-dark-400 font-medium mt-1">{label}</div>
+            {extra && <div className="text-[10px] text-dark-400 font-mono mt-0.5">{extra}</div>}
           </div>
         </div>
       </div>
@@ -1222,7 +1223,7 @@ export default function Dashboard() {
                     {system.load_avg_1 !== undefined && (
                       <Gauge label="Load" value={(system.load_avg_1 / Math.max(1, system.cpu_count)) * 100} display={system.load_avg_1.toFixed(2)} sub="Low load" />
                     )}
-                    <Gauge label="CPU" value={system.cpu_usage} display={`${system.cpu_usage.toFixed(0)}%`} sub={`${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1.toFixed(2)}` : ""}`} />
+                    <Gauge label="CPU" value={system.cpu_usage} display={`${system.cpu_usage.toFixed(0)}%`} extra={system.cpu_temp !== null && system.cpu_temp !== undefined ? `${Math.round(system.cpu_temp)}°C` : undefined} sub={`${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1.toFixed(2)}` : ""}`} />
                     <Gauge label="Memory" value={system.mem_usage_pct} display={`${system.mem_usage_pct.toFixed(0)}%`} sub={`${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB`} />
                     <Gauge label="Disk" value={system.disk_usage_pct} display={`${system.disk_usage_pct.toFixed(0)}%`} sub={`${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free`} />
                   </div>

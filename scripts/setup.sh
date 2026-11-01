@@ -730,7 +730,11 @@ install_nginx() {
     if command -v nginx &> /dev/null; then
         log "Nginx already installed"
     else
-        run "Installing Nginx" pkg_install nginx
+        if [ "$PKG_MGR" = "apk" ] && [ "$INIT_SYSTEM" = "systemd" ]; then
+            run "Installing Nginx (apk: nginx, nginx-systemd)" pkg_install nginx nginx-systemd
+        else
+            run "Installing Nginx" pkg_install nginx
+        fi
         if [ "$INIT_SYSTEM" = "openrc" ]; then
             if command -v rc-update &> /dev/null; then
                 rc-update add nginx default > /dev/null 2>&1 || true
@@ -802,6 +806,7 @@ create_directories() {
     # tmpfiles is a systemd concept; on OpenRC the /run tree is recreated
     # by the init script's start_pre instead, so this file is systemd-only.
     if [ "$INIT_SYSTEM" != "openrc" ]; then
+        mkdir -p /etc/tmpfiles.d
         echo "d /run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
     fi
 
@@ -1183,6 +1188,12 @@ download_binaries() {
     fetch_asset "dockpanel-cli-linux-${DL_ARCH}" "$CLI_BIN"
     chmod +x "$CLI_BIN"
     fetched_msg "CLI" "$CLI_BIN"
+
+    if [ "${USE_LOCAL_FRONTEND:-0}" = "1" ] && [ -d "$FRONTEND_DIR/dist" ]; then
+        FRONTEND_DIST="$FRONTEND_DIR/dist"
+        log "Using local custom frontend build at $FRONTEND_DIST"
+        return
+    fi
 
     local FE_TARBALL
     FE_TARBALL=$(umask 077; mktemp /tmp/dockpanel-frontend.XXXXXX.tar.gz 2>/dev/null || echo /tmp/dockpanel-frontend.tar.gz)
@@ -2080,7 +2091,7 @@ F2BEOF
                 rc-update add fail2ban default > /dev/null 2>&1 || true
                 rc-service fail2ban start > /dev/null 2>&1 || true
             else
-                systemctl enable --now fail2ban > /dev/null 2>&1
+                systemctl enable --now fail2ban > /dev/null 2>&1 || true
             fi
             log "Fail2Ban installed with SSH + Nginx jails"
             svc_ok "Fail2Ban"
