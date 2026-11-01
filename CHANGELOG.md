@@ -4,6 +4,96 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.242.1-lite.1]
+
+### Fork release: DockPanel Lite for postmarketOS (first fork release)
+
+First release published from this fork (`latifangren/dockpanel`, branch
+`dev-muse-alpine`). The binaries are built from upstream 2.242.1 plus every
+fork commit since the fork point — the Alpine installer, the lite UI, the
+CasaOS-style rebrand, and the Phase 1 installer/security fixes below. This
+is a fork release, not an upstream release: install it with the fork's own
+installer, never with the upstream install URL (the release workflow's
+footer still points at the upstream URL — a known wart, not fixed here).
+
+### Add: Alpine Linux / postmarketOS installer and OpenRC services
+
+- `scripts/setup.sh` detects `apk` alongside `apt`/`dnf`/`yum`; Docker comes
+  from Alpine packages and `get.docker.com` is never reached on Alpine.
+  Node is only required for a build-from-source install.
+- OpenRC service scripts for the agent and the API
+  (`scripts/openrc/dockpanel-agent`, `scripts/openrc/dockpanel-api`), with
+  systemd units kept for boxes that run systemd — the installer detects the
+  init system and dispatches. On the reference phone (Xiaomi Redmi Note 5
+  Pro, postmarketOS Nura edge) systemd is what actually runs; the OpenRC
+  path is written but has never been exercised on a device, because that
+  image has no `rc-service` at all.
+- nginx serves the panel from `/etc/nginx/http.d/` on Alpine, and the
+  Postgres container is capped at 256 MiB (`DOCKPANEL_LITE=1`).
+- `python3` is a declared base dependency: the monitoring scripts and the
+  AList bootstrap are stdlib-only Python.
+
+### Add: lite UI as the default, CasaOS-style
+
+- Four lite themes (`lite-mix` default, `lite-warm`, `lite-clean`,
+  `lite-midnight`) replace the upstream Terminal look; the Dashboard is
+  restructured 1Panel-style (counts, CPU/memory/disk rings, System
+  Information, application list) from existing API fields only — no new
+  endpoints, no invented numbers.
+- Hosting menus (Sites, Mail, DNS, CDN, WordPress, Git Deploy, Migration,
+  Reseller) are removed from the sidebar, command palette, and Dashboard
+  links. **Frontend only:** the hosting backend routes, agent services, and
+  migrations are still present and live in this release. Removing them is
+  planned as slices R1–R8 after the bugfix phases (see issue #1); do not
+  treat the clean UI as proof the backend is gone.
+- Monolithic frontend pages (Settings, Apps, Security, GitDeploys,
+  Databases) are split into shell + tab components with full feature
+  parity, plus a small shared UI kit for new chrome. The AI Studio
+  mock-server zips were never merged; ported pieces (NetworkingHub,
+  Projects, GlobalDockDrawer, app icons/tags) are wired to the real
+  backend, and anything that would have needed invented data (simulated
+  terminal output, fabricated pipeline logs, demo slow-query rows) was
+  deliberately left out.
+
+### Add: AList as the file manager, installed by the installer
+
+- The Files page is an iframe to `/fs`. The installer now actually installs
+  AList (pinned v3.66.0 musl, SHA-256-verified against the release asset),
+  its systemd/OpenRC service, a generated admin password stored mode 600,
+  and a local storage bootstrap. The storage root defaults to `/`
+  (`ALIST_ROOT` overrides it). The bootstrap's admin-API payload shape is
+  verified against a stub only — its first run against a real AList server
+  is still an open check.
+
+### Fix: installer and security (Phase 1, issue #1)
+
+- Release binaries and the frontend tarball are fetched from **this fork's**
+  releases by default. Previously the installer hardcoded the upstream
+  repository, so a fresh install silently ran upstream binaries that lack
+  the fork's backend fields (e.g. the `lite` branding flag) and showed the
+  full hosting UI. A branch pin such as `dev-muse-alpine` no longer gets
+  used verbatim as a release tag; it resolves to the latest release, and a
+  fork with no releases fails closed with the remedy instead of falling
+  back to upstream.
+- `/api/hardware` and `/api/docker-stats` are no longer served by nginx
+  without authentication: both now go through `auth_request` against the
+  API's own session check. Fixed alongside it: the `/fs` proxy block's
+  forwarding headers were rendered empty at install time (unescaped nginx
+  variables in an unquoted heredoc).
+- The agent's systemd sandbox hardening is restored (13 directives back to
+  `yes`); it had been flipped wholesale to `no` to fix the terminal with no
+  record of which directive the terminal needed. If the terminal breaks
+  again, bisect one directive at a time — the procedure is in the unit
+  file's comment. A terminal smoke test on the phone is still pending.
+
+### Known limitations of this release
+
+- Backend hosting code is still shipped (see above); the large RAM item
+  remains the Postgres container until the deferred SQLite migration.
+- OpenRC services, the AList bootstrap against a real server, and the
+  post-sandbox terminal are unverified on hardware. The release workflow's
+  own smoke test is the first end-to-end check this build gets.
+
 ## [2.242.1]
 
 ### Fix: stack-owned databases had zero backup coverage
