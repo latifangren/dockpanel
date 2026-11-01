@@ -31,7 +31,23 @@ CLI_BIN="/usr/local/bin/dockpanel"
 DB_PORT=5450
 DB_CONTAINER="dockpanel-postgres"
 INSTALL_FROM_RELEASE="${INSTALL_FROM_RELEASE:-0}"
-GITHUB_REPO="ovexro/dockpanel"
+# Fork default (B1): release binaries and the frontend tarball are fetched
+# from THIS fork's releases, never upstream's. Upstream binaries do not carry
+# the fork's backend fields (e.g. the `lite` branding flag), so a fresh
+# install from upstream releases silently shows the full hosting UI.
+# DOCKPANEL_RELEASE_REPO overrides the release source explicitly — setting it
+# to ovexro/dockpanel knowingly accepts upstream binaries, with that caveat.
+GITHUB_REPO="${GITHUB_REPO:-latifangren/dockpanel}"
+DOCKPANEL_RELEASE_REPO="${DOCKPANEL_RELEASE_REPO:-$GITHUB_REPO}"
+# Explicit release tag (e.g. v2.242.1-lite.1). Unset = latest release.
+DOCKPANEL_RELEASE_TAG="${DOCKPANEL_RELEASE_TAG:-}"
+# AList (B5): pinned version + root served by the local storage (see
+# install_alist). ALIST_ROOT is the one assumption Phase 1 makes without an
+# explicit owner answer: "/" matches the old Files panel's AllowedDirs
+# default and the CasaOS file-manager expectation; override with e.g.
+# ALIST_ROOT=/home/whyred to scope it down.
+ALIST_VERSION="${ALIST_VERSION:-v3.66.0}"
+ALIST_ROOT="${ALIST_ROOT:-/}"
 # Set to 1 by configure_nginx when the panel is served over a self-signed
 # certificate (no domain → no Let's Encrypt). print_summary reads it to print
 # the right scheme and explain the browser warning before it happens.
@@ -591,21 +607,26 @@ install_dependencies() {
     # openssh-client is the SFTP backup destination's runtime: the agent shells out
     # to scp/ssh for every SFTP upload. Present by default on the images we test, but
     # a dependency that happens to be satisfied is still an undeclared dependency.
-    local BASE_PKGS="curl, openssl, ca-certificates, openssh-client"
+    # python3 is a DECLARED dependency (B7, pulled into Phase 1 because B5
+    # needs it): the monitoring scripts and the AList storage bootstrap are
+    # stdlib-only Python. It happened to be present on the phone image, which
+    # is exactly how an undeclared dependency survives unnoticed until the
+    # one box that lacks it.
+    local BASE_PKGS="curl, openssl, ca-certificates, openssh-client, python3"
     if [ "$PKG_MGR" = "apt" ]; then
         # gnupg + lsb-release only exist/matter on Debian-based
         run "Installing base packages (${BASE_PKGS}, gnupg, lsb-release)" \
-            pkg_install curl openssl ca-certificates openssh-client gnupg lsb-release
+            pkg_install curl openssl ca-certificates openssh-client gnupg lsb-release python3
     elif [ "$PKG_MGR" = "apk" ]; then
         # Alpine uses the same names as apt here (openssh-client, singular;
         # gnupg is in main). lsb-release does not exist on Alpine and the
         # panel does not need it there.
         run "Installing base packages (${BASE_PKGS}, gnupg)" \
-            pkg_install curl openssl ca-certificates openssh-client gnupg
+            pkg_install curl openssl ca-certificates openssh-client gnupg python3
     else
         # RHEL-family names the ssh client package openssh-clients (plural).
         run "Installing base packages (${BASE_PKGS})" \
-            pkg_install curl openssl ca-certificates openssh-clients
+            pkg_install curl openssl ca-certificates openssh-clients python3
     fi
 
     # sshpass — required for PASSWORD-authenticated SFTP backup destinations, which
@@ -1049,6 +1070,58 @@ setup_database() {
 # ── Download Pre-built Binaries ──────────────────────────────────────────
 INSTALLED_VERSION=""
 
+# resolve_release_tag — print the release tag download_binaries must fetch.
+#
+# B1/B2 semantics (Phase 1): DOCKPANEL_VERSION is the CLONE ref (branch or
+# version), never a release tag by itself. A branch pin (e.g.
+# dev-muse-alpine) resolves to the release repo's LATEST release; only a
+# version-looking pin (2.31.2 / v2.31.2) becomes a tag — the old code used
+# ANY non-main DOCKPANEL_VERSION verbatim as a tag, so pinning a branch
+# made the download fail looking for a release that never existed.
+# DOCKPANEL_RELEASE_TAG always wins when set. A missing release in the
+# fork fails CLOSED with the remedy (publish a fork release, or point
+# DOCKPANEL_RELEASE_REPO at upstream knowingly) instead of silently
+# fetching upstream binaries. Prints the tag on stdout; errors on stderr.
+resolve_release_tag() {
+    local tag=""
+    if [ -n "${DOCKPANEL_RELEASE_TAG:-}" ]; then
+        tag="$DOCKPANEL_RELEASE_TAG"
+        case "$tag" in
+            [0-9]*) tag="v$tag" ;;
+        esac
+        printf '%s\n' "$tag"
+        return 0
+    fi
+    if [ -n "${DOCKPANEL_VERSION:-}" ] && [ "${DOCKPANEL_VERSION}" != "main" ]; then
+        case "$DOCKPANEL_VERSION" in
+            [0-9]*|v[0-9]*)
+                tag="$DOCKPANEL_VERSION"
+                case "$tag" in
+                    [0-9]*) tag="v$tag" ;;
+                esac
+                printf '%s\n' "$tag"
+                return 0
+                ;;
+        esac
+        # >&2 is load-bearing: download_binaries captures this function's
+        # stdout as the tag, so any informational line here must go to
+        # stderr or it becomes part of the tag.
+        log "DOCKPANEL_VERSION=${DOCKPANEL_VERSION} is a branch, not a release — using the latest release from ${DOCKPANEL_RELEASE_REPO}" >&2
+    fi
+    tag=$(curl --retry 3 --retry-delay 2 -sf "https://api.github.com/repos/${DOCKPANEL_RELEASE_REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    if [ -z "$tag" ]; then
+        error "No releases found in ${DOCKPANEL_RELEASE_REPO}."
+        if [ "$DOCKPANEL_RELEASE_REPO" != "ovexro/dockpanel" ]; then
+            error "Publish a fork release first: add a CHANGELOG.md entry, then push a v* tag — .github/workflows/release.yml builds the musl binaries + frontend tarball."
+            error "Or, knowingly install upstream binaries: DOCKPANEL_RELEASE_REPO=ovexro/dockpanel (the panel will lack fork backend fields such as the lite branding flag)."
+        else
+            error "Check https://github.com/${DOCKPANEL_RELEASE_REPO}/releases"
+        fi
+        return 1
+    fi
+    printf '%s\n' "$tag"
+}
+
 # fetch_asset <asset-name> <dest> — download to a QUARANTINE temp file next to
 # dest, verify its sha256 against the release checksums.txt, and only move it
 # onto the live path AFTER it verifies — so the live executable path never
@@ -1126,33 +1199,24 @@ fetched_msg() {
 download_binaries() {
     header "Downloading Pre-built Binaries"
 
-    # Which release to install.
-    #
-    # install.sh already reads DOCKPANEL_VERSION and clones that ref — but this,
-    # its only consumer, used to always fetch releases/latest. So
-    # `DOCKPANEL_VERSION=v2.31.2 install.sh` produced a v2.31.2 tree running
-    # v2.34.2 binaries and printed "Version: v2.34.2" at the end (s261). Unit
-    # files, nginx templates and install-agent.sh are deployed from the tree,
-    # so that skew is the same class that stranded the v2.8.13 -> v2.8.14
-    # upgrade path. Honour the pin here; `main` (the default) means "latest".
+    # Which release to install — see resolve_release_tag above for the
+    # B1/B2 semantics (clone ref vs release tag, fail-closed on no release).
     local RELEASE_TAG
-    if [ -n "${DOCKPANEL_VERSION:-}" ] && [ "${DOCKPANEL_VERSION}" != "main" ]; then
-        RELEASE_TAG="$DOCKPANEL_VERSION"
-        case "$RELEASE_TAG" in
-            [0-9]*) RELEASE_TAG="v$RELEASE_TAG" ;;
-        esac
-        log "Pinned release: $RELEASE_TAG (DOCKPANEL_VERSION)"
-    else
-        RELEASE_TAG=$(curl --retry 3 --retry-delay 2 -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-        log "Latest release: $RELEASE_TAG"
-    fi
-
-    if [ -z "$RELEASE_TAG" ]; then
-        error "Could not determine latest release. Check https://github.com/${GITHUB_REPO}/releases"
+    if ! RELEASE_TAG=$(resolve_release_tag); then
         exit 1
     fi
+    log "Release: $RELEASE_TAG (from ${DOCKPANEL_RELEASE_REPO})"
     INSTALLED_VERSION="$RELEASE_TAG"
-    BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
+    BASE_URL="https://github.com/${DOCKPANEL_RELEASE_REPO}/releases/download/${RELEASE_TAG}"
+
+    # A pinned tag that does not exist must fail HERE with its name, not
+    # three fetch attempts later inside fetch_asset with a generic message.
+    # (A tag resolved from releases/latest always exists; this guards pins.)
+    if ! curl --retry 2 --retry-delay 2 -sf "https://api.github.com/repos/${DOCKPANEL_RELEASE_REPO}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+        error "Release ${RELEASE_TAG} does not exist in ${DOCKPANEL_RELEASE_REPO}."
+        error "Check the tag name, or leave DOCKPANEL_RELEASE_TAG/DOCKPANEL_VERSION unset to use the latest release."
+        exit 1
+    fi
 
     # Checksum manifest first — every later download is verified against it.
     # mktemp (root-owned, O_EXCL, unpredictable) so a local user can't pre-seed
@@ -1190,10 +1254,26 @@ download_binaries() {
     chmod +x "$CLI_BIN"
     fetched_msg "CLI" "$CLI_BIN"
 
-    if [ "${USE_LOCAL_FRONTEND:-0}" = "1" ] && [ -d "$FRONTEND_DIR/dist" ]; then
-        FRONTEND_DIST="$FRONTEND_DIR/dist"
-        log "Using local custom frontend build at $FRONTEND_DIST"
-        return
+    if [ "${USE_LOCAL_FRONTEND:-0}" = "1" ]; then
+        if [ -d "$FRONTEND_DIR/dist" ]; then
+            FRONTEND_DIST="$FRONTEND_DIR/dist"
+            log "Using local custom frontend build at $FRONTEND_DIST"
+            return
+        fi
+        # B1 (option B): no dist/ and no fork release tarball to fall back
+        # on — build the frontend from the cloned tree instead of failing.
+        # The phone already has node+npm; a box without them falls through
+        # to the tarball fetch below and fails there, loudly.
+        if [ -f "$FRONTEND_DIR/package.json" ] && command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+            warn "No frontend dist/ found — building the frontend from source (USE_LOCAL_FRONTEND=1)"
+            build_frontend
+            if [ -d "$FRONTEND_DIR/dist" ]; then
+                FRONTEND_DIST="$FRONTEND_DIR/dist"
+                log "Using freshly built frontend at $FRONTEND_DIST"
+                return
+            fi
+            warn "Frontend build did not produce dist/ — falling back to the release tarball"
+        fi
     fi
 
     local FE_TARBALL
@@ -1511,6 +1591,138 @@ create_services() {
     fi
 }
 
+# ── AList File Manager (B5) ──────────────────────────────────────────────
+# The Files page is an iframe to /fs (e5368cc8); without an installed AList
+# it 502s, and the repo previously carried no trace of AList beyond the
+# nginx proxy line. This installs the pinned release (checksum-verified),
+# the service on both init systems, the admin password, and the local
+# storage bootstrap. Proven layout (Hermes, phone, 2026-11-01): binary
+# /usr/local/bin/alist, data /var/lib/alist, AList v3.66.0 musl arm64.
+# Runs on every install (both modes): the iframe exists in all modes.
+install_alist() {
+    header "AList File Manager"
+
+    local ALIST_BIN="/usr/local/bin/alist"
+    local ALIST_DATA="/var/lib/alist"
+    local ALIST_PW_FILE="$CONFIG_DIR/alist-admin.txt"
+    local asset digest
+    case "$(uname -m)" in
+        x86_64)  asset="alist-linux-musl-amd64.tar.gz"; digest="dfdd7be485963261b1edf445361977e626f23cb2ace12281fe50a0070fa22149" ;;
+        aarch64|arm64) asset="alist-linux-musl-arm64.tar.gz"; digest="2a562a2d0b4349d4999574ee77bd71ffdac37de70b94c227a1582b02e0d916b3" ;;
+        *) error "AList has no pinned musl asset for architecture $(uname -m)"; exit 1 ;;
+    esac
+    # Digests are the GitHub release assets' own sha256 (AlistGo/alist
+    # v3.66.0, verified 2026-11-01). A mismatch is fatal: the tarball is
+    # the whole file manager, and an unverified one must never be installed.
+
+    if [ -x "$ALIST_BIN" ] && "$ALIST_BIN" version 2>/dev/null | grep -qF "$ALIST_VERSION"; then
+        log "AList $ALIST_VERSION already installed at $ALIST_BIN"
+    else
+        local tmpdir tmpball extracted
+        tmpdir=$(mktemp -d /tmp/dockpanel-alist.XXXXXX)
+        tmpball="$tmpdir/$asset"
+        if ! dp_fetch "https://github.com/AlistGo/alist/releases/download/${ALIST_VERSION}/${asset}" "$tmpball"; then
+            rm -rf "$tmpdir"
+            error "AList download failed after 3 attempts: ${asset} — see $INSTALL_LOG"
+            exit 1
+        fi
+        if [ "$(sha256sum "$tmpball" | awk '{print $1}')" != "$digest" ]; then
+            rm -rf "$tmpdir"
+            error "AList checksum MISMATCH for ${asset} — refusing to install"
+            exit 1
+        fi
+        if ! tar xzf "$tmpball" -C "$tmpdir" 2>/dev/null; then
+            rm -rf "$tmpdir"
+            error "AList tarball did not extract: ${asset}"
+            exit 1
+        fi
+        extracted=$(find "$tmpdir" -name alist -type f | head -1)
+        if [ -z "$extracted" ]; then
+            rm -rf "$tmpdir"
+            error "AList tarball contains no alist binary: ${asset}"
+            exit 1
+        fi
+        cp "$extracted" "$ALIST_BIN"
+        chmod 755 "$ALIST_BIN"
+        rm -rf "$tmpdir"
+        log "AList $ALIST_VERSION downloaded + verified"
+    fi
+
+    mkdir -p "$ALIST_DATA" "$CONFIG_DIR"
+
+    # Stop a running AList before touching its database: `admin set`
+    # writes data.db directly, and a live server racing it is how the
+    # password change silently does not stick.
+    if [ "$INIT_SYSTEM" = "openrc" ]; then
+        rc-service alist stop >/dev/null 2>&1 || true
+    else
+        systemctl stop alist >/dev/null 2>&1 || true
+    fi
+
+    # Admin password: reuse the stored one on re-runs (rotating it on
+    # every installer run would lock the operator out of /files with no
+    # notice). Stored mode 600; it is the ONLY copy — the operator must
+    # keep it. Never printed.
+    local ALIST_PW
+    if [ -s "$ALIST_PW_FILE" ]; then
+        ALIST_PW=$(cat "$ALIST_PW_FILE")
+    else
+        ALIST_PW=$(openssl rand -base64 24)
+        (umask 077; printf '%s' "$ALIST_PW" > "$ALIST_PW_FILE")
+        chmod 600 "$ALIST_PW_FILE"
+    fi
+    if [ -z "$ALIST_PW" ]; then
+        error "AList admin password is empty — refusing to continue with an unknown password"
+        exit 1
+    fi
+    if ! "$ALIST_BIN" admin set "$ALIST_PW" --data "$ALIST_DATA" >>"$INSTALL_LOG" 2>&1; then
+        error "Could not set the AList admin password (see $INSTALL_LOG). Fix it by hand:"
+        error "  $ALIST_BIN admin set '<new-password>' --data $ALIST_DATA"
+        error "and store the password in $ALIST_PW_FILE (mode 600)."
+        exit 1
+    fi
+
+    # Service on this box's init system.
+    if [ "$INIT_SYSTEM" = "openrc" ]; then
+        cp "$SCRIPT_DIR/openrc/alist" /etc/init.d/alist
+        chmod 755 /etc/init.d/alist
+        rc-update add alist default >/dev/null 2>&1 || true
+        rc-service alist restart >/dev/null 2>&1 || rc-service alist start >/dev/null 2>&1
+        sleep 2
+        if ! rc-service alist status >/dev/null 2>&1; then
+            error "AList failed to start — see /var/log/alist.log"
+            exit 1
+        fi
+    else
+        cp "$SCRIPT_DIR/systemd/alist.service" /etc/systemd/system/alist.service
+        chmod 644 /etc/systemd/system/alist.service
+        systemctl daemon-reload
+        systemctl enable --now alist >/dev/null 2>&1
+        sleep 2
+        if ! systemctl is-active --quiet alist; then
+            error "AList failed to start — check: journalctl -u alist -n 20"
+            exit 1
+        fi
+    fi
+
+    # Local storage: without it /files shows the AList login and an empty
+    # file list. python3 is a declared base dependency (B7). A bootstrap
+    # failure is LOUD but not fatal: the operator can add the storage in
+    # the AList UI in two minutes, and aborting the whole install here
+    # would strand a working panel over a file-manager nicety.
+    if ! command -v python3 >/dev/null 2>&1; then
+        error "python3 is required for the AList storage bootstrap (B7) but was not installed"
+        exit 1
+    fi
+    if ! python3 "$SCRIPT_DIR/alist-bootstrap.py" --password-file "$ALIST_PW_FILE" --root "$ALIST_ROOT"; then
+        warn "AList storage bootstrap did not complete — /files will show the AList login but no storage until one is added."
+        warn "Add it in the AList UI: Management -> Storages -> Add, driver Local, mount path /, root folder $ALIST_ROOT."
+        warn "Or re-run: python3 $SCRIPT_DIR/alist-bootstrap.py --password-file $ALIST_PW_FILE --root $ALIST_ROOT"
+    fi
+
+    log "AList $ALIST_VERSION installed (root $ALIST_ROOT; admin password in $ALIST_PW_FILE, mode 600)"
+}
+
 # ── Panel TLS ────────────────────────────────────────────────────────────
 # The panel's very first screen asks the operator to CREATE an admin password.
 # Without a domain there is no Let's Encrypt certificate, and the panel used to
@@ -1669,29 +1881,60 @@ server {
 ${PANEL_TLS_BLOCK}
     client_max_body_size 100M;
 
-    # Hardware info (Device model / SoC)
+    # Hardware info (Device model / SoC) — auth-gated (B3). The JSON file is
+    # world-readable on disk (the agent unit chmods it 644 so nginx can
+    # read it), so the gate MUST live here: auth_request asks the API
+    # itself, following the panel's own HttpOnly-cookie session rules.
+    # The Dashboard's bare fetch() is same-origin, so it carries the cookie.
     location = /api/hardware {
+        auth_request /_panel_auth;
         alias /run/dockpanel/hardware.json;
         default_type application/json;
         add_header Cache-Control "no-cache";
     }
 
-    # Docker live stats
+    # Docker live stats — same gate as /api/hardware (B3).
     location = /api/docker-stats {
+        auth_request /_panel_auth;
         alias /run/dockpanel/docker-stats.json;
         default_type application/json;
         add_header Cache-Control "no-cache";
     }
 
-    # AList File Manager
+    # Internal auth check for the two locations above. `internal` means
+    # no client can request it directly; a 401/403 from the API becomes
+    # the response for the gated location. The subrequest carries only
+    # the cookie (no body), exactly what /api/auth/me needs.
+    location = /_panel_auth {
+        internal;
+        proxy_pass http://127.0.0.1:3080/api/auth/me;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Cookie \$http_cookie;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+    }
+
+    # AList File Manager — gated by AList's own admin login (B5 installs
+    # it and sets the password); no panel auth_request here because AList
+    # speaks its own session. /dav is deliberately NOT proxied: WebDAV
+    # stays reachable only on 127.0.0.1:5244.
     location ^~ /fs {
         proxy_pass http://127.0.0.1:5244;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header Range $http_range;
-        proxy_set_header If-Range $http_if_range;
+        # The dollar-variables below MUST stay backslash-escaped: the
+        # heredoc is unquoted, so a bare nginx variable would expand to
+        # empty at install time and nginx would serve AList with blank
+        # Host/forwarding headers (measured by rendering the heredoc,
+        # 2026-11-01 — every header came out empty). Same class of bug
+        # as the escaped blocks above; this block had never been escaped.
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header Range \$http_range;
+        proxy_set_header If-Range \$http_if_range;
         client_max_body_size 20000m;
     }
 
@@ -2467,6 +2710,7 @@ main() {
     if [ -n "$PANEL_DOMAIN" ]; then
         TOTAL_STEPS=$((TOTAL_STEPS + 1))   # panel SSL certificate step
     fi
+    TOTAL_STEPS=$((TOTAL_STEPS + 1))   # AList file manager (B5)
 
     detect_os
     preflight_checks
@@ -2543,6 +2787,9 @@ main() {
         systemctl start dockpanel-api 2>/dev/null
     fi
     sleep 2
+
+    # AList is the file manager behind /files in every mode (B5).
+    install_alist
 
     install_recommended_services
     provision_panel_ssl

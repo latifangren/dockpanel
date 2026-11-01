@@ -1,0 +1,20 @@
+# AList File Manager — systemd unit (DockPanel Lite, B5).
+# Source: the unit proven by manual install on the whyred phone
+# (2026-11-01, AList v3.66.0, /usr/local/bin/alist, data /var/lib/alist).
+# Deployed by scripts/setup.sh:install_alist; do not hand-edit on the box.
+# Runs as root (no User=) because ALIST_ROOT defaults to "/" — scoping the
+# root down to a user directory is the follow-up that allows User=alist.
+[Unit]
+Description=AList File Manager Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/alist
+ExecStart=/usr/local/bin/alist server --data /var/lib/alist
+Restart=always
+RestartSec=5
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# AList File Manager — OpenRC init script (Alpine / postmarketOS, Lite).
+# Mirrors scripts/systemd/alist.service (same binary, data dir, and
+# arguments; keep the two in sync).
+#
+# OpenRC differences, stated rather than papered over:
+#   * No MemoryMax: there is no cgroup limit here. The Lite memory story
+#     for AList on OpenRC is "no cap" — stated, not hidden.
+#   * Runs as root, like the systemd unit: ALIST_ROOT defaults to "/".
+#   * The systemd unit's Restart=always is approximated by
+#     supervise-daemon here; a repeated crash still logs to /var/log/alist.log.
+
+name="alist"
+description="AList file manager"
+
+command="/usr/local/bin/alist"
+command_args="server --data /var/lib/alist"
+command_background=true
+directory="/var/lib/alist"
+pidfile="/run/alist.pid"
+output_log="/var/log/alist.log"
+error_log="/var/log/alist.log"
+
+depend() {
+    need net
+}
+
+start_pre() {
+    checkpath -d -m 0755 /var/lib/alist
+    checkpath -f -m 0644 /var/log/alist.log
+}

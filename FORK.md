@@ -116,6 +116,49 @@ ter-fork, sementara DockPanel menyatakan tidak ada premium tier.
   `SystemInfo`), dan logo brand aplikasi (tidak tersedia di codebase —
   dipakai ubin huruf awal bergradasi).
 
+- **Fase 1 — fix installer + keamanan (2026-11-01, issue #1).**
+  Review 4 commit Hermes menemukan installer menginstall binary upstream,
+  endpoint monitoring tanpa auth, sandbox agent dimatikan, dan AList tidak
+  pernah diinstall. Yang diperbaiki di sini:
+  - **B1/B2 — rilis fork, bukan upstream.** `scripts/setup.sh` mengambil
+    binary + tarball frontend dari rilis fork ini secara default
+    (`GITHUB_REPO`/`DOCKPANEL_RELEASE_REPO`, default `latifangren/dockpanel`;
+    override eksplisit ke `ovexro/dockpanel` berarti sadar memakai binary
+    upstream tanpa field backend fork). `DOCKPANEL_VERSION` adalah ref clone
+    (branch/versi), bukan tag rilis: pin branch memakai rilis terbaru,
+    hanya pin berbentuk versi yang menjadi tag; `DOCKPANEL_RELEASE_TAG`
+    selalu menang bila diset. Tidak ada rilis di fork = gagal tertutup
+    dengan petunjuk perbaikan, bukan fallback diam-diam ke upstream.
+    Bila `USE_LOCAL_FRONTEND=1` dan `dist/` belum ada, installer membangun
+    frontend dari source clone (node/npm sudah ada di HP) alih-alih gagal.
+    **Cara menerbitkan rilis fork:** tambah entri `CHANGELOG.md` untuk
+    versinya, lalu push tag `v*` — `.github/workflows/release.yml`
+    membangun binary musl statis (amd64/arm64) + tarball frontend dan
+    menerbitkan rilisnya (termasuk `checksums.txt`).
+  - **B3 — endpoint monitoring ber-auth.** `configure_nginx()` tidak lagi
+    menyajikan `/api/hardware` dan `/api/docker-stats` sebagai alias tanpa
+    auth: keduanya kini melewati `auth_request /_panel_auth`, yang
+    menanyakan `GET /api/auth/me` ke API dengan cookie sesi HttpOnly panel
+    (fetch Dashboard yang same-origin membawa cookie itu). Tanpa sesi
+    panel yang valid, endpoint mengembalikan 401/403.
+  - **B4 — sandbox agent dikembalikan.** `panel/agent/dockpanel-agent.service`:
+    13 directive hardening kembali `yes` (sebelumnya dibalik ke `no`
+    tanpa catatan directive mana yang dibutuhkan terminal). Bila terminal
+    rusak lagi, lakukan bisect satu directive per satu dan catat
+    hasilnya di komentar file itu — jangan balik satu blok.
+  - **B5 — AList diinstall installer.** `install_alist()` di `setup.sh`:
+    binary AList `v3.66.0` musl ter-pin dengan verifikasi SHA-256 dari
+    digest aset rilis GitHub, service di kedua init
+    (`scripts/systemd/alist.service`, `scripts/openrc/alist`), password
+    admin dibuat sekali dan disimpan mode 600 di
+    `/etc/dockpanel/alist-admin.txt` (tidak pernah dicetak), dan storage
+    lokal di-bootstrap oleh `scripts/alist-bootstrap.py` (stdlib saja,
+    idempotent). Root storage default `/` (`ALIST_ROOT`, bisa di-override)
+    — asumsi Fase 1 yang belum dijawab eksplisit pemilik, mengikuti
+    default `AllowedDirs` panel lama dan ekspektasi file manager ala
+    CasaOS. `python3` kini dependensi yang dideklarasikan (B7, ditarik
+    maju karena bootstrap membutuhkannya).
+
 **Lite adalah profil UX, bukan batas keamanan.** Route tetap bisa
 dijangkau langsung lewat URL, dan backend tidak menegakkan apa pun
 berdasarkan flag ini — halaman yang dibuka langsung tetap menjalankan
@@ -164,8 +207,10 @@ untuk menyembunyikan kemampuan dari operator yang tahu URL-nya.
 
 **Yang sengaja TIDAK diubah:**
 
-- Binary panel tetap pakai release musl statis upstream
-  (`aarch64-unknown-linux-musl`) — tidak di-build ulang di HP.
+- Binary panel tetap pakai release musl statis
+  (`aarch64-unknown-linux-musl`) — tidak di-build ulang di HP. Sejak Fase 1,
+  rilis yang dipakai adalah **rilis fork ini** (lihat B1 di atas), bukan
+  rilis upstream.
 - Skema database, socket agent, dan port panel (8443) tetap sama.
 - Tidak menginstal host PHP-FPM, mail, dan PowerDNS di mode lite.
 
