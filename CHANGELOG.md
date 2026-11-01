@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 First release published from this fork (`latifangren/dockpanel`, branch
 `dev-muse-alpine`). The binaries are built from upstream 2.242.1 plus every
 fork commit since the fork point — the Alpine installer, the lite UI, the
-CasaOS-style rebrand, and the Phase 1 installer/security fixes below. This
+CasaOS-style rebrand, and the Phase 1–2 bugfix work below. This
 is a fork release, not an upstream release: install it with the fork's own
 installer, never with the upstream install URL (the release workflow's
 footer still points at the upstream URL — a known wart, not fixed here).
@@ -86,13 +86,44 @@ footer still points at the upstream URL — a known wart, not fixed here).
   again, bisect one directive at a time — the procedure is in the unit
   file's comment. A terminal smoke test on the phone is still pending.
 
+### Fix: monitoring, Dashboard, and orphan routes (Phase 2, issue #1)
+
+- The Docker/hardware monitoring scripts are installed on both init paths
+  (previously systemd only, so an OpenRC box never produced the monitoring
+  JSON files). The monitor polls every 6 seconds (was 3), logs failures
+  with exponential backoff instead of swallowing them, and creates its
+  output directory before the first Docker call. Hardware info is
+  refreshed on agent (re)start only, written atomically so a failed run
+  never truncates a good file. The monitor unit deliberately has no
+  dedicated `User=` (the Docker socket's group varies by distribution, and
+  a process that can talk to the socket is root-equivalent anyway).
+- Dashboard cleanup after the hosting prune: the dead "Add Site" button,
+  site/domain onboarding steps, Sites Grid widget, and unused
+  `/databases`/`/mail/queue` fetches are gone. The App Store card shows
+  the real template count from `/apps/templates` instead of a hardcoded
+  `148+`; the Storage card's big number is free space (its subtext already
+  said "free" while the number showed used space); the Installed Apps grid
+  reads the `/apps` list again — admin-only, honouring the `apps_list`
+  widget toggle, with an empty state and Open/Stop/Start/Restart actions —
+  so infra containers no longer show to every role.
+- Orphan routes resolved: `/logs`, `/security`, `/system`, `/users`, and
+  `/telemetry` return to the sidebar (admin-only), each holding controls
+  with no other home. `/integrations` (Webhooks/Extensions/WHMCS/
+  Migrations) redirects to `/` like the other pruned hosting pages.
+
 ### Known limitations of this release
 
 - Backend hosting code is still shipped (see above); the large RAM item
   remains the Postgres container until the deferred SQLite migration.
-- OpenRC services, the AList bootstrap against a real server, and the
-  post-sandbox terminal are unverified on hardware. The release workflow's
-  own smoke test is the first end-to-end check this build gets.
+- OpenRC services (including the new docker-monitor init script), the
+  AList bootstrap against a real server, and the post-sandbox terminal
+  are unverified on hardware. The release workflow's own smoke test is
+  the first end-to-end check this build gets.
+- The panel's self-update script (`scripts/update.sh`) still fetches from
+  the upstream repository and does not refresh the monitoring scripts, so
+  a self-update can pull upstream binaries back onto a fork install.
+  Fresh installs via the fork installer are unaffected. Fixing the update
+  path is tracked as follow-up work to issue #1.
 
 ## [2.242.1]
 
