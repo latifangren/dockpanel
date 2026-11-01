@@ -155,7 +155,10 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/logs" element={<Logs />} />
               <Route path="/apps" element={<Apps />} />
               <Route path="/git-deploys" element={<Navigate to="/apps" replace />} />
-              <Route path="/extensions" element={<Navigate to="/integrations" replace />} />
+              {/* B9: /integrations redirects to / (hosting-era tabs), so its
+                  former aliases point at / directly instead of chaining
+                  through a redirect that no longer lands anywhere. */}
+              <Route path="/extensions" element={<Navigate to="/" replace />} />
               <Route path="/security" element={<Security />} />
               <Route path="/diagnostics" element={<Navigate to="/security?tab=diagnostics" replace />} />
               <Route path="/settings" element={<Settings />} />
@@ -177,8 +180,11 @@ createRoot(document.getElementById("root")!).render(
                   non-admin back to Monitors, so this is safe for both roles. */}
               <Route path="/incidents" element={<Navigate to="/monitoring?tab=statuspage" replace />} />
               <Route path="/secrets" element={<SecretsManager />} />
-              <Route path="/integrations" element={<Integrations />} />
-              <Route path="/webhooks" element={<Navigate to="/integrations" replace />} />
+              {/* B9: Integrations (Webhooks/Extensions/WHMCS/Migrations) has no
+                  unique phone-operator function; it redirects like the other
+                  pruned hosting pages instead of living on, hidden, at a URL. */}
+              <Route path="/integrations" element={<Navigate to="/" replace />} />
+              <Route path="/webhooks" element={<Navigate to="/" replace />} />
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/monitoring" element={<Monitoring />} />
               <Route path="/system" element={<System />} />

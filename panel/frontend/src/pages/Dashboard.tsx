@@ -60,11 +60,6 @@ interface DockerImagesResponse {
   images?: DockerImage[];
 }
 
-interface MailQueueResponse {
-  count?: number;
-  queue?: unknown[];
-}
-
 interface DiskIoResponse {
   read_bytes_sec: number;
   write_bytes_sec: number;
@@ -364,12 +359,16 @@ export default function Dashboard() {
 
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [sites, setSites] = useState<SiteSummary>({ total: 0, active: 0 });
-  const [dbCount, setDbCount] = useState(0);
   const [processes, setProcesses] = useState<Process[]>([]);
   const [network, setNetwork] = useState<NetworkIface[]>([]);
   const [error, setError] = useState("");
   const [intel, setIntel] = useState<Intelligence | null>(null);
   const [appCount, setAppCount] = useState(0);
+  // Catalogue size for the App Store card: read from /apps/templates
+  // (admin-gated) instead of the hardcoded "148+" the card used to show.
+  // The fixture holds 147 templates and the count drifts as the catalogue
+  // changes, so the number must come from the server, not the source.
+  const [templateCount, setTemplateCount] = useState<number | null>(null);
   const [updateCount, setUpdateCount] = useState(0);
   const [rebootRequired, setRebootRequired] = useState(false);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem("dp-onboarding-dismissed") === "1");
@@ -377,7 +376,6 @@ export default function Dashboard() {
   const [metricsHistory, setMetricsHistory] = useState<MetricPoint[]>([]);
   const [twoFaEnabled, setTwoFaEnabled] = useState(false);
   const [backupSetup, setBackupSetup] = useState<{ has_schedule: boolean; has_backup: boolean }>({ has_schedule: false, has_backup: false });
-  const [sitesList, setSitesList] = useState<SiteDetail[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [onCallSchedules, setOnCallSchedules] = useState<{ schedule_id: string; schedule_name: string }[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
@@ -397,7 +395,6 @@ export default function Dashboard() {
   // Feature #8: Docker image disk usage
   const [dockerDiskUsage, setDockerDiskUsage] = useState<string | null>(null);
   // Feature #9: Mail queue widget
-  const [mailQueue, setMailQueue] = useState<number | null>(null);
   // Feature #4: Quick server action messages
   const [actionMessage, setActionMessage] = useState<{ text: string; type: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
@@ -451,17 +448,12 @@ export default function Dashboard() {
     api
       .get<SiteDetail[]>("/sites")
       .then((list) => {
-        setSitesList(list);
         setSites({
           total: list.length,
           active: list.filter((s) => s.status === "active" && s.enabled !== false).length,
         });
       })
       .catch(() => setError("Failed to load sites. Please try again."));
-    api
-      .get<{ id: string }[]>("/databases")
-      .then((list) => setDbCount(list.length))
-      .catch(() => setError("Failed to load databases. Please try again."));
     api
       .get<Intelligence>("/dashboard/intelligence")
       .then(setIntel)
@@ -480,6 +472,10 @@ export default function Dashboard() {
       api
         .get<DeployedAppLite[]>("/apps")
         .then((list) => { setAppCount(list.length); setAppsList(list); })
+        .catch(() => {});
+      api
+        .get<unknown>("/apps/templates")
+        .then((d) => setTemplateCount(Array.isArray(d) ? d.length : null))
         .catch(() => {});
     }
     // Admin-gated in `routes/system.rs`. Asking as anybody else produced the
@@ -571,18 +567,6 @@ export default function Dashboard() {
       api
         .get<DiskIoResponse>("/system/disk-io")
         .then(setDiskIo)
-        .catch(() => {});
-    }
-    // Feature #9: Mail queue count
-    // Admin-gated in the backend; asking as anybody else is a refusal
-    // every 5s that this page then swallows (mail queue).
-    if (isAdmin) {
-      api
-        .get<MailQueueResponse>("/mail/queue")
-        .then((d) => {
-          const count = d.count ?? (Array.isArray(d.queue) ? d.queue.length : 0);
-          setMailQueue(count);
-        })
         .catch(() => {});
     }
   }, [isAdmin]);
@@ -966,15 +950,6 @@ export default function Dashboard() {
               Deploy App
             </Link>
           )}
-          {/* A `client` cannot bring a new domain into service by any route, so
-              offering it the shortcut named for exactly that is a dead end —
-              it lands on the one refusal the role is defined by. */}
-          {user?.role !== "client" && (
-            <Link to="/sites" className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
-              Add Site
-            </Link>
-          )}
           {isAdmin && (
             <Link to={REC_ACTION_ROUTES.diagnostics} className="hidden sm:flex px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium items-center gap-1.5 transition-colors">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z" /></svg>
@@ -1023,7 +998,6 @@ export default function Dashboard() {
               { id: "charts", label: "Historical Charts", hostOnly: true },
               { id: "status_bar", label: "Status Bar" },
               { id: "health_banner", label: "Health Indicator" },
-              { id: "sites_grid", label: "Sites Grid" },
               { id: "apps_list", label: "Applications" },
               { id: "activity", label: "Recent Activity", hostOnly: true },
               { id: "timeline", label: "Timeline" },
@@ -1142,22 +1116,21 @@ export default function Dashboard() {
       )}
 
       {/* Getting Started. Explicitly admin-only: it is titled "set up your server"
-          and four of its five steps land on pages a client cannot open (/apps,
-          /settings, /backup-orchestrator are all adminOnly). It used to be gated
+          and two of its three steps land on pages a client cannot open (/apps
+          and /backup-orchestrator are adminOnly). It used to be gated
           on `system` being loaded, which hid it from clients by accident — the
           right outcome for the wrong reason, and it broke the moment the body
           below stopped being keyed on `system`. */}
       {isAdmin && isVisible("onboarding") && !dismissed && system && (() => {
         // Every check must be able to come back FALSE. "Run diagnostics" used to
         // sit here with `check: () => true`, so a box where nothing had been done
-        // still reported 1/5 — a checklist that counts a step nobody performed
+        // still reported 1/3 — a checklist that counts a step nobody performed
         // teaches the operator not to trust the other four.
+        // No site/domain steps: the Sites pages redirect to / in this fork
+        // (always-CasaOS UI), so a step pointing at them could never
+        // complete. The remaining steps are the ones an operator of this
+        // panel can actually perform.
         const steps: OnboardingStep[] = [
-          { id: "site", label: "Create your first site", description: "Set up a website with Nginx, PHP, or reverse proxy", link: "/sites", check: () => sites.total > 0 },
-          // The prerequisite that gates everything else, and the one the list
-          // never mentioned. A live certificate is the proof: HTTPS cannot be
-          // issued until the domain actually resolves to this server.
-          { id: "dns", label: "Point your domain here", description: "HTTPS is issued once your domain resolves to this server", link: "/sites", check: () => (intel?.ssl_countdowns.length ?? 0) > 0 },
           { id: "app", label: "Deploy a Docker app", description: "One-click deploy from the app catalogue", link: "/apps", check: () => appCount > 0 },
           { id: "2fa", label: "Enable 2FA", description: "Protect your panel with two-factor authentication", link: "/account", check: () => twoFaEnabled },
           { id: "backup", label: "Set up backups", description: "Schedule recurring backups or run one manually", link: "/backup-orchestrator", check: () => backupSetup.has_schedule || backupSetup.has_backup },
@@ -1276,13 +1249,16 @@ export default function Dashboard() {
                   </Link>
                   <Link to="/apps" className="hover:opacity-80 transition-opacity">
                     <span className="block text-xs text-dark-400 mb-1">App Store</span>
-                    <span className="text-2xl font-bold text-rust-500">148+</span>
+                    <span className="text-2xl font-bold text-rust-500">{templateCount ?? "—"}</span>
                     <span className="block text-[11px] text-dark-400 mt-0.5">templates</span>
                   </Link>
                   <div className="hover:opacity-80 transition-opacity">
                     <span className="block text-xs text-dark-400 mb-1">Storage</span>
-                    <span className="text-2xl font-bold text-rust-500">{system ? `${system.disk_used_gb.toFixed(0)}G` : "—"}</span>
-                    <span className="block text-[11px] text-dark-400 mt-0.5">{system ? `free ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB` : ""}</span>
+                    {/* Big number is FREE space (the subtext already said
+                        "free"); the old big number was USED, which read as
+                        the opposite of its own subtext. */}
+                    <span className="text-2xl font-bold text-rust-500">{system ? `${(system.disk_total_gb - system.disk_used_gb).toFixed(0)}G` : "—"}</span>
+                    <span className="block text-[11px] text-dark-400 mt-0.5">{system ? `free · ${system.disk_used_gb.toFixed(0)} GB used of ${system.disk_total_gb.toFixed(0)} GB` : ""}</span>
                   </div>
                 </div>
               </div>
@@ -1429,13 +1405,19 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* CasaOS App Launcher Grid */}
+              {/* CasaOS App Launcher Grid — admin only, honours the apps_list
+                  widget toggle. Tiles come from the /apps list (the same
+                  read the app count uses), so each tile can Open/Stop/Start/
+                  Restart via the handlers above. The previous grid read the
+                  live monitor feed, which has no per-app actions and lists
+                  infra containers (dockpanel-postgres) to every role. */}
+              {isAdmin && isVisible("apps_list") && (
               <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-semibold">Installed Apps</h3>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-dark-700 text-dark-300 font-mono">
-                      {dockerStats?.containers?.length ?? 0}
+                      {appsList.length}
                     </span>
                   </div>
                   <Link to="/apps" className="text-xs text-rust-500 font-semibold hover:underline flex items-center gap-1">
@@ -1444,16 +1426,22 @@ export default function Dashboard() {
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                  {dockerStats?.containers?.map((c) => {
-                    const running = c.state === "running";
+                  {appsList.length === 0 && (
+                    <p className="col-span-full text-xs text-dark-400 text-center py-2">
+                      No apps installed yet. Deploy your first app from the App Store.
+                    </p>
+                  )}
+                  {appsList.map((app) => {
+                    const running = app.status === "running";
+                    const url = appOpenUrl(app);
                     return (
                       <div
-                        key={c.id}
+                        key={app.container_id}
                         className="group flex flex-col items-center p-3.5 rounded-xl bg-dark-900/60 hover:bg-dark-700/60 border border-dark-700/70 hover:border-rust-500/50 transition-all text-center relative"
                       >
                         <div className="relative mb-2.5">
                           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-dark-700 to-dark-800 border border-dark-600/80 flex items-center justify-center text-rust-400 font-bold text-xl shadow-xs group-hover:scale-105 transition-transform">
-                            {c.name.charAt(0).toUpperCase()}
+                            {app.name.charAt(0).toUpperCase()}
                           </div>
                           <span
                             className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-dark-800 ${
@@ -1462,11 +1450,30 @@ export default function Dashboard() {
                           />
                         </div>
                         <span className="text-xs font-semibold text-dark-100 truncate w-full font-mono">
-                          {c.name}
+                          {app.name}
                         </span>
                         <span className="text-[10px] text-dark-400 truncate w-full mt-0.5 font-mono">
-                          {running ? `${c.mem_mb} MB` : c.status}
+                          {app.template || app.status}
                         </span>
+                        <div className="flex items-center gap-1.5 mt-2">
+                          {url && (
+                            <a href={url} target="_blank" rel="noreferrer" className="text-[11px] px-2 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-dark-200">
+                              Open
+                            </a>
+                          )}
+                          {running ? (
+                            <button onClick={() => handleAppAction(app, "stop")} className="text-[11px] px-2 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-dark-200">
+                              Stop
+                            </button>
+                          ) : (
+                            <button onClick={() => handleAppAction(app, "start")} className="text-[11px] px-2 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-dark-200">
+                              Start
+                            </button>
+                          )}
+                          <button onClick={() => handleAppAction(app, "restart")} className="text-[11px] px-2 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-dark-200">
+                            Restart
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -1483,6 +1490,7 @@ export default function Dashboard() {
                   </Link>
                 </div>
               </div>
+              )}
             </div>
           </div>
 
@@ -1508,7 +1516,6 @@ export default function Dashboard() {
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
               <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
                 <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Fleet Health</h3>
-                <Link to="/servers" className="text-[10px] text-rust-400 hover:text-rust-300">Manage</Link>
               </div>
               <div className="divide-y divide-dark-600">
                 {fleetOverview.servers.map((s) => (
@@ -1525,29 +1532,6 @@ export default function Dashboard() {
                         ? <span className="text-danger-400 font-bold">{s.firing_alerts} firing</span>
                         : <span className="text-rust-400">0 firing</span>}
                     </div>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Feature #5: Site Status Mini-Grid */}
-          {isVisible("sites_grid") && sitesList.length > 0 && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
-              <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
-                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Sites</h3>
-                <Link to="/sites" className="text-[10px] text-rust-400 hover:text-rust-300">Manage</Link>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-dark-600">
-                {sitesList.slice(0, 12).map((s) => (
-                  <Link key={s.id} to={`/sites/${s.id}`} className="bg-dark-800 px-3 py-2 flex items-center gap-2 hover:bg-dark-700/50 transition-colors">
-                    <div
-                      title={s.enabled === false ? "Disabled" : s.status}
-                      className={`w-2 h-2 rounded-full shrink-0 ${
-                        s.enabled === false ? "bg-warn-500" : s.status === "active" ? "bg-rust-500" : "bg-dark-500"
-                      }`}
-                    />
-                    <span className="text-xs text-dark-100 truncate font-mono">{s.domain || s.id}</span>
                   </Link>
                 ))}
               </div>
@@ -1739,7 +1723,7 @@ export default function Dashboard() {
                 <div className="px-4 py-3 border-b border-dark-600 flex flex-col sm:flex-row gap-2">
                   <input value={bmLabel} onChange={e => setBmLabel(e.target.value)} placeholder="Label"
                     className="flex-1 px-2 py-1.5 bg-dark-900 border border-dark-500 rounded text-xs text-dark-100 placeholder-dark-400 min-h-[44px] sm:min-h-0" />
-                  <input value={bmUrl} onChange={e => setBmUrl(e.target.value)} placeholder="/sites or https://..."
+                  <input value={bmUrl} onChange={e => setBmUrl(e.target.value)} placeholder="/apps or https://..."
                     className="flex-1 px-2 py-1.5 bg-dark-900 border border-dark-500 rounded text-xs text-dark-100 placeholder-dark-400 min-h-[44px] sm:min-h-0" />
                   <button onClick={() => {
                     if (bmLabel && bmUrl) {

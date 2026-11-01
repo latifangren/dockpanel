@@ -25,7 +25,13 @@ EnvironmentFile=-/etc/dockpanel/agent.env
 # across stop/start cycles — fixes upgrade-path /run/dockpanel disappearance (v2.8.14).
 RuntimeDirectory=dockpanel
 RuntimeDirectoryPreserve=yes
-ExecStartPre=/bin/sh -c 'mkdir -p /run/dockpanel /var/lib/dockpanel/git && /usr/local/bin/dockpanel-hwinfo > /run/dockpanel/hardware.json 2>/dev/null; chmod 644 /run/dockpanel/hardware.json 2>/dev/null || true'
+# Hardware info (B6): refreshed on every agent (re)start only. Model/SoC
+# never change at runtime, so a periodic refresh would be work for no new
+# data — but the write is atomic (tmp + rename): a failed hwinfo run must
+# never truncate a good hardware.json into an empty file, which the old
+# direct redirect did on every failed boot. The OpenRC mirror lives in
+# scripts/openrc/dockpanel-agent start_pre.
+ExecStartPre=/bin/sh -c 'mkdir -p /run/dockpanel /var/lib/dockpanel/git && /usr/local/bin/dockpanel-hwinfo > /run/dockpanel/hardware.json.tmp 2>/dev/null && mv /run/dockpanel/hardware.json.tmp /run/dockpanel/hardware.json && chmod 644 /run/dockpanel/hardware.json 2>/dev/null; true'
 ExecStart=/usr/local/bin/dockpanel-agent
 ExecStartPost=/bin/sh -c 'sleep 1 && chgrp $(getent group www-data >/dev/null 2>&1 && echo www-data || echo nginx) /var/run/dockpanel/agent.sock 2>/dev/null; chmod 660 /var/run/dockpanel/agent.sock 2>/dev/null; true'
 Restart=always

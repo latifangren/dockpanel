@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+# DockPanel Docker monitor — OpenRC init script (Alpine / postmarketOS, Lite).
+# Mirrors dockpanel-docker-monitor.service (the systemd unit is the single
+# source of truth for the binary path and output file; keep the two in sync).
+#
+# OpenRC differences, stated rather than papered over:
+#   * No MemoryMax / RuntimeDirectory: /run/dockpanel is created in
+#     start_pre (checkpath), and there is no cgroup cap here.
+#   * supervise-daemon restarts the loop on crash, approximating
+#     Restart=always; the script itself logs failures and backs off
+#     instead of dying, so restarts should be rare.
+#   * Runs as root, like the systemd unit: it must read /var/run/docker.sock.
+
+name="dockpanel-docker-monitor"
+description="DockPanel Docker container metrics monitor"
+
+command="/usr/local/bin/dockpanel-docker-monitor"
+supervisor="supervise-daemon"
+output_log="/var/log/dockpanel-docker-monitor.log"
+error_log="/var/log/dockpanel-docker-monitor.log"
+pidfile="/run/dockpanel-docker-monitor.pid"
+
+depend() {
+    need docker net
+}
+
+start_pre() {
+    checkpath -d -m 0755 /run/dockpanel
+    checkpath -f -m 0644 /var/log/dockpanel-docker-monitor.log
+}

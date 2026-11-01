@@ -1395,19 +1395,36 @@ build_frontend() {
     log "Frontend built at $FRONTEND_DIR/dist/"
 }
 
+# ── Monitoring scripts (B6) ──────────────────────────────────────────────
+# Both init paths install the same two scripts. The systemd path used to be
+# the only one that did, so an OpenRC box never produced hardware.json or
+# docker-stats.json and the Dashboard showed empty/stale monitoring. A
+# script missing from the tree warns (loud) instead of silently shipping a
+# panel with no monitoring; a copy already installed from an earlier run
+# is left in place and still serviced below.
+install_monitoring_scripts() {
+    if [ -f "$SCRIPT_DIR/dockpanel-hwinfo.py" ]; then
+        cp "$SCRIPT_DIR/dockpanel-hwinfo.py" /usr/local/bin/dockpanel-hwinfo
+        chmod 755 /usr/local/bin/dockpanel-hwinfo
+    else
+        warn "dockpanel-hwinfo.py not found in $SCRIPT_DIR — hardware info will be unavailable"
+    fi
+    if [ -f "$SCRIPT_DIR/dockpanel-docker-monitor.py" ]; then
+        cp "$SCRIPT_DIR/dockpanel-docker-monitor.py" /usr/local/bin/dockpanel-docker-monitor
+        chmod 755 /usr/local/bin/dockpanel-docker-monitor
+    else
+        warn "dockpanel-docker-monitor.py not found in $SCRIPT_DIR — live container stats will be unavailable"
+    fi
+}
+
 # ── Systemd Services ─────────────────────────────────────────────────────
 # The systemd path is untouched by the OpenRC work below; create_services()
 # dispatches to this or to create_services_openrc() on INIT_SYSTEM.
 create_services_systemd() {
     header "Systemd Services"
 
-    if [ -f "$REPO_DIR/scripts/dockpanel-hwinfo.py" ]; then
-        cp "$REPO_DIR/scripts/dockpanel-hwinfo.py" /usr/local/bin/dockpanel-hwinfo
-        chmod 755 /usr/local/bin/dockpanel-hwinfo
-    fi
-    if [ -f "$REPO_DIR/scripts/dockpanel-docker-monitor.py" ]; then
-        cp "$REPO_DIR/scripts/dockpanel-docker-monitor.py" /usr/local/bin/dockpanel-docker-monitor
-        chmod 755 /usr/local/bin/dockpanel-docker-monitor
+    install_monitoring_scripts
+    if [ -x /usr/local/bin/dockpanel-docker-monitor ]; then
         cat > /etc/systemd/system/dockpanel-docker-monitor.service << 'DOCKER_MON_EOF'
 [Unit]
 Description=DockPanel Docker Container Metrics Monitor
@@ -1420,11 +1437,24 @@ ExecStart=/usr/local/bin/dockpanel-docker-monitor
 Restart=always
 RestartSec=5
 MemoryMax=64M
+# /run/dockpanel must exist before the first poll: the script creates it
+# itself, but only after a successful Docker call, so a box whose Docker
+# is slow to start served 404s until the first success for no good reason.
+RuntimeDirectory=dockpanel
+RuntimeDirectoryMode=0755
+# No User= on purpose: the script must read /var/run/docker.sock, whose
+# group varies by distribution, and a process that can talk to the Docker
+# socket is root-equivalent anyway (container mounts); a dedicated user
+# would buy no isolation and would break the monitor on boxes where the
+# socket group is not what the installer guessed. The agent runs as root too.
 
 [Install]
 WantedBy=multi-user.target
 DOCKER_MON_EOF
         systemctl enable --now dockpanel-docker-monitor.service > /dev/null 2>&1 || true
+        if ! systemctl is-active --quiet dockpanel-docker-monitor.service; then
+            warn "dockpanel-docker-monitor did not start — check: journalctl -u dockpanel-docker-monitor -n 20"
+        fi
     fi
 
     # Agent service — deploy from repo (single source of truth: panel/agent/dockpanel-agent.service)
@@ -1561,6 +1591,23 @@ EOF
 
     rc-update add dockpanel-agent default > /dev/null 2>&1 || true
     rc-update add dockpanel-api default > /dev/null 2>&1 || true
+
+    # Monitoring (B6): same two scripts as the systemd path, plus the
+    # docker-monitor init script. hwinfo runs from the agent init
+    # script's start_pre (see scripts/openrc/dockpanel-agent), mirroring
+    # the systemd unit's ExecStartPre. The monitor is observability, not
+    # core: a failed start warns loudly instead of failing the install.
+    install_monitoring_scripts
+    if [ -x /usr/local/bin/dockpanel-docker-monitor ]; then
+        cp "$SCRIPT_DIR/openrc/dockpanel-docker-monitor" /etc/init.d/dockpanel-docker-monitor
+        chmod 755 /etc/init.d/dockpanel-docker-monitor
+        rc-update add dockpanel-docker-monitor default > /dev/null 2>&1 || true
+        rc-service dockpanel-docker-monitor restart > /dev/null 2>&1 || rc-service dockpanel-docker-monitor start > /dev/null 2>&1
+        sleep 1
+        if ! rc-service dockpanel-docker-monitor status > /dev/null 2>&1; then
+            warn "dockpanel-docker-monitor did not start — see /var/log/dockpanel-docker-monitor.log"
+        fi
+    fi
 
     # Start agent, then API (the API init script `need`s the agent).
     rc-service dockpanel-agent restart > /dev/null 2>&1 || rc-service dockpanel-agent start > /dev/null 2>&1

@@ -35,6 +35,13 @@ depend() {
 start_pre() {
     checkpath -d -m 0755 /var/run/dockpanel
     checkpath -f -m 0644 /var/log/dockpanel-agent.log
+    # Hardware info (B6), mirroring the systemd unit's ExecStartPre:
+    # best effort, never blocks the agent start, refreshed on every
+    # (re)start only (model/SoC are static). Atomic tmp + rename, so a
+    # failed hwinfo run never truncates a good hardware.json.
+    if [ -x /usr/local/bin/dockpanel-hwinfo ]; then
+        /usr/local/bin/dockpanel-hwinfo > /run/dockpanel/hardware.json.tmp 2>/dev/null && mv /run/dockpanel/hardware.json.tmp /run/dockpanel/hardware.json && chmod 644 /run/dockpanel/hardware.json 2>/dev/null || true
+    fi
 }
 
 start_post() {

@@ -30,11 +30,12 @@ export interface NavItem {
    * Shown in DockPanel Lite mode (backend `DOCKPANEL_LITE=1` surfaces as
    * `lite:true` on /api/branding). Lite is an opt-in set: in lite mode
    * ONLY rows carrying this flag are shown, everything else is hidden
-   * from both menus — the task list is the visible set (Dashboard,
-   * Docker Apps, Databases, Terminal, Monitoring, Backup Manager,
-   * Settings, Notifications), plus /account, which stays because it is
-   * the only door to password/2FA/passkey management and the 2FA banner
-   * points at it. Absence means "hidden in lite", not "undecided".
+   * from both menus — the visible set is the 14 rows below (Dashboard,
+   * Files, App Store & Containers, Terminal, Monitoring, Settings,
+   * Backup Manager, Logs, Security, System, Users, Telemetry,
+   * Notifications, My Account). /account stays because it is the only
+   * door to password/2FA/passkey management and the 2FA banner points
+   * at it. Absence means "hidden in lite", not "undecided".
    *
    * Lite is a UX profile, NOT a security boundary: routes stay directly
    * reachable and the backend enforces nothing on this flag (see FORK.md).
@@ -118,6 +119,23 @@ export const navGroups: NavGroup[] = [
     label: "Management",
     items: [
       { to: "/backup-orchestrator", label: "Backup Manager", iconName: "backups", adminOnly: true, liteVisible: true },
+      // B9 (Phase 2): these five pages were registered routes with no nav
+      // row and no palette entry — reachable only by typing the URL. They
+      // return to the nav as admin-only rows because each holds controls
+      // with no other home: Logs (full log views), Security (firewall,
+      // lockdown, diagnostics), System (panel updates, health), Users
+      // (account management), Telemetry (telemetry config + update
+      // status, the only home for both). /integrations was decided the
+      // other way — its tabs are Webhooks/Extensions/WHMCS/Migrations,
+      // hosting-era through and through — so it redirects to / instead
+      // (see main.tsx). Every returned row carries liteVisible: without
+      // it, lite mode (which this fork always reports) would hide it
+      // again and recreate the orphan.
+      { to: "/logs", label: "Logs", iconName: "logs", adminOnly: true, liteVisible: true },
+      { to: "/security", label: "Security", iconName: "security", adminOnly: true, liteVisible: true },
+      { to: "/system", label: "System", iconName: "servers", adminOnly: true, liteVisible: true },
+      { to: "/users", label: "Users", iconName: "users", adminOnly: true, liteVisible: true },
+      { to: "/telemetry", label: "Telemetry", iconName: "monitoring", adminOnly: true, liteVisible: true },
       { to: "/notifications", label: "Notifications", iconName: "notifications", liteVisible: true },
       { to: "/account", label: "My Account", iconName: "settings", liteVisible: true },
     ],
