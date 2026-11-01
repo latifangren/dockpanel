@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# DockPanel Quick Installer
-# Usage: curl -sL https://dockpanel.dev/install.sh | bash
+# DockPanel Quick Installer (fork: latifangren/dockpanel, branch dev-muse-alpine)
+# Usage: curl -sL https://raw.githubusercontent.com/latifangren/dockpanel/dev-muse-alpine/scripts/install.sh | bash
+# (the upstream URL dockpanel.dev/install.sh installs the UPSTREAM panel, not this fork)
 #
 # Modes:
 #   Default:              Clone repo, download pre-built binaries (fast, no Rust needed)
@@ -70,9 +71,11 @@ else
     git clone --quiet --depth 1 -b "$VERSION" "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# Default to lite mode and pre-built binaries
+# Default to lite mode and pre-built binaries. USE_LOCAL_FRONTEND stays 0
+# (B10): reusing a local dist/ is explicit-only, so a stale build left in
+# the cloned tree can never silently override the fresh release frontend.
 export DOCKPANEL_LITE="${DOCKPANEL_LITE:-1}"
-export USE_LOCAL_FRONTEND="${USE_LOCAL_FRONTEND:-1}"
+export USE_LOCAL_FRONTEND="${USE_LOCAL_FRONTEND:-0}"
 
 if [ "${BUILD_FROM_SOURCE:-0}" != "1" ]; then
     export INSTALL_FROM_RELEASE=1

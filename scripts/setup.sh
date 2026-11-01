@@ -65,7 +65,14 @@ FW_MGR="none"
 # profile, not a security boundary — see FORK.md. The frontend flag is
 # driven by the same env var in the backend (panel/backend config.rs).
 DOCKPANEL_LITE="${DOCKPANEL_LITE:-1}"
-USE_LOCAL_FRONTEND="${USE_LOCAL_FRONTEND:-1}"
+# B10: local-frontend reuse is EXPLICIT-ONLY (default 0). It used to
+# default to 1, so any dist/ lying around — e.g. a build from an older
+# commit on the phone — silently overrode the fresh release tarball for
+# every reinstall, with no freshness check at all. Set it to 1 only when
+# you deliberately want the checked-out tree's build; a dist/ whose
+# build provenance does not match this tree is rebuilt (or the tarball
+# is used) — see frontend_dist_is_fresh in download_binaries.
+USE_LOCAL_FRONTEND="${USE_LOCAL_FRONTEND:-0}"
 # Init system this box boots with: systemd | openrc. Resolved by
 # detect_init_system in main(); create_services dispatches on it.
 INIT_SYSTEM="systemd"
@@ -1196,6 +1203,25 @@ fetched_msg() {
     fi
 }
 
+# B10: is the checked-out tree's dist/ fresh enough to install? A dist/
+# counts as fresh ONLY when its provenance file (written by
+# build_frontend on a successful build) names the commit of the tree
+# being installed. No provenance file, an unreadable commit, or a
+# commit that differs from this tree → stale (return 1). When the tree
+# has no git metadata to compare against (a bare export), there is
+# nothing to compare with, so an explicit USE_LOCAL_FRONTEND=1 is
+# trusted as-is.
+frontend_dist_is_fresh() {
+    local info="$FRONTEND_DIR/dist/.dockpanel-build.json"
+    [ -f "$info" ] || return 1
+    local built_commit
+    built_commit=$(sed -n 's/.*"commit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$info" | head -1)
+    [ -n "$built_commit" ] && [ "$built_commit" != "unknown" ] || return 1
+    local head_commit
+    head_commit=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null) || return 0
+    [ "$built_commit" = "$head_commit" ]
+}
+
 download_binaries() {
     header "Downloading Pre-built Binaries"
 
@@ -1256,23 +1282,29 @@ download_binaries() {
 
     if [ "${USE_LOCAL_FRONTEND:-0}" = "1" ]; then
         if [ -d "$FRONTEND_DIR/dist" ]; then
-            FRONTEND_DIST="$FRONTEND_DIR/dist"
-            log "Using local custom frontend build at $FRONTEND_DIST"
-            return
+            if frontend_dist_is_fresh; then
+                FRONTEND_DIST="$FRONTEND_DIR/dist"
+                log "Using local custom frontend build at $FRONTEND_DIST"
+                return
+            fi
+            # B10: a stale dist/ must never silently win over the fresh
+            # release tarball. Rebuild from this tree if the toolchain is
+            # here; otherwise fall through to the tarball below.
+            warn "Local frontend dist/ is stale or has no build provenance (built from a different commit than this tree) — rebuilding from source"
         fi
-        # B1 (option B): no dist/ and no fork release tarball to fall back
-        # on — build the frontend from the cloned tree instead of failing.
-        # The phone already has node+npm; a box without them falls through
-        # to the tarball fetch below and fails there, loudly.
+        # B1 (option B): no usable dist/ — build the frontend from the
+        # cloned tree instead of failing. The phone already has node+npm;
+        # a box without them falls through to the tarball fetch below and
+        # fails there, loudly.
         if [ -f "$FRONTEND_DIR/package.json" ] && command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-            warn "No frontend dist/ found — building the frontend from source (USE_LOCAL_FRONTEND=1)"
+            warn "Building the frontend from source (USE_LOCAL_FRONTEND=1)"
             build_frontend
-            if [ -d "$FRONTEND_DIR/dist" ]; then
+            if frontend_dist_is_fresh; then
                 FRONTEND_DIST="$FRONTEND_DIR/dist"
                 log "Using freshly built frontend at $FRONTEND_DIST"
                 return
             fi
-            warn "Frontend build did not produce dist/ — falling back to the release tarball"
+            warn "Frontend build did not produce a fresh dist/ — falling back to the release tarball"
         fi
     fi
 
@@ -1391,8 +1423,19 @@ build_frontend() {
     fi
 
     log "Building frontend..."
-    (cd "$FRONTEND_DIR" && npx vite build 2>&1 | tail -3)
-    log "Frontend built at $FRONTEND_DIR/dist/"
+    if (cd "$FRONTEND_DIR" && npx vite build 2>&1 | tail -3); then
+        # Build provenance (B10): download_binaries trusts a local dist/
+        # only when this file says it was built from the tree being
+        # installed. Written only on a successful build — a failed vite
+        # run leaves any older dist/ (and any older provenance file)
+        # untouched, so it can never masquerade as fresh.
+        local build_commit
+        build_commit=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+        printf '{"commit": "%s", "built_at": "%s"}\n' "$build_commit" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$FRONTEND_DIR/dist/.dockpanel-build.json"
+        log "Frontend built at $FRONTEND_DIR/dist/ (commit $build_commit)"
+    else
+        warn "Frontend build failed — dist/ (if any) is from an earlier build and must not be trusted as fresh"
+    fi
 }
 
 # ── Monitoring scripts (B6) ──────────────────────────────────────────────
@@ -2430,14 +2473,34 @@ enabled = true
 [nginx-limit-req]
 enabled = true
 F2BEOF
+            # Start it LOUDLY (B12): the old code ended every enable/start
+            # with `|| true`, so a box with no fail2ban service unit/script
+            # — e.g. Alpine, where the `fail2ban-systemd` package does not
+            # exist in the repos (verified on the phone 2026-11-01) — still
+            # reported "Fail2Ban installed". A configured-but-stopped
+            # fail2ban protects nothing; say so and mark the service failed.
+            local f2b_started=0
             if [ "$INIT_SYSTEM" = "openrc" ]; then
-                rc-update add fail2ban default > /dev/null 2>&1 || true
-                rc-service fail2ban start > /dev/null 2>&1 || true
+                rc-update add fail2ban default > /dev/null 2>&1 || warn "fail2ban: rc-update add failed — the service will not start at boot"
+                if rc-service fail2ban start > /dev/null 2>&1; then
+                    f2b_started=1
+                else
+                    warn "fail2ban: service did not start — check /var/log/fail2ban.log; SSH brute-force protection is OFF"
+                fi
             else
-                systemctl enable --now fail2ban > /dev/null 2>&1 || true
+                if systemctl enable --now fail2ban > /dev/null 2>&1; then
+                    f2b_started=1
+                else
+                    warn "fail2ban: systemctl enable --now failed — check: journalctl -u fail2ban; SSH brute-force protection is OFF"
+                fi
             fi
-            log "Fail2Ban installed with SSH + Nginx jails"
-            svc_ok "Fail2Ban"
+            if [ "$f2b_started" = "1" ]; then
+                log "Fail2Ban installed with SSH + Nginx jails"
+                svc_ok "Fail2Ban"
+            else
+                warn "Fail2Ban is configured (/etc/fail2ban/jail.local) but NOT running — retry from Settings → Services"
+                svc_fail "Fail2Ban"
+            fi
         else
             warn "Fail2Ban failed to install — retry later from Settings → Services"
             svc_fail "Fail2Ban"

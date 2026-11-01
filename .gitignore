@@ -7,6 +7,11 @@ panel/mcp/target/
 # Node.js
 panel/frontend/node_modules/
 panel/frontend/dist/
+# tsc incremental build info (B12): a build artifact, never source. One copy
+# is still tracked in git from an earlier commit; removing it needs a
+# credentialed `git rm --cached` (the snapshot-push path cannot delete
+# tracked files) — this entry keeps it from being re-added or churning.
+panel/frontend/tsconfig.tsbuildinfo
 website/client/node_modules/
 website/client/dist/
 website/server/node_modules/
