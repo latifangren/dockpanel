@@ -1320,6 +1320,32 @@ build_frontend() {
 create_services_systemd() {
     header "Systemd Services"
 
+    if [ -f "$REPO_DIR/scripts/dockpanel-hwinfo.py" ]; then
+        cp "$REPO_DIR/scripts/dockpanel-hwinfo.py" /usr/local/bin/dockpanel-hwinfo
+        chmod 755 /usr/local/bin/dockpanel-hwinfo
+    fi
+    if [ -f "$REPO_DIR/scripts/dockpanel-docker-monitor.py" ]; then
+        cp "$REPO_DIR/scripts/dockpanel-docker-monitor.py" /usr/local/bin/dockpanel-docker-monitor
+        chmod 755 /usr/local/bin/dockpanel-docker-monitor
+        cat > /etc/systemd/system/dockpanel-docker-monitor.service << 'DOCKER_MON_EOF'
+[Unit]
+Description=DockPanel Docker Container Metrics Monitor
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dockpanel-docker-monitor
+Restart=always
+RestartSec=5
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target
+DOCKER_MON_EOF
+        systemctl enable --now dockpanel-docker-monitor.service > /dev/null 2>&1 || true
+    fi
+
     # Agent service — deploy from repo (single source of truth: panel/agent/dockpanel-agent.service)
     cp "$AGENT_SRC/dockpanel-agent.service" /etc/systemd/system/dockpanel-agent.service
     chmod 644 /etc/systemd/system/dockpanel-agent.service
@@ -1641,6 +1667,20 @@ server {
     server_name ${SERVER_NAME};
 ${PANEL_TLS_BLOCK}
     client_max_body_size 100M;
+
+    # Hardware info (Device model / SoC)
+    location = /api/hardware {
+        alias /run/dockpanel/hardware.json;
+        default_type application/json;
+        add_header Cache-Control "no-cache";
+    }
+
+    # Docker live stats
+    location = /api/docker-stats {
+        alias /run/dockpanel/docker-stats.json;
+        default_type application/json;
+        add_header Cache-Control "no-cache";
+    }
 
     # API
     location /api/ {

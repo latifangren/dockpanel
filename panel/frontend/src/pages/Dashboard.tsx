@@ -137,6 +137,45 @@ interface SystemInfo {
   process_count: number;
 }
 
+interface DockerContainerStat {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  cpu_pct: number;
+  mem_mb: number;
+  mem_limit_mb: number;
+  mem_pct: number;
+}
+
+interface DockerLiveStats {
+  total: number;
+  running: number;
+  stopped: number;
+  containers: DockerContainerStat[];
+  updated_at?: number;
+}
+
+function LiveClock() {
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const dateStr = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+  return (
+    <div className="mb-4">
+      <div className="text-3xl md:text-4xl font-extrabold tracking-tight font-mono text-dark-100">{timeStr}</div>
+      <div className="text-xs md:text-sm font-medium text-dark-400 mt-0.5">{dateStr}</div>
+    </div>
+  );
+}
+
 interface Process {
   pid: number;
   name: string;
@@ -382,8 +421,18 @@ export default function Dashboard() {
   // the count below already reads), and client-side samples for the tab charts.
   const [monTab, setMonTab] = useState<"network" | "disk">("network");
   const [appsList, setAppsList] = useState<DeployedAppLite[]>([]);
+  const [hardware, setHardware] = useState<{ device_model?: string | null; soc_name?: string | null } | null>(null);
+  const [dockerStats, setDockerStats] = useState<DockerLiveStats | null>(null);
+  const [dockerTab, setDockerTab] = useState<"cpu" | "ram">("cpu");
   const [netSamples, setNetSamples] = useState<{ rx: number; tx: number }[]>([]);
   const [diskSamples, setDiskSamples] = useState<{ r: number; w: number }[]>([]);
+
+  const sortedContainers = useMemo(() => {
+    if (!dockerStats?.containers) return [];
+    return [...dockerStats.containers].sort((a, b) =>
+      dockerTab === "cpu" ? b.cpu_pct - a.cpu_pct : b.mem_mb - a.mem_mb
+    );
+  }, [dockerStats, dockerTab]);
 
   const isVisible = (widget: string) => widgetConfig[widget] !== false; // default visible
   const toggleWidget = (widget: string) => {
@@ -452,6 +501,17 @@ export default function Dashboard() {
     api
       .get<{ has_schedule: boolean; has_backup: boolean }>("/backup-setup-status")
       .then(setBackupSetup)
+      .catch(() => {});
+    fetch("/api/hardware")
+      .then((r) => r.json())
+      .then((data) => setHardware(data))
+      .catch(() => {});
+    fetch("/api/docker-stats")
+      .then((r) => r.json())
+      .then((d: DockerLiveStats) => {
+        setDockerStats(d);
+        setDockerInfo({ total: d.total, running: d.running, stopped: d.stopped });
+      })
       .catch(() => {});
     // Feature #1: Docker container overview. Admin-gated in the backend since
     // v2.77.0 — it asks the agent for the same `/apps` the list above does.
@@ -693,6 +753,22 @@ export default function Dashboard() {
     const fast = setInterval(fetchRealtimeData, 5000);
     return () => clearInterval(fast);
   }, [wsConnected, activeServerId, fetchRealtimeData]);
+
+  // Live Docker container metrics — 3s cadence
+  useEffect(() => {
+    const pollDocker = () => {
+      fetch("/api/docker-stats")
+        .then((r) => r.json())
+        .then((d: DockerLiveStats) => {
+          setDockerStats(d);
+          setDockerInfo({ total: d.total, running: d.running, stopped: d.stopped });
+        })
+        .catch(() => {});
+    };
+    pollDocker();
+    const interval = setInterval(pollDocker, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Feature #7: Disk full prediction based on historical usage trend
   const diskForecast = useMemo(() => {
@@ -1186,6 +1262,8 @@ export default function Dashboard() {
               processes) is unchanged. Counts use only fields this page
               already fetches; the prototype's Cron/Backup counts have no
               Dashboard field, so they are not shown as counts. */}
+          <LiveClock />
+
           <div className="flex flex-col xl:flex-row gap-4 mb-6 items-start">
             <div className="flex-1 min-w-0 flex flex-col gap-4">
               <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
@@ -1224,9 +1302,60 @@ export default function Dashboard() {
                       <Gauge label="Load" value={(system.load_avg_1 / Math.max(1, system.cpu_count)) * 100} display={system.load_avg_1.toFixed(2)} sub="Low load" />
                     )}
                     <Gauge label="CPU" value={system.cpu_usage} display={`${system.cpu_usage.toFixed(0)}%`} extra={system.cpu_temp !== null && system.cpu_temp !== undefined ? `${Math.round(system.cpu_temp)}°C` : undefined} sub={`${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1.toFixed(2)}` : ""}`} />
-                    <Gauge label="Memory" value={system.mem_usage_pct} display={`${system.mem_usage_pct.toFixed(0)}%`} sub={`${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB`} />
-                    <Gauge label="Disk" value={system.disk_usage_pct} display={`${system.disk_usage_pct.toFixed(0)}%`} sub={`${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free`} />
+                    <Gauge label="RAM" value={system.mem_usage_pct} display={`${system.mem_usage_pct.toFixed(0)}%`} extra={`${(system.mem_used_mb / 1024).toFixed(1)} GB`} sub={`${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB`} />
+                    <Gauge label="Disk" value={system.disk_usage_pct} display={`${system.disk_usage_pct.toFixed(0)}%`} extra={`${system.disk_used_gb.toFixed(0)} GB`} sub={`${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free`} />
                   </div>
+
+                  {/* CasaOS style Docker Apps Usage */}
+                  {dockerStats && dockerStats.containers && dockerStats.containers.length > 0 && (
+                    <div className="mt-5 pt-4 border-t border-dark-700">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex gap-1.5 p-1 bg-dark-900 rounded-lg border border-dark-700">
+                          <button
+                            onClick={() => setDockerTab("cpu")}
+                            className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                              dockerTab === "cpu" ? "bg-rust-500 text-white shadow-xs" : "text-dark-300 hover:text-dark-100"
+                            }`}
+                          >
+                            CPU
+                          </button>
+                          <button
+                            onClick={() => setDockerTab("ram")}
+                            className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                              dockerTab === "ram" ? "bg-rust-500 text-white shadow-xs" : "text-dark-300 hover:text-dark-100"
+                            }`}
+                          >
+                            RAM
+                          </button>
+                        </div>
+                        <span className="text-[11px] text-dark-400 font-mono">
+                          {dockerStats.running} running / {dockerStats.total} total
+                        </span>
+                      </div>
+
+                      <div className="space-y-2">
+                        {sortedContainers.map((c) => (
+                          <div key={c.id} className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-dark-900/60 border border-dark-700/60 text-xs">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${c.state === "running" ? "bg-emerald-500" : "bg-dark-500"}`} />
+                              <span className="font-semibold truncate font-mono text-dark-100">{c.name}</span>
+                              <span className="text-[10px] text-dark-400 truncate hidden sm:inline">{c.image}</span>
+                            </div>
+                            <div className="text-right shrink-0 font-mono">
+                              {dockerTab === "cpu" ? (
+                                <span className="font-semibold text-rust-500">{c.cpu_pct.toFixed(1)}% CPU</span>
+                              ) : (
+                                <div>
+                                  <span className="font-semibold text-rust-500">{c.mem_mb} MB</span>
+                                  {c.mem_pct > 0 && <span className="text-dark-400 ml-1 text-[10px]">({c.mem_pct}%)</span>}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1282,9 +1411,15 @@ export default function Dashboard() {
                   <h3 className="text-sm font-semibold mb-3">System Information</h3>
                   {[
                     ["Hostname", system.hostname],
+                    ...(hardware?.device_model ? [["Device model", hardware.device_model]] : []),
                     ["Operating system", system.os],
                     ["Kernel", system.kernel],
-                    ["Processor", system.cpu_model],
+                    [
+                      "Processor",
+                      hardware?.soc_name
+                        ? `${hardware.soc_name}${system.cpu_model ? ` (${system.cpu_model})` : ""}`
+                        : system.cpu_model,
+                    ],
                     ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
                     ["Processes", system.process_count.toLocaleString()],
                     ["Uptime", formatUptime(system.uptime_secs)],
