@@ -102,97 +102,23 @@ export function navFlagsFor(
 
 export const navGroups: NavGroup[] = [
   {
-    // Ported from the AI Studio v2 navigation consolidation. Projects is a
-    // local-browser workspace view (see Projects.tsx), so it is lite-visible:
-    // it groups exactly the lite set plus the pages lite hides, without
-    // resurrecting any hidden route's sidebar row. Networking wraps Sites /
-    // DNS / CDN, which lite hides, so it is NOT lite-visible — in lite mode
-    // its tab content stays reachable only by direct URL, like every other
-    // hidden route. Container Policies is deliberately NOT consolidated here:
-    // v2 folded it into an /apps policies tab that this codebase does not
-    // have, and folding it without that tab would orphan the page.
-    key: "workspaces",
-    label: "Workspaces & Apps",
-    items: [
-      { to: "/projects", label: "Projects", iconName: "extensions", liteVisible: true },
-      { to: "/networking", label: "Domains, DNS & CDN", iconName: "dns", adminOnly: true },
-    ],
-  },
-  {
-    key: "hosting",
-    label: "Hosting",
+    key: "system",
+    label: "CasaOS",
     items: [
       { to: "/", label: "Dashboard", iconName: "dashboard", liteVisible: true },
-      { to: "/sites", label: "Sites", iconName: "sites" },
-      { to: "/databases", label: "Databases", iconName: "databases", liteVisible: true },
-      { to: "/wordpress-toolkit", label: "WP Toolkit", iconName: "wordpress", adminOnly: true },
-      { to: "/apps", label: "Docker Apps", iconName: "apps", adminOnly: true, liteVisible: true },
-      { to: "/git-deploys", label: "Git Deploy", iconName: "gitDeploys", adminOnly: true },
-      { to: "/migration", label: "Migration", iconName: "migration", adminOnly: true },
-    ],
-  },
-  {
-    key: "reseller",
-    label: "Reseller",
-    items: [
-      { to: "/reseller", label: "Reseller Panel", iconName: "reseller", resellerVisible: true, resellerOnly: true },
-      { to: "/reseller/users", label: "My Users", iconName: "users", resellerVisible: true, resellerOnly: true },
-      // The admin's half of this group. Everything an admin can do to a reseller
-      // lives behind /api/resellers, which had eight handlers and no screen at
-      // all until v2.118.0 — so the only reseller-shaped control the panel
-      // offered an admin was the role dropdown in Users, which sets the role
-      // without creating a profile and produces an account whose own panel
-      // answers 404. This row is the door those handlers never had.
-      { to: "/resellers", label: "Resellers", iconName: "reseller", adminOnly: true },
-    ],
-  },
-  {
-    key: "operations",
-    label: "Operations",
-    items: [
-      { to: "/dns", label: "DNS", iconName: "dns", adminOnly: true, consolidatedInto: "/networking?tab=dns" },
-      { to: "/cdn", label: "CDN", iconName: "dns", adminOnly: true, consolidatedInto: "/networking?tab=cdn" },
-      // Unrestricted since v2.103.0, and the flag's absence is the whole point.
-      // The backend admits a mail domain to whoever owns the site of the same
-      // name on the same server (`MAIL_DOMAIN_CALLER_PREDICATE`, backend
-      // routes/mail.rs), and that test carries NO role term — a `client`, a
-      // plain `user` and a `reseller` all reach it by the same route. There is
-      // no flag here meaning "owner", because the registry only ever sees a
-      // role string; ownership is not knowable at nav-render time. Restricting
-      // this row to any single role would contradict the API in one direction
-      // or the other. What the page SHOWS is decided in Mail.tsx, per caller.
-      { to: "/mail", label: "Mail", iconName: "mail" },
-      { to: "/backup-orchestrator", label: "Backup Manager", iconName: "backups", adminOnly: true, liteVisible: true },
-      { to: "/monitoring", label: "Monitoring", iconName: "monitoring", liteVisible: true },
-      { to: "/notifications", label: "Notifications", iconName: "notifications", liteVisible: true },
-      { to: "/logs", label: "Logs", iconName: "logs", adminOnly: true },
-      { to: "/terminal", label: "Terminal", iconName: "terminal", liteVisible: true },
-    ],
-  },
-  {
-    key: "admin",
-    label: "Admin",
-    items: [
-      { to: "/servers", label: "Servers", iconName: "servers", adminOnly: true },
-      { to: "/users", label: "Users", iconName: "users", adminOnly: true },
-      { to: "/container-policies", label: "Container Policies", iconName: "servers", adminOnly: true },
-      { to: "/integrations", label: "Integrations", iconName: "extensions", adminOnly: true },
-      { to: "/secrets", label: "Secrets", iconName: "secrets", adminOnly: true },
-      { to: "/security", label: "Security", iconName: "security", adminOnly: true },
-      { to: "/system", label: "System", iconName: "servers", adminOnly: true },
-      { to: "/telemetry", label: "Telemetry", iconName: "monitoring", adminOnly: true },
+      { to: "/files", label: "Files", iconName: "files", liteVisible: true },
+      { to: "/apps", label: "App Store & Containers", iconName: "apps", adminOnly: true, liteVisible: true },
+      { to: "/terminal", label: "Terminal", iconName: "terminal", adminOnly: true, liteVisible: true },
+      { to: "/monitoring", label: "Monitoring", iconName: "monitoring", adminOnly: true, liteVisible: true },
       { to: "/settings", label: "Settings", iconName: "settings", adminOnly: true, liteVisible: true },
     ],
   },
   {
-    key: "account",
-    label: "Account",
+    key: "management",
+    label: "Management",
     items: [
-      // The ONLY entry every role can see, and the reason it exists: password
-      // change, 2FA enrolment, passkeys, sessions and API keys all used to live
-      // behind the `adminOnly` /settings row above, so a client had no door to
-      // its own account at all. Never mark this `adminOnly` — the 2FA banner in
-      // all four layouts points here, and a non-admin is exactly who it warns.
+      { to: "/backup-orchestrator", label: "Backup Manager", iconName: "backups", adminOnly: true, liteVisible: true },
+      { to: "/notifications", label: "Notifications", iconName: "notifications", liteVisible: true },
       { to: "/account", label: "My Account", iconName: "settings", liteVisible: true },
     ],
   },

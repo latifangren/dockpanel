@@ -136,23 +136,25 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/verify-email" element={<VerifyEmail />} />
             <Route element={<LayoutShell />}>
               <Route path="/" element={<Dashboard />} />
-              <Route path="/sites" element={<Sites />} />
-              <Route path="/sites/:id" element={<SiteDetail />} />
-              <Route path="/sites/:id/files" element={<Files />} />
-              <Route path="/sites/:id/backups" element={<Backups />} />
-              <Route path="/sites/:id/crons" element={<Crons />} />
-              <Route path="/sites/:id/deploy" element={<Deploy />} />
-              <Route path="/sites/:id/wordpress" element={<WordPress />} />
-              <Route path="/wordpress-toolkit" element={<WordPressToolkit />} />
-              <Route path="/projects" element={<Projects />} />
-              <Route path="/networking" element={<NetworkingHub />} />
-              <Route path="/cdn" element={<Cdn />} />
-              <Route path="/dns" element={<Dns />} />
-              <Route path="/databases" element={<Databases />} />
+              <Route path="/files" element={<Files />} />
+              <Route path="/files/*" element={<Files />} />
+              <Route path="/sites" element={<Navigate to="/" replace />} />
+              <Route path="/sites/:id" element={<Navigate to="/" replace />} />
+              <Route path="/sites/:id/files" element={<Navigate to="/" replace />} />
+              <Route path="/sites/:id/backups" element={<Navigate to="/" replace />} />
+              <Route path="/sites/:id/crons" element={<Navigate to="/" replace />} />
+              <Route path="/sites/:id/deploy" element={<Navigate to="/" replace />} />
+              <Route path="/sites/:id/wordpress" element={<Navigate to="/" replace />} />
+              <Route path="/wordpress-toolkit" element={<Navigate to="/" replace />} />
+              <Route path="/projects" element={<Navigate to="/" replace />} />
+              <Route path="/networking" element={<Navigate to="/" replace />} />
+              <Route path="/cdn" element={<Navigate to="/" replace />} />
+              <Route path="/dns" element={<Navigate to="/" replace />} />
+              <Route path="/databases" element={<Navigate to="/" replace />} />
               <Route path="/terminal" element={<Terminal />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/apps" element={<Apps />} />
-              <Route path="/git-deploys" element={<GitDeploys />} />
+              <Route path="/git-deploys" element={<Navigate to="/apps" replace />} />
               <Route path="/extensions" element={<Navigate to="/integrations" replace />} />
               <Route path="/security" element={<Security />} />
               <Route path="/diagnostics" element={<Navigate to="/security?tab=diagnostics" replace />} />
@@ -161,14 +163,14 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/updates" element={<Navigate to="/system" replace />} />
               <Route path="/activity" element={<Navigate to="/logs?tab=audit" replace />} />
               <Route path="/system-logs" element={<Navigate to="/logs?tab=system" replace />} />
-              <Route path="/mail" element={<Mail />} />
-              <Route path="/servers" element={<Servers />} />
-              <Route path="/migration" element={<MigrationWizard />} />
-              <Route path="/reseller" element={<ResellerDashboard />} />
-              <Route path="/reseller/users" element={<ResellerUsers />} />
-              <Route path="/resellers" element={<Resellers />} />
+              <Route path="/mail" element={<Navigate to="/" replace />} />
+              <Route path="/servers" element={<Navigate to="/" replace />} />
+              <Route path="/migration" element={<Navigate to="/" replace />} />
+              <Route path="/reseller" element={<Navigate to="/" replace />} />
+              <Route path="/reseller/users" element={<Navigate to="/" replace />} />
+              <Route path="/resellers" element={<Navigate to="/" replace />} />
               <Route path="/users" element={<Users />} />
-              <Route path="/container-policies" element={<ContainerPolicies />} />
+              <Route path="/container-policies" element={<Navigate to="/apps" replace />} />
               <Route path="/backup-orchestrator" element={<BackupOrchestrator />} />
               {/* Incidents live in Monitoring's Status Page tab, so land there
                   rather than on the default Monitors tab. `resolveTab` clamps a

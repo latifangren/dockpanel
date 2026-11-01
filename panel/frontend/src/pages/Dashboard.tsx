@@ -1268,29 +1268,22 @@ export default function Dashboard() {
             <div className="flex-1 min-w-0 flex flex-col gap-4">
               <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
                 <h3 className="text-sm font-semibold mb-4">Dashboard</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
-                  <Link to="/sites" className="hover:opacity-80 transition-opacity">
-                    <span className="block text-xs text-dark-400 mb-1">Sites</span>
-                    <span className="text-2xl font-bold text-rust-500">{sites.total}</span>
-                    {sites.active > 0 && <span className="block text-[11px] text-dark-400 mt-0.5">{sites.active} active</span>}
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <Link to="/apps" className="hover:opacity-80 transition-opacity">
+                    <span className="block text-xs text-dark-400 mb-1">Containers</span>
+                    <span className="text-2xl font-bold text-rust-500">{dockerInfo?.running ?? 0}<span className="text-sm text-dark-400 font-normal">/{dockerInfo?.total ?? 0}</span></span>
+                    <span className="block text-[11px] text-dark-400 mt-0.5">running</span>
                   </Link>
-                  <Link to="/databases" className="hover:opacity-80 transition-opacity">
-                    <span className="block text-xs text-dark-400 mb-1">Databases</span>
-                    <span className="text-2xl font-bold text-rust-500">{dbCount}</span>
+                  <Link to="/apps" className="hover:opacity-80 transition-opacity">
+                    <span className="block text-xs text-dark-400 mb-1">App Store</span>
+                    <span className="text-2xl font-bold text-rust-500">148+</span>
+                    <span className="block text-[11px] text-dark-400 mt-0.5">templates</span>
                   </Link>
-                  {isAdmin && (
-                    <Link to="/apps" className="hover:opacity-80 transition-opacity">
-                      <span className="block text-xs text-dark-400 mb-1">Applications</span>
-                      <span className="text-2xl font-bold text-rust-500">{appCount}</span>
-                    </Link>
-                  )}
-                  {isAdmin && (
-                    <Link to="/apps" className="hover:opacity-80 transition-opacity">
-                      <span className="block text-xs text-dark-400 mb-1">Docker</span>
-                      <span className="text-2xl font-bold text-rust-500">{dockerInfo?.running ?? 0}<span className="text-sm text-dark-400 font-normal">/{dockerInfo?.total ?? 0}</span></span>
-                      <span className="block text-[11px] text-dark-400 mt-0.5">running</span>
-                    </Link>
-                  )}
+                  <div className="hover:opacity-80 transition-opacity">
+                    <span className="block text-xs text-dark-400 mb-1">Storage</span>
+                    <span className="text-2xl font-bold text-rust-500">{system ? `${system.disk_used_gb.toFixed(0)}G` : "—"}</span>
+                    <span className="block text-[11px] text-dark-400 mt-0.5">{system ? `free ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB` : ""}</span>
+                  </div>
                 </div>
               </div>
 
@@ -1436,56 +1429,60 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {isAdmin && isVisible("apps_list") && (
-                <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold">Application</h3>
-                    <Link to="/apps" className="text-xs text-rust-400 hover:text-rust-300">Manage</Link>
+              {/* CasaOS App Launcher Grid */}
+              <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold">Installed Apps</h3>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-dark-700 text-dark-300 font-mono">
+                      {dockerStats?.containers?.length ?? 0}
+                    </span>
                   </div>
-                  {appsList.length === 0 ? (
-                    <p className="text-sm text-dark-400">No applications deployed yet. <Link to="/apps" className="text-rust-400 hover:underline">Deploy one</Link> to see it here.</p>
-                  ) : (
-                    <div className="divide-y divide-dark-700">
-                      {appsList.map((app) => {
-                        const openUrl = appOpenUrl(app);
-                        const running = app.status.toLowerCase().includes("running");
-                        return (
-                          <div key={app.container_id} className="py-3 flex items-center gap-3 first:pt-0 last:pb-0">
-                            <div className="w-11 h-11 rounded-xl bg-rust-500 flex items-center justify-center text-white font-bold text-lg shrink-0">
-                              {app.name.charAt(0).toUpperCase()}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">{app.name}</p>
-                              <p className="text-xs text-dark-400 truncate">{app.template || app.image || "—"}</p>
-                              <p className="text-xs mt-0.5">
-                                <span className={`inline-flex items-center gap-1 font-medium ${running ? "text-rust-400" : "text-dark-400"}`}>
-                                  <span className={`w-1.5 h-1.5 rounded-full ${running ? "bg-rust-500 animate-pulse" : "bg-dark-500"}`} />
-                                  {app.status}
-                                </span>
-                              </p>
-                            </div>
-                            <div className="text-right shrink-0">
-                              {openUrl ? (
-                                <a href={openUrl} target="_blank" rel="noopener noreferrer" className="inline-block px-3 py-1.5 rounded-full border border-rust-500 text-rust-400 text-xs font-bold hover:bg-rust-500 hover:text-white transition-colors">Open</a>
-                              ) : (
-                                <span className="inline-block px-3 py-1.5 rounded-full border border-dark-600 text-dark-400 text-xs">No port</span>
-                              )}
-                              <div className="mt-1.5 text-xs">
-                                {running ? (
-                                  <button onClick={() => handleAppAction(app, "stop")} className="text-rust-400 hover:underline">Stop</button>
-                                ) : (
-                                  <button onClick={() => handleAppAction(app, "start")} className="text-rust-400 hover:underline">Start</button>
-                                )}
-                                <button onClick={() => handleAppAction(app, "restart")} className="text-rust-400 hover:underline ml-2">Restart</button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                  <Link to="/apps" className="text-xs text-rust-500 font-semibold hover:underline flex items-center gap-1">
+                    App Store &rarr;
+                  </Link>
                 </div>
-              )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {dockerStats?.containers?.map((c) => {
+                    const running = c.state === "running";
+                    return (
+                      <div
+                        key={c.id}
+                        className="group flex flex-col items-center p-3.5 rounded-xl bg-dark-900/60 hover:bg-dark-700/60 border border-dark-700/70 hover:border-rust-500/50 transition-all text-center relative"
+                      >
+                        <div className="relative mb-2.5">
+                          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-dark-700 to-dark-800 border border-dark-600/80 flex items-center justify-center text-rust-400 font-bold text-xl shadow-xs group-hover:scale-105 transition-transform">
+                            {c.name.charAt(0).toUpperCase()}
+                          </div>
+                          <span
+                            className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-dark-800 ${
+                              running ? "bg-emerald-500" : "bg-dark-500"
+                            }`}
+                          />
+                        </div>
+                        <span className="text-xs font-semibold text-dark-100 truncate w-full font-mono">
+                          {c.name}
+                        </span>
+                        <span className="text-[10px] text-dark-400 truncate w-full mt-0.5 font-mono">
+                          {running ? `${c.mem_mb} MB` : c.status}
+                        </span>
+                      </div>
+                    );
+                  })}
+
+                  {/* Add App Button */}
+                  <Link
+                    to="/apps"
+                    className="flex flex-col items-center justify-center p-3.5 rounded-xl border border-dashed border-dark-600 hover:border-rust-500/60 hover:bg-dark-900/40 transition-all text-center text-dark-400 hover:text-rust-500 min-h-[110px]"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-dark-700/60 flex items-center justify-center mb-1.5">
+                      <span className="text-xl leading-none font-bold">+</span>
+                    </div>
+                    <span className="text-xs font-medium">Add App</span>
+                  </Link>
+                </div>
+              </div>
             </div>
           </div>
 

@@ -1682,6 +1682,18 @@ ${PANEL_TLS_BLOCK}
         add_header Cache-Control "no-cache";
     }
 
+    # AList File Manager
+    location ^~ /fs {
+        proxy_pass http://127.0.0.1:5244;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Range $http_range;
+        proxy_set_header If-Range $http_if_range;
+        client_max_body_size 20000m;
+    }
+
     # API
     location /api/ {
         proxy_pass http://127.0.0.1:3080;
