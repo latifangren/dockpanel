@@ -22,7 +22,6 @@ pub struct AlertQuery {
 pub struct AlertRow {
     id: Uuid,
     server_id: Option<Uuid>,
-    site_id: Option<Uuid>,
     alert_type: String,
     severity: String,
     title: String,
@@ -55,7 +54,7 @@ pub async fn list(
     // Build dynamic query — scoped to the caller, then to the ServerScope
     // server. NULL server_id is admitted: backup_failure, cron_failure,
     // security-scan and ssl_expiry alerts are fired with server_id = None (they
-    // are site- or account-scoped), and a bare `server_id = $2` predicate hid
+    // are account-scoped), and a bare `server_id = $2` predicate hid
     // that entire class from the list and the summary permanently — including
     // criticals — while the bell, external channels and the escalation engine
     // all still paged for them. Deleting a server also NULLs the column
@@ -63,7 +62,7 @@ pub async fn list(
     // LEFT JOIN users resolves acknowledged_by → email for the UI without
     // forcing N+1 fetches from the frontend.
     let mut sql = String::from(
-        "SELECT a.id, a.server_id, a.site_id, a.alert_type, a.severity, a.title, \
+        "SELECT a.id, a.server_id, a.alert_type, a.severity, a.title, \
                 a.message, a.status, a.notified_at, a.resolved_at, a.acknowledged_at, \
                 a.acknowledged_by, u.email AS acknowledged_by_email, \
                 a.acknowledged_comment, a.escalation_step_index, a.created_at \

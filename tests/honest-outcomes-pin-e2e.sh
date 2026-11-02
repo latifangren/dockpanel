@@ -315,13 +315,23 @@ eq "E3 the file-read probe takes its anonymous volumes with them" \
 DB_INSERTS=$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | wc -l)
 # R5: floor re-derived 3 -> 1; the migration wizard's INSERT left with it
 # and databases.rs holds the only surviving one. 0 still means the scan broke.
+# R7: the surviving INSERT's owner column is user_id, not site_id (see F1).
 if [ "$DB_INSERTS" -ge 1 ]; then
   ok "F0 discovered $DB_INSERTS INSERT INTO databases sites (>= 1 known to exist)"
 else
   bad "F0 only $DB_INSERTS INSERT INTO databases sites" "the scan broke; F1 is vacuous"
 fi
-eq "F1 every INSERT INTO databases names the NOT NULL site_id" \
-   "$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | $G -cv "site_id")" "0"
+# R7 INVERSION: `site_id` is dropped with the `sites` table and ownership is
+# denormalised onto `databases` itself, so the surviving INSERT must name
+# the NEW owner columns and must NOT name the dead one. The class arm
+# survives inverted: every INSERT INTO databases names user_id (the
+# backfilled owner, NOT NULL with no default — an INSERT omitting it could
+# never succeed, exactly the defect this arm was written for) and none
+# names site_id.
+eq "F1 every INSERT INTO databases names the denormalised user_id owner" \
+   "$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | $G -cv "user_id")" "0"
+eq "F1b no INSERT INTO databases names the dropped site_id" \
+   "$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | $G -c "site_id")" "0"
 # The wizard must not offer a location the agent structurally cannot read. The
 # unit runs `PrivateTmp=yes`, so an archive copied to the host's /tmp — the
 # obvious place, and the one this guard used to name — is invisible to it, and

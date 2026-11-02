@@ -3,7 +3,6 @@ pub mod backup;
 pub mod db;
 pub mod iac;
 pub mod logs;
-pub mod php;
 pub mod security;
 pub mod sites;
 pub mod ssl;

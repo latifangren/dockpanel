@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 struct MonitorRow {
     id: uuid::Uuid,
     user_id: uuid::Uuid,
-    site_id: Option<uuid::Uuid>,
     url: String,
     name: String,
     status: String,
@@ -44,7 +43,7 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
 
         // Get monitors due for checking (HTTP/TCP/ping) + all heartbeat monitors (checked separately)
         let monitors: Vec<MonitorRow> = match sqlx::query_as(
-            "SELECT id, user_id, site_id, url, name, status, alert_email, alert_slack_url, alert_discord_url, \
+            "SELECT id, user_id, url, name, status, alert_email, alert_slack_url, alert_discord_url, \
              monitor_type, port, keyword, keyword_must_contain, check_interval, last_checked_at, custom_headers \
              FROM monitors WHERE enabled = TRUE AND \
              (monitor_type = 'heartbeat' OR last_checked_at IS NULL OR last_checked_at < NOW() - (check_interval || ' seconds')::interval)",
@@ -203,7 +202,6 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
                 pool,
                 monitor.user_id,
                 None,
-                monitor.site_id,
                 "slow_response",
                 &state_key,
                 "warning",
@@ -242,7 +240,6 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
             pool,
             monitor.user_id,
             None,
-            monitor.site_id,
             "slow_response",
             &monitor.id.to_string(),
             &format!("Slow response resolved: {}", monitor.name),

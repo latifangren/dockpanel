@@ -63,8 +63,10 @@ pub struct ListQuery {
 
 #[derive(serde::Deserialize)]
 pub struct CreateDbRequest {
-    /// Exactly one of `site_id` / `stack_id` must be set — see `resolve_owner`.
-    pub site_id: Option<Uuid>,
+    /// R7: a database is created only under a stack. `site_id` died with the
+    /// `sites` table; `databases` now carries its own `user_id`/`server_id`
+    /// (backfilled from the old site/stack owners), so creation resolves its
+    /// owner from the stack row alone — see `resolve_stack_owner`.
     pub stack_id: Option<Uuid>,
     pub name: String,
     pub engine: Option<String>,
@@ -73,7 +75,8 @@ pub struct CreateDbRequest {
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct Database {
     pub id: Uuid,
-    pub site_id: Option<Uuid>,
+    pub user_id: Uuid,
+    pub server_id: Option<Uuid>,
     pub stack_id: Option<Uuid>,
     pub name: String,
     pub engine: String,
@@ -92,23 +95,25 @@ pub async fn list(
 ) -> Result<Json<Vec<Database>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
 
-    // Same admin-widening create() already grants (hosting_helpers::SITE_CALLER_PREDICATE) —
-    // without it, a database an admin creates on a tenant's site via the local-box
-    // arm becomes invisible to its own creator (v2.216.0 audit finding).
+    // Same admin-widening create() already grants (see `resolve_stack_owner`) —
+    // without it, a database an admin creates on a tenant's stack via the
+    // local-box arm becomes invisible to its own creator (v2.216.0 audit
+    // finding).
     //
-    // LEFT JOIN both possible owner tables and COALESCE: a row has exactly one
-    // non-null owner FK (chk_databases_owner), so each row matches at most one
-    // owner across the two joins and COALESCE picks whichever is present — one
-    // query covers site-owned and stack-owned databases without a UNION.
+    // R7: `databases` carries its own `user_id`/`server_id` (backfilled from
+    // the old site/stack owners when the `sites` table dropped), so no join
+    // to `sites`/`docker_stacks` is needed to scope a row. The admin arm is
+    // the same shape as the old COALESCE arm, with `d.server_id` in place of
+    // `COALESCE(s.server_id, st.server_id)`: a non-admin sees only their own
+    // rows; an admin sees rows on a server that is local or that they
+    // registered.
     let dbs: Vec<Database> = sqlx::query_as(
-        "SELECT d.id, d.site_id, d.stack_id, d.name, d.engine, d.db_user, d.container_id, d.port, d.created_at \
+        "SELECT d.id, d.user_id, d.server_id, d.stack_id, d.name, d.engine, d.db_user, d.container_id, d.port, d.created_at \
          FROM databases d \
-         LEFT JOIN sites s ON d.site_id = s.id \
-         LEFT JOIN docker_stacks st ON d.stack_id = st.id \
-         WHERE (COALESCE(s.user_id, st.user_id) = $1 OR EXISTS (SELECT 1 FROM users u, servers sv \
-         WHERE u.id = $1 AND u.role = 'admin' AND sv.id = COALESCE(s.server_id, st.server_id) \
+         WHERE (d.user_id = $1 OR EXISTS (SELECT 1 FROM users u, servers sv \
+         WHERE u.id = $1 AND u.role = 'admin' AND sv.id = d.server_id \
          AND (sv.is_local OR sv.user_id = u.id))) \
-         AND COALESCE(s.server_id, st.server_id) = $2 ORDER BY d.created_at DESC LIMIT $3 OFFSET $4",
+         AND d.server_id = $2 ORDER BY d.created_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(claims.sub)
     .bind(server_id)
@@ -121,46 +126,33 @@ pub async fn list(
     Ok(Json(dbs))
 }
 
-/// Resolve the host + a caller-facing label for a database's owner — a site or a
-/// stack (GH #64: standalone DB provisioning), exactly one of which the caller must
-/// supply. The label only names `agent_for_site_server`'s refusal log line; no domain
-/// is loaded on these paths, so callers still identify the target by database name.
-async fn resolve_owner(
+/// Resolve the host + a caller-facing label for a database's owner — a stack
+/// (GH #64: standalone DB provisioning). R7: the site arm died with the
+/// `sites` table. A database row created before R7 under a site keeps its
+/// backfilled `user_id`/`server_id` and stays listable/operable through the
+/// direct-column queries below, but no NEW database can be created under a
+/// site: there is no site row left to resolve, and `databases.site_id` no
+/// longer exists. The label only names `agent_for_site_server`'s refusal log
+/// line; no domain is loaded on these paths, so callers still identify the
+/// target by database name.
+async fn resolve_stack_owner(
     state: &AppState,
-    site_id: Option<Uuid>,
     stack_id: Option<Uuid>,
     user_id: Uuid,
 ) -> Result<(Option<Uuid>, String), ApiError> {
-    match (site_id, stack_id) {
-        (Some(sid), None) => {
-            let row: Option<(Option<Uuid>, String)> = sqlx::query_as(&format!(
-                "SELECT s.server_id, s.domain FROM sites s WHERE {}",
-                crate::hosting_helpers::SITE_CALLER_PREDICATE
-            ))
-            .bind(sid)
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("resolve database owner", e))?;
-            row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
-        }
-        (None, Some(kid)) => {
-            let row: Option<(Option<Uuid>, String)> = sqlx::query_as(&format!(
-                "SELECT st.server_id, st.name FROM docker_stacks st WHERE {}",
-                crate::helpers::STACK_CALLER_PREDICATE
-            ))
-            .bind(kid)
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("resolve database owner", e))?;
-            row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))
-        }
-        _ => Err(err(
-            StatusCode::BAD_REQUEST,
-            "Specify exactly one of site_id or stack_id",
-        )),
-    }
+    let Some(kid) = stack_id else {
+        return Err(err(StatusCode::BAD_REQUEST, "Specify stack_id"));
+    };
+    let row: Option<(Option<Uuid>, String)> = sqlx::query_as(&format!(
+        "SELECT st.server_id, st.name FROM docker_stacks st WHERE {}",
+        crate::helpers::STACK_CALLER_PREDICATE
+    ))
+    .bind(kid)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("resolve database owner", e))?;
+    row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))
 }
 
 /// POST /api/databases — Create a new database.
@@ -176,20 +168,18 @@ pub async fn create(
     // machine keeps the container and the port. The row that decides WHICH OWNER has
     // to decide WHICH HOST too.
     let (owner_server_id, owner_label) =
-        resolve_owner(&state, body.site_id, body.stack_id, claims.sub).await?;
+        resolve_stack_owner(&state, body.stack_id, claims.sub).await?;
 
     let agent =
         crate::helpers::agent_for_site_server(&state, owner_server_id, &owner_label).await?;
 
     // Hard per-account cap on total databases so a
     // single tenant cannot exhaust the shared, host-wide DB port pool / host RAM.
-    // Counts both site-owned and stack-owned rows (COALESCE — chk_databases_owner
-    // guarantees exactly one of the two joins matches per row).
+    // R7: counted directly on `databases.user_id` — the old join to `sites`
+    // is gone with the table, and the backfilled column carries the same
+    // ownership for site-origin rows too.
     let (db_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM databases d \
-         LEFT JOIN sites s ON d.site_id = s.id \
-         LEFT JOIN docker_stacks st ON d.stack_id = st.id \
-         WHERE COALESCE(s.user_id, st.user_id) = $1",
+        "SELECT COUNT(*) FROM databases d WHERE d.user_id = $1",
     )
     .bind(claims.sub)
     .fetch_one(&state.db)
@@ -246,13 +236,14 @@ pub async fn create(
         ));
     }
 
-    // Check uniqueness per-owner (site OR stack — whichever the caller supplied;
-    // resolve_owner already refused a request naming both or neither).
+    // Check uniqueness per-owner (the stack the caller supplied;
+    // resolve_stack_owner already refused a request naming no stack).
+    // R7: uniqueness is per stack (`databases_stack_name_unique`) — the old
+    // per-site arm died with `databases.site_id`.
     let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM databases WHERE site_id IS NOT DISTINCT FROM $1 \
-         AND stack_id IS NOT DISTINCT FROM $2 AND name = $3",
+        "SELECT id FROM databases WHERE stack_id IS NOT DISTINCT FROM $1 \
+         AND name = $2",
     )
-    .bind(body.site_id)
     .bind(body.stack_id)
     .bind(&body.name)
     .fetch_optional(&state.db)
@@ -284,12 +275,15 @@ pub async fn create(
 
     // Insert DB record first to atomically claim the port (unique index prevents races).
     // container_id is empty until the agent creates it.
+    // R7: the row stamps its own `user_id`/`server_id` from the caller and the
+    // resolved stack owner — the backfilled columns the R7 migration added.
     let db_record: Database = match sqlx::query_as(
-        "INSERT INTO databases (site_id, stack_id, name, engine, db_user, db_password_enc, container_id, port) \
-         VALUES ($1, $2, $3, $4, $5, $6, '', $7) \
-         RETURNING id, site_id, stack_id, name, engine, db_user, container_id, port, created_at",
+        "INSERT INTO databases (user_id, server_id, stack_id, name, engine, db_user, db_password_enc, container_id, port) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, '', $8) \
+         RETURNING id, user_id, server_id, stack_id, name, engine, db_user, container_id, port, created_at",
     )
-    .bind(body.site_id)
+    .bind(claims.sub)
+    .bind(owner_server_id)
     .bind(body.stack_id)
     .bind(&body.name)
     .bind(engine)
@@ -311,7 +305,7 @@ pub async fn create(
     // Call agent to create container. `stack_id` tells the agent to join the
     // stack's own private bridge network (already used to give the stack's other
     // containers name-based reachability) instead of the shared, ICC-disabled
-    // `dockpanel-db` bridge every site-owned database uses — the stack network is
+    // `dockpanel-db` bridge — the stack network is
     // single-tenant by construction, so this introduces no new cross-tenant
     // exposure, and every panel-side query/backup/credential operation already
     // reaches the container via `docker exec`, which is unaffected by which
@@ -362,14 +356,13 @@ pub async fn credentials(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Admin-widened to match create()/list() — see the v2.216.0 audit note on list().
-    // LEFT JOIN both owner tables + COALESCE, same pattern as list() — see its comment.
+    // R7: scoped on `d.user_id`/`d.server_id` directly, same predicate shape
+    // as list() (non-admin: own rows; admin: local or own-registered server).
     let row: Option<(String, String, String, Option<i32>, Option<String>)> = sqlx::query_as(
         "SELECT d.name, d.engine, d.db_password_enc, d.port, d.container_id \
          FROM databases d \
-         LEFT JOIN sites s ON d.site_id = s.id \
-         LEFT JOIN docker_stacks st ON d.stack_id = st.id \
-         WHERE d.id = $1 AND (COALESCE(s.user_id, st.user_id) = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
-         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = COALESCE(s.server_id, st.server_id) \
+         WHERE d.id = $1 AND (d.user_id = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
+         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = d.server_id \
          AND (sv.is_local OR sv.user_id = u.id)))",
     )
     .bind(id)
@@ -413,23 +406,25 @@ pub async fn remove(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Verify ownership through site — and take the host from the same row while we
-    // are here. The join to `sites` was already carrying the ownership term; the
-    // host it also knows about was thrown away, and the agent came from the request
-    // header instead. That is a destructive mismatch in both directions: the panel
-    // row is deleted whether or not the container was, so dispatching to the wrong
-    // machine either destroys a same-named `dockpanel-db-{name}` container that
+    // Verify ownership through the row itself — and take the host from the
+    // same row while we are here. The join to the owner table was already
+    // carrying the ownership term; the host it also knows about was thrown
+    // away, and the agent came from the request header instead. That is a
+    // destructive mismatch in both directions: the panel row is deleted
+    // whether or not the container was, so dispatching to the wrong machine
+    // either destroys a same-named `dockpanel-db-{name}` container that
     // belongs to somebody else's tenant, or fails to find one while the real
     // container is orphaned on its own host with its row already gone.
     // Admin-widened to match create()/list() — see the v2.216.0 audit note on list().
-    // LEFT JOIN both owner tables + COALESCE, same pattern as list() — see its comment.
+    // R7: the owner label is the stack name where the row has a stack, else
+    // the database name — the site domain that used to label it is gone with
+    // the `sites` table, and the label only names a refusal log line.
     let db: Option<(Uuid, String, Option<String>, Option<Uuid>, String)> = sqlx::query_as(
-        "SELECT d.id, d.name, d.container_id, COALESCE(s.server_id, st.server_id), \
-         COALESCE(s.domain, st.name) FROM databases d \
-         LEFT JOIN sites s ON d.site_id = s.id \
+        "SELECT d.id, d.name, d.container_id, d.server_id, \
+         COALESCE(st.name, d.name) FROM databases d \
          LEFT JOIN docker_stacks st ON d.stack_id = st.id \
-         WHERE d.id = $1 AND (COALESCE(s.user_id, st.user_id) = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
-         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = COALESCE(s.server_id, st.server_id) \
+         WHERE d.id = $1 AND (d.user_id = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
+         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = d.server_id \
          AND (sv.is_local OR sv.user_id = u.id)))",
     )
     .bind(id)
@@ -483,28 +478,25 @@ pub(crate) async fn purge_dumps_if_unclaimed(
     // Take the dumps with it — but only once nothing else is using them.
     //
     // The dump directory is named for the DATABASE and nothing else, while the
-    // name is unique only per SITE, so two live databases belonging to two
-    // different sites on this host share one directory. Purging on the first
+    // name is unique only per owner, so two live databases belonging to two
+    // different owners on this host share one directory. Purging on the first
     // delete would take the survivor's backups with it, which is a worse failure
     // than the leak being closed and would be discovered at a restore.
     //
-    // ⚠ A row whose site names no server is counted as possibly-here rather than
+    // ⚠ A row whose server is unknown is counted as possibly-here rather than
     // elsewhere. It cannot be acted on through the panel — the agent lookup above
     // refuses it — but its dumps, if any, are on some host, and this host is one
     // of the candidates. Doubt keeps the files; only positive evidence that
     // nothing else claims the name removes them. The reverse default trades a
     // disclosed leak for silent data loss.
-    // R1 (backend-hosting removal): the `sites` join is gone — `databases` carries
-    // no server column of its own, so a site-owned survivor can no longer prove
-    // it lives on a different host. Its stack join contributes NULL, which the
-    // `IS NULL` arm already treats as "possibly here", so the directory is kept
-    // whenever a same-named site-owned database survives anywhere. That is the
-    // conservative direction this guard already documents above: a leaked
-    // directory, never a survivor's dumps deleted.
+    // R7: `databases` now carries `server_id` directly (backfilled from the
+    // old site/stack owners), so a surviving same-named row proves its own
+    // host without any owner join — the R1 workaround that kept the directory
+    // whenever a site-owned survivor existed anywhere is gone, and the probe
+    // below is exact again.
     let shared: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM databases d \
-         LEFT JOIN docker_stacks st ON st.id = d.stack_id \
-         WHERE d.name = $1 AND (st.server_id = $2 OR st.server_id IS NULL))",
+        "SELECT EXISTS(SELECT 1 FROM databases \
+         WHERE name = $1 AND (server_id = $2 OR $2::uuid IS NULL))",
     )
     .bind(&name)
     .bind(site_server_id)
@@ -535,15 +527,17 @@ pub(crate) async fn purge_dumps_if_unclaimed(
 
 
 /// Helper: fetch database info (name, engine, password, port) — and the id of the server
-/// the owning site actually runs on — with an ownership check.
+/// the database itself runs on — with an ownership check.
 ///
-/// The join to `sites` was here all along for the ownership term, and `sites` is where the
-/// authoritative `server_id` lives; the column simply was not selected. So every caller
-/// below answered WHICH DATABASE from this row and then took WHICH HOST from `ServerScope`
-/// — an `X-Server-Id` request header that falls back to the LOCAL agent whenever the caller
-/// owns no `servers` row. No non-admin ever owns one (the only INSERT is admin-gated), so
-/// for a tenant whose database lives on a fleet member that fallback was always the wrong
-/// machine, and nothing in the response said so.
+/// R7: the row names its own host (`databases.server_id`, backfilled from the
+/// old site/stack owners) and its own owner (`databases.user_id`), so no join
+/// to an owner table is needed. Every caller below used to answer WHICH
+/// DATABASE from this row and then take WHICH HOST from `ServerScope` — an
+/// `X-Server-Id` request header that falls back to the LOCAL agent whenever
+/// the caller owns no `servers` row. No non-admin ever owns one (the only
+/// INSERT is admin-gated), so for a tenant whose database lives on a fleet
+/// member that fallback was always the wrong machine, and nothing in the
+/// response said so.
 ///
 /// What that leaked matters as much as where it dispatched: this helper returns the
 /// DECRYPTED database password, and every caller forwards it to the agent it chose, which
@@ -570,15 +564,13 @@ async fn get_db_info(
     // This is the shared chokepoint for tables/table_schema/query/table_indexes/
     // foreign_keys/schema_overview/update_pitr_config/pitr_restore/reset_password/
     // dumps/import — one fix here covers all 11 callers.
-    // LEFT JOIN both owner tables + COALESCE, same pattern as list() — see its comment.
+    // R7: direct-column scoping, same pattern as list() — see its comment.
     let row: Option<(String, String, String, Option<i32>, Option<String>, Option<Uuid>)> = sqlx::query_as(
         "SELECT d.name, d.engine, d.db_password_enc, d.port, d.container_id, \
-         COALESCE(s.server_id, st.server_id) \
+         d.server_id \
          FROM databases d \
-         LEFT JOIN sites s ON d.site_id = s.id \
-         LEFT JOIN docker_stacks st ON d.stack_id = st.id \
-         WHERE d.id = $1 AND (COALESCE(s.user_id, st.user_id) = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
-         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = COALESCE(s.server_id, st.server_id) \
+         WHERE d.id = $1 AND (d.user_id = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
+         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = d.server_id \
          AND (sv.is_local OR sv.user_id = u.id)))",
     )
     .bind(id)
@@ -979,12 +971,15 @@ pub async fn pitr_config(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify ownership — admin-widened to match create()/list() (v2.216.0 audit note).
-    // Owner is either a site or a stack (chk_databases_owner enforces exactly one).
+    // R7: owner is the row itself (`user_id`) or a stack (retained for the
+    // stack arm's admin widening); the `sites` subquery died with the table,
+    // and `d.user_id` carries the same ownership for site-origin rows via
+    // the R7 backfill.
     let _db: (String,) = sqlx::query_as(
-        "SELECT name FROM databases WHERE id = $1 AND (\
-         site_id IN (SELECT s.id FROM sites s WHERE s.user_id = $2 OR EXISTS \
+        "SELECT name FROM databases d WHERE d.id = $1 AND (\
+         d.user_id = $2 OR EXISTS \
          (SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
-         AND sv.id = s.server_id AND (sv.is_local OR sv.user_id = u.id))) \
+         AND sv.id = d.server_id AND (sv.is_local OR sv.user_id = u.id)) \
          OR stack_id IN (SELECT st.id FROM docker_stacks st WHERE st.user_id = $2 OR EXISTS \
          (SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
          AND sv.id = st.server_id AND (sv.is_local OR sv.user_id = u.id))))"

@@ -26,6 +26,13 @@
 # `reseller_dashboard.rs` already use for "which users does this admin
 # manage").
 #
+# R7 re-derivation: `users.reseller_id` is dropped with the reseller tables,
+# so the managed arm — and the query that served it — is gone. The validator
+# is now fail-closed WITHOUT a DB round-trip: self targets continue, every
+# other target is rejected with the same non-disclosure message. Arms A3/A4/B2
+# below assert the new shape; the property they guard (no third party is ever
+# paged) is stronger than the query they replaced, not weaker.
+#
 # §A validate_user_routes exists and checks the right table/predicate.
 # §B self-routes (paging yourself) need no DB check.
 # §C both create_policy and update_policy call it.
@@ -94,8 +101,8 @@ VALIDATE_USER_BODY=$(fnbody "$EP_C" "validate_user_routes")
 CREATE_BODY=$(fnbody "$EP_C" "create_policy")
 UPDATE_BODY=$(fnbody "$EP_C" "update_policy")
 
-# ── §A validate_user_routes exists and checks the right ownership predicate ──
-echo "── §A validate_user_routes exists, scoped by reseller_id ──"
+# ── §A validate_user_routes exists and rejects non-self targets fail-closed ──
+echo "── §A validate_user_routes exists, fail-closed without the dropped column ──"
 
 if [ -n "$VALIDATE_USER_BODY" ]; then
   ok "A1 validate_user_routes exists"
@@ -109,16 +116,16 @@ else
   bad "A2 it doesn't scan for the user: route shape"
 fi
 
-if has "$VALIDATE_USER_BODY" 'WHERE id = \$1 AND reseller_id = \$2'; then
-  ok "A3 the ownership query matches the codebase's established reseller_id = caller shape"
+if has "$VALIDATE_USER_BODY" 'reseller_id'; then
+  bad "A3 (R7) the validator still consults reseller_id — the column was dropped with the reseller tables"
 else
-  bad "A3 the ownership predicate is missing or uses a different (unverified) shape"
+  ok "A3 (R7) no reseller_id query remains — the managed arm died with the column"
 fi
 
-if has "$VALIDATE_USER_BODY" '\.bind\(target_id\)' && has "$VALIDATE_USER_BODY" '\.bind\(owner_id\)'; then
-  ok "A4 the query binds the target and the caller, not some other pair"
+if has "$VALIDATE_USER_BODY" 'sqlx::query'; then
+  bad "A4 (R7) the validator still round-trips the DB — the fail-closed reject needs no query"
 else
-  bad "A4 the query's bound parameters don't match target_id/owner_id"
+  ok "A4 (R7) no DB round-trip remains — the self-only decision is pure, nothing to bind"
 fi
 
 # ── §B self-routes need no DB round trip ──────────────────────────────────
@@ -130,10 +137,10 @@ else
   bad "B1 no self-route special case — an admin might not even be able to page themselves"
 fi
 
-if before "$VALIDATE_USER_BODY" "target_id == owner_id" "sqlx::query_as"; then
-  ok "B2 the self-check happens BEFORE the DB round trip (short-circuits it)"
+if before "$VALIDATE_USER_BODY" "target_id == owner_id" "does not exist"; then
+  ok "B2 (R7) the self-check short-circuits before the fail-closed reject"
 else
-  bad "B2 the self-check is positioned after the DB query — dead code or wrong order"
+  bad "B2 (R7) the self-check does not precede the reject — order wrong"
 fi
 
 # ── §C both write paths call it ───────────────────────────────────────────

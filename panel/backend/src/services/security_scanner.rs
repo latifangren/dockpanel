@@ -248,7 +248,6 @@ async fn run_scan(pool: &PgPool, member: &FleetMember) {
             pool,
             *user_id,
             Some(member.id),
-            None,
             "security",
             "",
             &resolved_title,
@@ -437,11 +436,11 @@ pub(crate) async fn auto_fix_safe_findings(
 /// the resolve misses, and it pages every thirty minutes for a week about a
 /// certificate that is already healthy. That is not hypothetical here — it is
 /// the defect `resolve_ssl_renewal_failure` was written for, and this door
-/// cannot use that resolver (it takes `site_id: Uuid`, and this alert has none).
+/// cannot use that resolver (it was site-keyed, and this alert has no site).
 ///
 /// The domain has to be IN the key: `fire_alert_deduped` dedups on
-/// `(alert_type, site_id, state_key)` and ignores `server_id`, so with
-/// `site_id` NULL every failing stack on every host would otherwise share one
+/// `(alert_type, state_key)` and ignores `server_id`, so with a bare key
+/// every failing stack on every host would otherwise share one
 /// twelve-hour bucket and only the first would ever be heard.
 ///
 /// ⚠ `alerts.state_key` is `VARCHAR(100)`. A hostname may be 253 bytes, so the
@@ -844,7 +843,6 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
                 pool,
                 user_id,
                 Some(member.id),
-                None,
                 "ssl_renewal_failure",
                 &stack_renewal_state_key(domain),
                 &format!("SSL renewal recovered: {domain}"),
@@ -857,23 +855,21 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
         }
         Err(e) => {
             tracing::warn!("Auto-fix: Compose stack SSL renewal failed for {domain}: {e}");
-            // 7. `site_id = None` — there is no `sites` row and inventing one
-            //    would attach this alert to somebody else's site.
+            // 7. No site to name — there is no `sites` row and the alert
+            //    carries no site scope anymore.
             //
-            //    ⚠ `fire_alert_deduped` dedups on (alert_type, site_id,
-            //    state_key) and does NOT consider `server_id`. Every existing
-            //    `ssl_renewal_failure` caller passes a real `site_id`, so the
-            //    key alone separates them; with `site_id` NULL a bare
-            //    `ssl_renewal_key::FAILED` would put EVERY failing stack on
-            //    EVERY host into one twelve-hour bucket and the second domain's
-            //    critical alert would never reach anybody. The subject is the
-            //    domain, so the key names it — see `stack_renewal_state_key`,
-            //    which is also what the success arm resolves on.
+            //    ⚠ `fire_alert_deduped` dedups on (alert_type,
+            //    state_key) and does NOT consider `server_id`. The subject is
+            //    the domain, so the key names it — see
+            //    `stack_renewal_state_key`, which is also what the success
+            //    arm resolves on. A bare `ssl_renewal_key::FAILED` would put
+            //    EVERY failing stack on EVERY host into one twelve-hour
+            //    bucket and the second domain's critical alert would never
+            //    reach anybody.
             notifications::fire_alert_deduped(
                 pool,
                 user_id,
                 Some(member.id),
-                None,
                 "ssl_renewal_failure",
                 &stack_renewal_state_key(domain),
                 "critical",
@@ -1085,7 +1081,6 @@ async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domai
                 pool,
                 user_id,
                 Some(member.id),
-                None,
                 "ssl_renewal_failure",
                 &docker_app_renewal_state_key(domain),
                 &format!("SSL renewal recovered: {domain}"),
@@ -1102,7 +1097,6 @@ async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domai
                 pool,
                 user_id,
                 Some(member.id),
-                None,
                 "ssl_renewal_failure",
                 &docker_app_renewal_state_key(domain),
                 "critical",
@@ -1147,7 +1141,6 @@ async fn send_scan_alerts(pool: &PgPool, member: &FleetMember, critical: i32, wa
             pool,
             *user_id,
             Some(member.id),
-            None,
             "security",
             "",
             severity,

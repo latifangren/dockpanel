@@ -14,11 +14,13 @@
 //! enforcement loop"; §4 "operability ≠ automation"). Desired-vs-actual drift
 //! against the agent's live `GET /iac/export` is deferred to W5.3.
 //!
-//! Four entities in v1, each compared in its most meaningful form:
+//! One entity in v1, compared in its most meaningful form:
 //!   - `alert_rules`     — SINGLETON: one row per server, whole-row posture diff (flagship).
-//!   - `sites`           — COLLECTION: per-domain inventory asymmetry + per-site config diff.
-//!   - `crons`           — COLLECTION: per (domain, command) job parity.
-//!   - `backup_coverage` — SUMMARY: per-server derived coverage (sites total / backed-up / destinations).
+//!
+//! R7: the `sites`, `crons`, and `backup_coverage` entities died with the
+//! `sites`, `crons`, and `backup_schedules` tables. The report is
+//! alert-rules only; the collection comparator survives (unit-tested) for
+//! any future collection entity.
 //!
 //! The comparators (`compare_config`, `diff_singleton`, `diff_collection`)
 //! are pure and unit-tested with in-memory rows; the fetchers project each
@@ -38,6 +40,9 @@ const NULL: Value = Value::Null;
 /// the value, only "set" vs "unset", so a rotated secret doesn't read as drift
 /// and a leaked value never reaches the UI.
 const ALERT_SENSITIVE: &[&str] = &["notify_slack_url", "notify_discord_url"];
+// R7: the only collection entities died with their tables, so this is
+// test-only until a new collection entity arrives (see `diff_collection`).
+#[allow(dead_code)]
 const NO_SENSITIVE: &[&str] = &[];
 
 // ─── Wire types ────────────────────────────────────────────────────────────
@@ -63,17 +68,9 @@ pub struct FieldDiff {
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct EntityValueDiff {
-    /// Natural identity of the drifted entity (e.g. a site domain).
+    /// Natural identity of the drifted entity (e.g. a domain or job key).
     pub identity: String,
     pub fields: Vec<FieldDiff>,
-}
-
-#[derive(Serialize, Clone, Copy)]
-pub struct CoverageMetrics {
-    pub total_sites: i64,
-    pub backed_up: i64,
-    pub unprotected: i64,
-    pub destinations: i64,
 }
 
 #[derive(Serialize)]
@@ -88,18 +85,14 @@ pub struct ServerEntityDrift {
     // SINGLETON
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field_diffs: Option<Vec<FieldDiff>>,
-    // COLLECTION
+    // COLLECTION (no collection entity survives R7; the fields stay so a
+    // future entity can populate them without a wire change)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub only_here: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub only_reference: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_diffs: Option<Vec<EntityValueDiff>>,
-    // SUMMARY
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub coverage: Option<CoverageMetrics>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reference_coverage: Option<CoverageMetrics>,
 }
 
 #[derive(Serialize)]
@@ -211,6 +204,10 @@ pub fn diff_singleton(
     }
 }
 
+/// R7: the collection comparator survives with no production consumer —
+/// its entities died with their tables. Kept, unit-tested, for the next
+/// collection entity; do not delete as "dead" without removing the tests.
+#[allow(dead_code)]
 pub struct CollectionResult {
     pub in_sync: bool,
     pub only_here: Vec<String>,
@@ -221,6 +218,7 @@ pub struct CollectionResult {
 /// Compare two keyed collections of config rows. Produces three buckets:
 /// entities present only here, only on the reference, and shared-identity rows
 /// whose config differs.
+#[allow(dead_code)]
 pub fn diff_collection(
     reference: &[(String, Value)],
     current: &[(String, Value)],
@@ -268,13 +266,6 @@ pub fn diff_collection(
         only_reference,
         value_diffs,
     }
-}
-
-/// A server's backup posture is in sync when every one of its sites has an
-/// enabled backup schedule and at least one destination exists (or it has no
-/// sites at all — nothing to protect).
-pub fn coverage_in_sync(m: &CoverageMetrics) -> bool {
-    m.total_sites == 0 || (m.unprotected == 0 && m.destinations > 0)
 }
 
 // ─── DB fetchers (config projected to JSONB in SQL) ────────────────────────
@@ -340,88 +331,14 @@ async fn fetch_alert_rules(
     Ok(rows.into_iter().collect())
 }
 
-async fn fetch_sites(
-    pool: &PgPool,
-    ids: &[Uuid],
-) -> Result<HashMap<Uuid, Vec<(String, Value)>>, sqlx::Error> {
-    let rows: Vec<(Uuid, String, Value)> = sqlx::query_as(
-        "SELECT server_id, domain, (to_jsonb(c) - 'server_id' - 'domain') AS config FROM ( \
-           SELECT server_id, domain, runtime, proxy_port, php_version, root_path, ssl_enabled, \
-                  ssl_profile, rate_limit, max_upload_mb, php_memory_mb, php_max_workers, custom_nginx, \
-                  php_preset, app_command, enabled, fastcgi_cache, redis_cache, redis_db, waf_enabled, \
-                  waf_mode, csp_policy, permissions_policy, bot_protection \
-           FROM sites WHERE server_id = ANY($1) \
-         ) c",
-    )
-    .bind(ids)
-    .fetch_all(pool)
-    .await?;
-    Ok(group_by_server(rows))
-}
-
-async fn fetch_crons(
-    pool: &PgPool,
-    ids: &[Uuid],
-) -> Result<HashMap<Uuid, Vec<(String, Value)>>, sqlx::Error> {
-    let rows: Vec<(Uuid, String, Value)> = sqlx::query_as(
-        "SELECT s.server_id, (s.domain || ' · ' || cr.command) AS identity, \
-                jsonb_build_object('schedule', cr.schedule, 'enabled', cr.enabled, 'label', cr.label) AS config \
-         FROM crons cr JOIN sites s ON cr.site_id = s.id \
-         WHERE s.server_id = ANY($1)",
-    )
-    .bind(ids)
-    .fetch_all(pool)
-    .await?;
-    Ok(group_by_server(rows))
-}
-
-async fn fetch_backup_coverage(
-    pool: &PgPool,
-    ids: &[Uuid],
-) -> Result<HashMap<Uuid, CoverageMetrics>, sqlx::Error> {
-    let rows: Vec<(Uuid, i64, i64, i64)> = sqlx::query_as(
-        "SELECT s.server_id, \
-                COUNT(*)::bigint AS total_sites, \
-                COUNT(bs.id) FILTER (WHERE bs.enabled)::bigint AS backed_up, \
-                COUNT(DISTINCT bs.destination_id)::bigint AS destinations \
-         FROM sites s LEFT JOIN backup_schedules bs ON bs.site_id = s.id \
-         WHERE s.server_id = ANY($1) \
-         GROUP BY s.server_id",
-    )
-    .bind(ids)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(sid, total, backed, dests)| {
-            (
-                sid,
-                CoverageMetrics {
-                    total_sites: total,
-                    backed_up: backed,
-                    unprotected: (total - backed).max(0),
-                    destinations: dests,
-                },
-            )
-        })
-        .collect())
-}
-
-fn group_by_server(rows: Vec<(Uuid, String, Value)>) -> HashMap<Uuid, Vec<(String, Value)>> {
-    let mut out: HashMap<Uuid, Vec<(String, Value)>> = HashMap::new();
-    for (sid, identity, config) in rows {
-        out.entry(sid).or_default().push((identity, config));
-    }
-    out
-}
-
 // ─── Report assembly ───────────────────────────────────────────────────────
 
 /// Build the drift report: compare each target server against `reference_id`
-/// across the four v1 entities. `targets` (already excluding the reference) are
+/// across the surviving v1 entity (alert_rules; the hosting entities
+/// died with their tables in R7). `targets` (already excluding the reference) are
 /// the servers rendered under each entity.
 ///
-/// ⚠ SECURITY (s432): the five fetchers below used to take a `user_id` and
+/// ⚠ SECURITY (s432): the fetchers below used to take a `user_id` and
 /// scope every query to that caller's own registered servers — the same
 /// admin-scoping bug `servers::list`/`dashboard::fleet_overview` already fix.
 /// This function has exactly one caller, `routes/drift.rs::report`, which is
@@ -448,9 +365,6 @@ pub async fn build_report(
     };
 
     let alert_rules = fetch_alert_rules(pool, &all_ids).await?;
-    let sites = fetch_sites(pool, &all_ids).await?;
-    let crons = fetch_crons(pool, &all_ids).await?;
-    let coverage = fetch_backup_coverage(pool, &all_ids).await?;
 
     // Track which target servers drift in ≥1 entity.
     let mut drifted: HashSet<Uuid> = HashSet::new();
@@ -475,61 +389,6 @@ pub async fn build_report(
             entity: "alert_rules".into(),
             label: "Alert rules (monitoring posture)".into(),
             mode: "singleton".into(),
-            drift_count,
-            servers,
-        });
-    }
-
-    // 2. sites — COLLECTION
-    entities.push(build_collection_entity(
-        "sites",
-        "Sites (inventory + per-site config)",
-        &sites,
-        reference_id,
-        targets,
-        &meta,
-        NO_SENSITIVE,
-        &mut drifted,
-    ));
-
-    // 3. crons — COLLECTION
-    entities.push(build_collection_entity(
-        "crons",
-        "Cron jobs",
-        &crons,
-        reference_id,
-        targets,
-        &meta,
-        NO_SENSITIVE,
-        &mut drifted,
-    ));
-
-    // 4. backup_coverage — SUMMARY
-    {
-        let ref_cov = coverage.get(&reference_id).copied();
-        let mut servers = Vec::new();
-        let mut drift_count = 0;
-        for t in targets {
-            let cov = coverage.get(t).copied().unwrap_or(CoverageMetrics {
-                total_sites: 0,
-                backed_up: 0,
-                unprotected: 0,
-                destinations: 0,
-            });
-            let in_sync = coverage_in_sync(&cov);
-            if !in_sync {
-                drift_count += 1;
-                drifted.insert(*t);
-            }
-            servers.push(base_drift(*t, &meta, in_sync, None, |s| {
-                s.coverage = Some(cov);
-                s.reference_coverage = ref_cov;
-            }));
-        }
-        entities.push(EntityDrift {
-            entity: "backup_coverage".into(),
-            label: "Backup coverage".into(),
-            mode: "summary".into(),
             drift_count,
             servers,
         });
@@ -572,48 +431,9 @@ fn base_drift(
         only_here: None,
         only_reference: None,
         value_diffs: None,
-        coverage: None,
-        reference_coverage: None,
     };
     fill(&mut s);
     s
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_collection_entity(
-    entity: &str,
-    label: &str,
-    data: &HashMap<Uuid, Vec<(String, Value)>>,
-    reference_id: Uuid,
-    targets: &[Uuid],
-    meta: &HashMap<Uuid, ServerMeta>,
-    sensitive: &[&str],
-    drifted: &mut HashSet<Uuid>,
-) -> EntityDrift {
-    let empty: Vec<(String, Value)> = Vec::new();
-    let ref_rows = data.get(&reference_id).unwrap_or(&empty);
-    let mut servers = Vec::new();
-    let mut drift_count = 0;
-    for t in targets {
-        let cur = data.get(t).unwrap_or(&empty);
-        let res = diff_collection(ref_rows, cur, sensitive);
-        if !res.in_sync {
-            drift_count += 1;
-            drifted.insert(*t);
-        }
-        servers.push(base_drift(*t, meta, res.in_sync, None, |s| {
-            s.only_here = Some(res.only_here);
-            s.only_reference = Some(res.only_reference);
-            s.value_diffs = Some(res.value_diffs);
-        }));
-    }
-    EntityDrift {
-        entity: entity.into(),
-        label: label.into(),
-        mode: "collection".into(),
-        drift_count,
-        servers,
-    }
 }
 
 #[cfg(test)]
@@ -736,15 +556,4 @@ mod tests {
         assert!(!r.in_sync);
     }
 
-    #[test]
-    fn backup_coverage_in_sync_rules() {
-        // no sites → nothing to protect → in sync
-        assert!(coverage_in_sync(&CoverageMetrics { total_sites: 0, backed_up: 0, unprotected: 0, destinations: 0 }));
-        // all protected with a destination → in sync
-        assert!(coverage_in_sync(&CoverageMetrics { total_sites: 5, backed_up: 5, unprotected: 0, destinations: 1 }));
-        // an unprotected site → drift
-        assert!(!coverage_in_sync(&CoverageMetrics { total_sites: 5, backed_up: 3, unprotected: 2, destinations: 1 }));
-        // fully "backed up" but no destination configured → drift
-        assert!(!coverage_in_sync(&CoverageMetrics { total_sites: 5, backed_up: 5, unprotected: 0, destinations: 0 }));
-    }
 }

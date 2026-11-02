@@ -20,16 +20,15 @@
 #     `iat` of its own to re-derive).
 #   §B — the hot-path lookup column (`key_hash`) needs an index, or every
 #     API-key request forces a sequential scan of the whole table.
-#   §C — the CLI's SSE-stream reader must decide pass/fail from the
-#     TERMINAL "complete" step's own status only, matching the panel UI's
-#     own rule — not from whether ANY earlier step carried status="error"
-#     (the restore handler emits a non-fatal advisory that way on purpose).
-#   §C (byte safety) — decoding UTF-8 per raw chunk, before a full frame has
-#     arrived, can corrupt a multi-byte character split across a chunk
-#     boundary.
-#   §D — the CLI's domain→site-id lookup (GET /api/sites, owner-only) is
-#     narrower than the restore endpoints it feeds (SITE_CALLER_PREDICATE:
-#     owner OR admin-of-host) — needs a GET /api/admin/sites fallback.
+#   §C (REMOVED, CLI cleanup) — the CLI's SSE-stream reader
+#     (`panel/cli/src/backend_client.rs`, deleted with the site-backup
+#     restore command it solely served) decided pass/fail from the
+#     TERMINAL "complete" step's own status; byte-safe SSE framing.
+#     Nothing left to pin here; §A–§B stand.
+#   §D (REMOVED, hosting split) — the CLI's domain→site-id lookup
+#     (GET /api/sites → GET /api/admin/sites fallback) lived in
+#     `cmd_backup_restore_via_backend`, which is gone with the CLI's
+#     site-backup restore command. Nothing left to pin here; §A–§B stand.
 #
 # Live-fire proof, not just these source pins: a throwaway Vultr VPS ran the
 # real published v2.220.0 install, swapped in these locally-built api+cli
@@ -87,10 +86,6 @@ AUTH=panel/backend/src/auth.rs
 AUTH_C=$(code "$AUTH")
 MIGRATIONS_GLOB=$(ls panel/backend/migrations/*api_keys_hash*.sql 2>/dev/null | head -1)
 MIGRATION_C=$([ -n "$MIGRATIONS_GLOB" ] && code "$MIGRATIONS_GLOB" || echo "")
-BACKEND_CLIENT=panel/cli/src/backend_client.rs
-BACKEND_CLIENT_C=$(code "$BACKEND_CLIENT")
-BACKUP=panel/cli/src/commands/backup.rs
-BACKUP_C=$(code "$BACKUP")
 
 # ── §A auth.rs: the dp_ branch and authenticate_api_key() ──────────────────
 echo "── §A auth.rs: dp_-prefixed bearer tokens authenticate as an API key, not a JWT ──"
@@ -174,61 +169,7 @@ else
   bad "B1 the key_hash index is missing or not UNIQUE"
 fi
 
-# ── §C backend_client.rs: pass/fail is decided by the TERMINAL step alone ──
-echo
-echo "── §C CLI backend_client.rs: follow_progress() and byte-safe SSE framing ──"
-
-if has "$BACKEND_CLIENT_C" 'if token\.is_empty\(\)'; then
-  ok "C1 load_token() rejects an empty/whitespace-only token file instead of treating it as configured"
-else
-  bad "C1 load_token() no longer guards against an empty token file"
-fi
-
-FP_BODY=$(fnbody "$BACKEND_CLIENT_C" "follow_progress")
-
-if lacks "$FP_BODY" 'saw_error'; then
-  ok "C2 follow_progress() has no cross-step 'saw_error' latch left over from the fixed defect"
-else
-  bad "C2 a saw_error-shaped latch is back — an earlier advisory-only error step would again fail a successful restore"
-fi
-
-# The terminal check must read `status` (this event's own field) at the
-# `step_name == "complete"` branch — not a variable accumulated from earlier
-# events. Scoped to the tail of the function so an unrelated status==\"error\"
-# comparison elsewhere in the file can't satisfy this.
-COMPLETE_BRANCH=$(awk '/step_name == "complete"/{f=1} f' <<< "$FP_BODY")
-if has "$COMPLETE_BRANCH" 'if status == "error"'; then
-  ok "C3 the complete-event branch decides pass/fail from THIS event's own status"
-else
-  bad "C3 the complete-event branch does not check its own status field"
-fi
-
-if has "$BACKEND_CLIENT_C" 'let mut buf: Vec<u8> = Vec::new\(\);' \
-  && has "$BACKEND_CLIENT_C" 'String::from_utf8_lossy\(&frame\)' \
-  && lacks "$BACKEND_CLIENT_C" 'String::from_utf8_lossy\(&chunk\)'; then
-  ok "C4 raw bytes are buffered across chunks and decoded only once a complete frame has arrived (chunk boundaries can split a multi-byte char)"
-else
-  bad "C4 a raw chunk is decoded independently before a full frame has been assembled — a split multi-byte character would corrupt a printed message"
-fi
-
-# ── §D backup.rs: domain resolution matches the restore endpoint's own scope ─
-echo
-echo "── §D CLI backup.rs: domain→site-id resolution falls back to the admin-sites listing ──"
-
-RESTORE_VIA_BACKEND_BODY=$(fnbody "$BACKUP_C" "cmd_backup_restore_via_backend")
-
-if has "$RESTORE_VIA_BACKEND_BODY" '"/api/admin/sites"'; then
-  ok "D1 cmd_backup_restore_via_backend falls back to GET /api/admin/sites"
-else
-  bad "D1 no /api/admin/sites fallback — an admin's key can restore a site it doesn't own via the API, but the CLI's own domain lookup would 404 first"
-fi
-
-if has "$RESTORE_VIA_BACKEND_BODY" 'owned_site_id'; then
-  ok "D2 the fallback is conditioned on the owner-scoped lookup coming up empty, not run unconditionally"
-else
-  bad "D2 no owned/not-owned branch found — cannot confirm the fallback is actually gated"
-fi
-
+# ── §D removed with cmd_backup_restore_via_backend (see header) ────────────
 echo
 echo "──────────────────────────────────────────"
 echo "PASS: $PASS   FAIL: $FAIL"

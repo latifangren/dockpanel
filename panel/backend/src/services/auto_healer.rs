@@ -410,7 +410,6 @@ async fn auto_restart_services(pool: &PgPool, agents: &AgentRegistry) {
                 pool,
                 user_id,
                 Some(server_id),
-                None,
                 "service_down",
                 service_name,
                 &format!("Service {} auto-healed on {}", service_name, server_name),
@@ -661,7 +660,6 @@ async fn auto_clean_disk(pool: &PgPool, agents: &AgentRegistry) {
             pool,
             user_id,
             Some(server_id),
-            None,
             "disk",
             "",
             &format!("DISK recovered on {server_name}"),
@@ -752,12 +750,10 @@ async fn send_weekly_digest(pool: &PgPool) {
     .await
     .unwrap_or((0,));
 
-    let deploys_7d: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM deploy_logs WHERE created_at > NOW() - INTERVAL '7 days'",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or((0,));
+    // R7: `deploy_logs` is dropped with the hosting tables, so the Deploys
+    // row is a literal 0 (R3 pattern). The row stays in the email so its
+    // shape does not change.
+    let deploys_7d: (i64,) = (0,);
 
     let security_scans_7d: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM security_scans WHERE created_at > NOW() - INTERVAL '7 days'",
@@ -813,8 +809,8 @@ async fn send_weekly_digest(pool: &PgPool) {
 
 /// Retire one backup: remove the archive, then the row that names it.
 ///
-/// Serves all three retention sweeps — `backups` (site schedules), plus
-/// `database_backups` and `volume_backups` (policies). The site sweep wrote its
+/// Serves both retention sweeps — `database_backups` and `volume_backups`
+/// (policies). The site sweep that used to be the third caller wrote its
 /// own copy of this logic without either guard until v2.123.0: it unlinked a
 /// local path and deleted the row unconditionally, so on a fleet install every
 /// site backup living on a remote host had its only record destroyed while the
@@ -1042,48 +1038,12 @@ async fn run_retention_cleanup(pool: &PgPool) {
             .ok()
             .flatten();
 
-    // `backups` carries no server of its own, so the owning host is the one that
-    // hosts the site: `sites.server_id`. It is NOT NULL
-    // (20260319000000_multi_server.sql:76) and is selected as a plain `Uuid` on
-    // purpose — a NULL fails the query and prunes nothing, where an `Option` would
-    // hand `None` to the guard below, which skips on `None` and unlinks locally.
-    // Of the two ways to be wrong, only one destroys a record.
-    let schedules: Vec<(uuid::Uuid, uuid::Uuid, i32, String, uuid::Uuid)> = sqlx::query_as(
-        "SELECT bs.id, bs.site_id, bs.retention_count, s.domain, s.server_id \
-         FROM backup_schedules bs JOIN sites s ON s.id = bs.site_id \
-         WHERE bs.retention_count > 0"
-    ).fetch_all(pool).await.unwrap_or_default();
-
+    // R7: the per-site schedule sweep that used to sit here is deleted —
+    // `backup_schedules`, `sites`, and `backups.site_id` are all dropped.
+    // Retention now runs only through `backup_policies` below (database
+    // + volume backups). Site backup rows die with the `sites` table, so
+    // there is nothing left for a schedule sweep to prune.
     let mut total_pruned = 0u64;
-    for (_schedule_id, site_id, retention_count, domain, server_id) in &schedules {
-        // Find backups exceeding retention_count (ordered newest first, skip retention_count)
-        let excess: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-            "SELECT id, filename FROM backups WHERE site_id = $1 \
-             ORDER BY created_at DESC OFFSET $2"
-        )
-        .bind(site_id)
-        .bind(*retention_count)
-        .fetch_all(pool).await.unwrap_or_default();
-
-        for (backup_id, filename) in &excess {
-            let filepath = format!("/var/backups/dockpanel/{domain}/{filename}");
-            if prune_policy_backup(
-                pool,
-                "backups",
-                *backup_id,
-                &filepath,
-                Some(*server_id),
-                local_server_id,
-            )
-            .await
-            {
-                total_pruned += 1;
-            }
-        }
-    }
-    if total_pruned > 0 {
-        tracing::info!("Retention: pruned {total_pruned} backups exceeding retention_count limits");
-    }
 
     // Enforce retention for backup policies (database_backups + volume_backups)
     let policies: Vec<(uuid::Uuid, i32)> = sqlx::query_as(
@@ -1135,7 +1095,7 @@ async fn run_retention_cleanup(pool: &PgPool) {
         }
     }
     if total_pruned > 0 {
-        tracing::info!("Retention: total {total_pruned} excess backups pruned (schedules + policies)");
+        tracing::info!("Retention: total {total_pruned} excess backups pruned (policies)");
     }
 
     // ── Security Enhancement Retention ─────────────────────────────────

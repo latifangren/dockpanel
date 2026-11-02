@@ -1,4 +1,3 @@
-mod backend_client;
 mod client;
 mod commands;
 
@@ -23,13 +22,11 @@ struct Cli {
 enum Commands {
     /// Show server status (CPU, memory, disk, uptime)
     Status,
-    /// Manage nginx sites
+    /// List nginx sites
     Sites {
         /// Filter sites by domain substring (case-insensitive)
         #[arg(short, long)]
         filter: Option<String>,
-        #[command(subcommand)]
-        command: Option<SitesCmd>,
     },
     /// Manage databases
     Db {
@@ -88,11 +85,6 @@ enum Commands {
     },
     /// Show top processes by CPU usage
     Top,
-    /// PHP version management
-    Php {
-        #[command(subcommand)]
-        command: Option<PhpCmd>,
-    },
     /// Run server diagnostics (nginx, resources, SSL, security, logs)
     Diagnose,
     /// Export server configuration as YAML (Infrastructure as Code)
@@ -108,7 +100,7 @@ enum Commands {
         /// Show what would change without applying
         #[arg(long)]
         dry_run: bool,
-        /// Email for Let's Encrypt SSL provisioning
+        /// Email for Let's Encrypt SSL provisioning (app deploys)
         #[arg(long)]
         email: Option<String>,
     },
@@ -117,37 +109,6 @@ enum Commands {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: clap_complete::Shell,
-    },
-}
-
-#[derive(Subcommand)]
-enum SitesCmd {
-    /// Create a new site
-    Create {
-        /// Domain name
-        domain: String,
-        /// Runtime type: static, php, or proxy
-        #[arg(long, default_value = "static")]
-        runtime: String,
-        /// Proxy port (required for --runtime proxy)
-        #[arg(long)]
-        proxy_port: Option<u16>,
-        /// Enable SSL (auto-provision with Let's Encrypt)
-        #[arg(long)]
-        ssl: bool,
-        /// Email for Let's Encrypt (required with --ssl)
-        #[arg(long)]
-        ssl_email: Option<String>,
-    },
-    /// Delete a site
-    Delete {
-        /// Domain name
-        domain: String,
-    },
-    /// Show site details
-    Info {
-        /// Domain name
-        domain: String,
     },
 }
 
@@ -240,52 +201,10 @@ enum SslCmd {
         /// Domain name
         domain: String,
     },
-    /// Provision Let's Encrypt certificate
-    Provision {
-        /// Domain name
-        domain: String,
-        /// Email for Let's Encrypt
-        #[arg(long)]
-        email: String,
-        /// Site runtime type: static, php, or proxy
-        #[arg(long, default_value = "static")]
-        runtime: String,
-        /// Proxy port (for proxy runtime)
-        #[arg(long)]
-        proxy_port: Option<u16>,
-        /// Issue even if the certificate already installed for this domain was
-        /// obtained somewhere else — it will be REPLACED.
-        #[arg(long)]
-        force: bool,
-    },
 }
 
 #[derive(Subcommand)]
 enum BackupCmd {
-    /// Create a backup
-    Create {
-        /// Domain name
-        domain: String,
-    },
-    /// List backups for a domain
-    List {
-        /// Domain name
-        domain: String,
-    },
-    /// Restore from a backup
-    Restore {
-        /// Domain name
-        domain: String,
-        /// Backup filename
-        filename: String,
-    },
-    /// Delete a backup
-    Delete {
-        /// Domain name
-        domain: String,
-        /// Backup filename
-        filename: String,
-    },
     /// Create a database backup
     DbCreate {
         /// Container name (e.g., dockpanel-db-mydb)
@@ -327,10 +246,10 @@ enum BackupCmd {
     },
     /// Verify a backup
     Verify {
-        /// Backup type: site, database, volume
+        /// Backup type: database, volume
         #[arg(long)]
         r#type: String,
-        /// Resource name (domain for site, db_name for database, container for volume)
+        /// Resource name (db_name for database, container for volume)
         name: String,
         /// Backup filename
         filename: String,
@@ -377,15 +296,6 @@ enum FirewallCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum PhpCmd {
-    /// Install a PHP version
-    Install {
-        /// PHP version (8.1, 8.2, 8.3, 8.4, 8.5)
-        version: String,
-    },
-}
-
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -407,18 +317,7 @@ async fn main() {
 
     let result = match cli.command {
         Commands::Status => commands::status::cmd_status(&token, &output).await,
-        Commands::Sites { filter, command } => match command {
-            None => commands::sites::cmd_sites_list(&token, &output, filter.as_deref()).await,
-            Some(SitesCmd::Create {
-                domain,
-                runtime,
-                proxy_port,
-                ssl,
-                ssl_email,
-            }) => commands::sites::cmd_sites_create(&token, &domain, &runtime, proxy_port, ssl, ssl_email.as_deref()).await,
-            Some(SitesCmd::Delete { domain }) => commands::sites::cmd_sites_delete(&token, &domain).await,
-            Some(SitesCmd::Info { domain }) => commands::sites::cmd_sites_info(&token, &domain).await,
-        },
+        Commands::Sites { filter } => commands::sites::cmd_sites_list(&token, &output, filter.as_deref()).await,
         Commands::Db { filter, command } => match command {
             None => commands::db::cmd_db_list(&token, &output, filter.as_deref()).await,
             Some(DbCmd::Create {
@@ -450,23 +349,8 @@ async fn main() {
         Commands::Services { filter } => commands::status::cmd_services(&token, &output, filter.as_deref()).await,
         Commands::Ssl { command } => match command {
             SslCmd::Status { domain } => commands::ssl::cmd_ssl_status(&token, &domain).await,
-            SslCmd::Provision {
-                domain,
-                email,
-                runtime,
-                proxy_port,
-                force,
-            } => commands::ssl::cmd_ssl_provision(&token, &domain, &email, &runtime, proxy_port, force).await,
         },
         Commands::Backup { command } => match command {
-            BackupCmd::Create { domain } => commands::backup::cmd_backup_create(&token, &domain).await,
-            BackupCmd::List { domain } => commands::backup::cmd_backup_list(&token, &domain, &output).await,
-            BackupCmd::Restore { domain, filename } => {
-                commands::backup::cmd_backup_restore(&token, &domain, &filename).await
-            }
-            BackupCmd::Delete { domain, filename } => {
-                commands::backup::cmd_backup_delete(&token, &domain, &filename).await
-            }
             BackupCmd::DbCreate { container, db_name, db_type, user, password, password_stdin } => {
                 commands::backup::cmd_db_backup_create(&token, &container, &db_name, &db_type, &user, password, password_stdin).await
             }
@@ -508,10 +392,6 @@ async fn main() {
             },
         },
         Commands::Top => commands::status::cmd_top(&token, &output).await,
-        Commands::Php { command } => match command {
-            None => commands::php::cmd_php_list(&token, &output).await,
-            Some(PhpCmd::Install { version }) => commands::php::cmd_php_install(&token, &version).await,
-        },
         Commands::Diagnose => commands::status::cmd_diagnose(&token, &output).await,
         Commands::Export { output: out_file } => commands::iac::cmd_export(&token, out_file.as_deref()).await,
         Commands::Apply { file, dry_run, email } => commands::iac::cmd_apply(&token, &file, dry_run, email.as_deref()).await,

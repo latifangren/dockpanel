@@ -34,8 +34,12 @@ pub struct UserResponse {
     pub id: Uuid,
     pub email: String,
     pub role: String,
-    pub reseller_id: Option<Uuid>,
+    // R7: `reseller_id` is gone with the column (dropped by the terminal
+    // migration with the reseller tables). No linkage to carry: the
+    // reseller hierarchy no longer exists in data or in code.
     pub created_at: chrono::DateTime<chrono::Utc>,
+    // R7: always 0 — the `sites` table is dropped. The field stays on the
+    // wire (R3 pattern) so the user table's shape does not change.
     pub site_count: i64,
     /// Carried so the user table can offer "Reset 2FA" on the rows that have an
     /// enrolment and stay quiet on the rows that do not. Without it the control
@@ -51,8 +55,8 @@ pub async fn list(
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
 
     let users: Vec<UserResponse> = sqlx::query_as(
-        "SELECT u.id, u.email, u.role, u.reseller_id, u.created_at, \
-         COALESCE((SELECT COUNT(*) FROM sites WHERE user_id = u.id), 0) as site_count, \
+        "SELECT u.id, u.email, u.role, u.created_at, \
+         0::bigint as site_count, \
          u.totp_enabled \
          FROM users u ORDER BY u.created_at ASC",
     )
@@ -256,14 +260,14 @@ pub async fn update(
         // caller out. The last-admin guard is folded into the UPDATE's WHERE so a demotion
         // can never orphan the panel of admins (the row updates only if the new role is
         // admin, the current role isn't admin, or more than one admin remains); this is
-        // atomic-as-a-statement rather than the check-then-act it replaced. Clearing
-        // reseller_id on promotion to admin keeps a tenant-root from staying owned by another
-        // reseller (PRIV-03). There is no promotion to `reseller` any more (R2:
-        // the role is no longer assignable), so the CASE names `admin` only.
+        // atomic-as-a-statement rather than the check-then-act it replaced. R7: the
+        // PRIV-03 `reseller_id` clearing is gone with the column (dropped by the
+        // terminal migration with the reseller tables) — there is no reseller
+        // ownership left to clear, and no promotion to `reseller` any more (R2:
+        // the role is no longer assignable), so the UPDATE names `role` only.
         if role_changed {
             let res = sqlx::query(
                 "UPDATE users SET role = $1, \
-                 reseller_id = CASE WHEN $1 = 'admin' THEN NULL ELSE reseller_id END, \
                  updated_at = NOW() \
                  WHERE id = $2 \
                    AND ($1 = 'admin' OR role <> 'admin' OR (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1)",

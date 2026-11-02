@@ -20,8 +20,9 @@
 #      ops db/ dump directory — live-reproduced ~9x/~50000x off on this box.
 #   §D iac.rs `cmd_apply` silently dropped every firewall rule in an
 #      exported file — no create, no update, no message, ever.
-#   §E iac.rs `cmd_apply` silently no-op'd `ssl: true` when no --email was
-#      given — site creation still printed a bare success tick.
+#   §E (REMOVED, hosting split) iac.rs `cmd_apply`'s `ssl: true` warning
+#      lived in the deleted sites section of `cmd_apply` — the whole arm
+#      went with it, so there is nothing left to pin here.
 #   §F iac.rs `cmd_apply --dry-run` unconditionally reported every cron as
 #      "to create", even when byte-identical to what's already scheduled —
 #      the one resource type that DOES reconcile on a real apply, so the
@@ -192,14 +193,8 @@ else
   bad "D2 no firewall-not-applied warning found — still silent"
 fi
 
-# ── §E iac.rs cmd_apply: ssl-with-no-email is no longer a silent no-op ──
-echo "── §E iac.rs: cmd_apply warns when ssl requested but no --email given ──"
-
-if has "$APPLY_BODY" 'no --email was given'; then
-  ok "E1 cmd_apply warns when ssl:true has no email to provision with"
-else
-  bad "E1 cmd_apply still silently no-ops an ssl request with no --email"
-fi
+# ── §E removed with the sites section of cmd_apply (see header) ───────────
+# (Labels §F/§G are kept unchanged so cross-references elsewhere still land.)
 
 # ── §F iac.rs cmd_apply --dry-run: crons are diffed, not all-create ─────
 echo "── §F iac.rs: dry-run cron plan diffs against current state ──"

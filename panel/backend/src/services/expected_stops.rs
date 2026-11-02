@@ -243,7 +243,6 @@ pub async fn resolve_open_container_down(pool: &PgPool, server_id: Uuid, contain
         pool,
         user_id,
         Some(server_id),
-        None,
         "container_down",
         container_name,
         &format!("Container '{container_name}' was stopped deliberately"),

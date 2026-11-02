@@ -11,9 +11,11 @@ use crate::AppState;
 // (`GET/PUT/DELETE /api/sites/{id}/backup-schedule`). Those handlers are
 // removed with the site kind; volume/database scheduling lives in
 // backup policies (`backup_orchestrator.rs`). What remains is
-// `setup_status`, whose two JOINs against `sites` are the R1 leftover,
-// deliberately left untouched until the `sites` table drops in R7
-// (see the queries below).
+// `setup_status`, rewritten in R7: the `backup_schedules` table and the
+// `sites` table it joined are both dropped, so a "schedule" is now a
+// `backup_policies` row owned by the caller, and a "backup" is a
+// `database_backups`/`volume_backups` row (the site-backup term is gone
+// with `backups.site_id` — see the note in the handler).
 
 
 #[derive(serde::Serialize)]
@@ -23,31 +25,28 @@ pub struct BackupSetupStatus {
 }
 
 /// GET /api/backup-setup-status — Whether the current user has any backup schedule
-/// or any stored backup (site, database, or volume). Used by the Dashboard onboarding
+/// or any stored backup (database or volume). Used by the Dashboard onboarding
 /// step "Set up backups" so a one-off manual backup or scheduled backup counts as done.
+///
+/// R7: `backup_schedules` (one row per site) and the `sites` join that
+/// scoped it are gone. `has_schedule` now counts the caller's
+/// `backup_policies` — the surviving schedule mechanism. `has_backup`
+/// counts `database_backups` + `volume_backups` exactly as before (those
+/// two counts were already unscoped globals); the site-backup term that
+/// used to be scoped through `backups`/`sites` has no surviving source —
+/// `backups.site_id` is dropped and site backup rows die with `sites` —
+/// so it contributes 0. The response shape is unchanged.
 pub async fn setup_status(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<BackupSetupStatus>, ApiError> {
     let (schedule_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM backup_schedules bs \
-         JOIN sites s ON s.id = bs.site_id \
-         WHERE s.user_id = $1",
+        "SELECT COUNT(*) FROM backup_policies WHERE user_id = $1",
     )
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("setup-status schedules", e))?;
-
-    let (site_bk,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM backups b \
-         JOIN sites s ON s.id = b.site_id \
-         WHERE s.user_id = $1",
-    )
-    .bind(claims.sub)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| internal_error("setup-status backups", e))?;
 
     let (db_bk,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM database_backups")
         .fetch_one(&state.db)
@@ -61,6 +60,6 @@ pub async fn setup_status(
 
     Ok(Json(BackupSetupStatus {
         has_schedule: schedule_count > 0,
-        has_backup: site_bk + db_bk + vol_bk > 0,
+        has_backup: db_bk + vol_bk > 0,
     }))
 }

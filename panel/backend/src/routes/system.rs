@@ -108,23 +108,18 @@ pub async fn diagnostics_fix(
         //
         // ⚠ It must NOT claim the certificate came from outside DockPanel,
         // because very often it did not: the agent issues certificates for
-        // Docker apps, Compose stacks, Git deploys and mail domains, and NONE
-        // of those becomes a `sites` row — a Docker app has no table at all, it
-        // exists only as a labelled container. Saying "whatever put it there is
-        // what renews it" to an operator whose own panel put it there is the
+        // Docker apps and Compose stacks, and NEITHER of those becomes a
+        // `sites` row — a Docker app has no table at all, it exists only
+        // as a labelled container. Saying "whatever put it there is what
+        // renews it" to an operator whose own panel put it there is the
         // same species of defect as the button this branch replaced. So the
         // refusal names what the panel actually found, and stops there.
         //
-        // These lookups are deliberately not server-scoped. `mail_domains.server_id`
-        // was NULL on every panel-created row for five months and
-        // `git_deploys.domain` is nullable, so a server term here would turn a
-        // true "a mail domain claims this name" into a silent "nothing does" —
-        // trading a wrong sentence for a wronger one. Naming the owner
-        // approximately is worth more than naming nothing precisely.
+        // R7: the `mail_domains` and `git_deploys` arms of the probe below
+        // are deleted with their tables. The surviving arms name the two
+        // claimant kinds that can still hold a domain.
         let claimed_by: Option<(String,)> = sqlx::query_as(
-            "SELECT 'mail domain' FROM mail_domains WHERE domain = $1 \
-             UNION ALL SELECT 'Git deploy' FROM git_deploys WHERE domain = $1 \
-             UNION ALL SELECT 'Docker app' FROM container_sleep_config WHERE domain = $1 \
+            "SELECT 'Docker app' FROM container_sleep_config WHERE domain = $1 \
              UNION ALL SELECT 'Compose stack' FROM docker_stacks WHERE lower(domain) = lower($1) \
              LIMIT 1",
         )
@@ -174,7 +169,7 @@ pub async fn diagnostics_fix(
                 "A {kind} in this panel uses that name, and DockPanel issued this \
                  certificate for it. Redeploy that {kind} to reissue it."
             ),
-            None => "No mail domain, Git deploy, Docker app or Compose stack in \
+            None => "No Docker app or Compose stack in \
                      this panel claims that name — so this is a certificate DockPanel \
                      does not manage, such as a DNS-01 wildcard or one installed by \
                      hand, and it is renewed wherever it was issued."

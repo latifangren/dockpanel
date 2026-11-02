@@ -34,7 +34,6 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
 
                 check_resource_thresholds(&pool, &maint).await;
                 check_server_offline(&pool, &maint).await;
-                check_ssl_expiry(&pool, &maint).await;
                 check_stack_ssl_expiry(&pool, &maint).await;
                 check_registered_cert_expiry(&pool, &maint).await;
 
@@ -142,7 +141,6 @@ async fn fire_alert_with_retry(
     pool: &PgPool,
     user_id: Uuid,
     server_id: Option<Uuid>,
-    site_id: Option<Uuid>,
     alert_type: &str,
     state_key: &str,
     severity: &str,
@@ -151,7 +149,7 @@ async fn fire_alert_with_retry(
 ) -> bool {
     for attempt in 0..2 {
         match notifications::try_fire_alert(
-            pool, user_id, server_id, site_id, alert_type, state_key, severity, title, message,
+            pool, user_id, server_id, alert_type, state_key, severity, title, message,
         )
         .await
         {
@@ -390,7 +388,6 @@ async fn check_resource_thresholds(pool: &PgPool, maint: &HashSet<Uuid>) {
                         pool,
                         server.user_id,
                         Some(server.id),
-                        None,
                         "disk_forecast",
                         "",
                         severity,
@@ -436,7 +433,6 @@ async fn check_resource_thresholds(pool: &PgPool, maint: &HashSet<Uuid>) {
                         pool,
                         server.user_id,
                         Some(server.id),
-                        None,
                         "memory_leak",
                         "",
                         "warning",
@@ -591,7 +587,6 @@ async fn check_threshold(
                 pool,
                 server.user_id,
                 Some(server.id),
-                None,
                 alert_type,
                 // check_threshold's own alert_state rows are keyed '' — these are
                 // conditions of the server as a whole, not of an entity on it.
@@ -627,7 +622,6 @@ async fn check_threshold(
             pool,
             server.user_id,
             Some(server.id),
-            None,
             alert_type,
             "",
             &format!("{} recovered on {}", alert_type.to_uppercase(), server.name),
@@ -751,7 +745,6 @@ async fn clear_trend_alert(
             pool,
             user_id,
             Some(server_id),
-            None,
             alert_type,
             "",
             title,
@@ -880,7 +873,7 @@ async fn check_gpu_metric(
         if new_count >= required_duration && (current_state != "firing" || past_cooldown(last_notified, cooldown_minutes)) {
             let severity = if current_value > threshold * 1.1 { "critical" } else { "warning" };
 
-            fire_alert_with_retry(pool, user_id, Some(server_id), None, alert_type, state_key, severity, title, message).await;
+            fire_alert_with_retry(pool, user_id, Some(server_id), alert_type, state_key, severity, title, message).await;
 
             let _ = sqlx::query(
                 "UPDATE alert_state SET last_notified_at = NOW() \
@@ -910,7 +903,7 @@ async fn check_gpu_metric(
             _ => alert_type,
         };
         notifications::resolve_alert(
-            pool, user_id, Some(server_id), None, alert_type, state_key,
+            pool, user_id, Some(server_id), alert_type, state_key,
             &format!("{type_label} recovered on {server_name}"),
             &format!("{type_label} has returned to normal ({current_value:.0}) on server {server_name}"),
         ).await;
@@ -969,7 +962,6 @@ async fn check_server_offline(pool: &PgPool, maint: &HashSet<Uuid>) {
             pool,
             *user_id,
             Some(*server_id),
-            None,
             "offline",
             "",
             "critical",
@@ -1008,7 +1000,6 @@ async fn check_server_offline(pool: &PgPool, maint: &HashSet<Uuid>) {
             pool,
             *user_id,
             Some(*server_id),
-            None,
             "offline",
             "",
             &format!("Server {} is back online", name),
@@ -1029,7 +1020,7 @@ const SSL_NEVER_WARNED: i64 = 999;
 /// of re-firing on every 60s tick until someone renews it.
 const SSL_EXPIRED_WARN_DAY: i64 = -1;
 
-/// What `check_ssl_expiry` should do for one site this tick.
+/// What the SSL-expiry checks should do for one certificate this tick.
 #[derive(Debug, PartialEq, Eq)]
 enum SslAction {
     /// Certificate moved back past the rung we last paged at — it was renewed.
@@ -1102,118 +1093,14 @@ fn ssl_decision(
     SslAction::Fire { warn_day, severity }
 }
 
-async fn check_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
-    let sites: Vec<(Uuid, Uuid, String, chrono::DateTime<chrono::Utc>)> = match sqlx::query_as(
-        "SELECT s.id, s.user_id, s.domain, s.ssl_expiry \
-         FROM sites s WHERE s.ssl_enabled = TRUE AND s.ssl_expiry IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await
-    {
-        Ok(s) => s,
-        Err(_) => return,
-    };
+// R7: `check_ssl_expiry` (the site SSL-expiry ladder over the `sites`
+// table, keyed by `alert_state.site_id`) is deleted with the `sites`
+// table. Stack certificates keep their own ladder
+// (`check_stack_ssl_expiry`); registered certificates keep
+// `check_registered_cert_expiry`. The pure `ssl_decision` ladder below
+// survives, shared by both.
 
-    let now = chrono::Utc::now();
-
-    for (site_id, user_id, domain, ssl_expiry) in &sites {
-        if maint.contains(user_id) {
-            continue;
-        }
-
-        let remaining = *ssl_expiry - now;
-        // Expiry is decided on the SIGNED duration, not on num_days(), which
-        // truncates toward zero: a certificate that lapsed anything under 24
-        // hours ago still reports days_left = 0. Reading expiry off that meant
-        // the EXPIRED page could not fire for a full day after the cert went
-        // invalid — and by then rung 1 was already consumed, so browsers showed
-        // a security warning for 24 hours with no notification on any channel.
-        let expired = remaining < chrono::Duration::zero();
-        let days_left = remaining.num_days();
-
-        let (_, _, _, _, _, _, ssl_days_str) =
-            notifications::get_thresholds(pool, *user_id, None).await;
-        let warning_days = parse_ssl_warning_days(&ssl_days_str);
-
-        // The tightest rung this site has already been paged at. Read once per
-        // site — the expired branch needs it too, and it used to be read only
-        // from inside the warning-ladder loop.
-        let state: Option<(serde_json::Value,)> = sqlx::query_as(
-            "SELECT COALESCE(metadata, '{}') FROM alert_state \
-             WHERE site_id = $1 AND alert_type = 'ssl_expiry' AND state_key = ''",
-        )
-        .bind(site_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-
-        let last_warned_day = state
-            .as_ref()
-            .and_then(|s| s.0.get("last_warned_day"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(SSL_NEVER_WARNED);
-
-        let action = ssl_decision(days_left, expired, last_warned_day, &warning_days);
-
-        if matches!(action, SslAction::Resolve) {
-            let _ = sqlx::query(
-                "UPDATE alert_state SET current_state = 'ok', last_notified_at = NULL, metadata = NULL \
-                 WHERE site_id = $1 AND alert_type = 'ssl_expiry' AND state_key = ''",
-            )
-            .bind(site_id)
-            .execute(pool)
-            .await;
-
-            notifications::resolve_alert(
-                pool,
-                *user_id,
-                None,
-                Some(*site_id),
-                "ssl_expiry",
-                "",
-                &format!("SSL certificate renewed for {domain}"),
-                &format!(
-                    "The SSL certificate for {domain} is valid again — {days_left} days remaining."
-                ),
-            )
-            .await;
-            continue;
-        }
-
-        let SslAction::Fire { warn_day, severity } = action else {
-            continue;
-        };
-
-        // Stamp the dedup key ONLY if the page actually landed. A transient DB
-        // error inside fire_alert_with_retry used to still advance
-        // last_warned_day, which permanently silenced the site: the stamp claims
-        // the rung was paged, but no notification went out and no `alerts` row
-        // exists for check_escalations to re-page from. Skipping the stamp makes
-        // the next 60s tick retry, which is what the pre-rewrite code got for
-        // free by re-firing every tick.
-        if !fire_ssl_alert(pool, *user_id, *site_id, domain, days_left, expired, severity).await {
-            tracing::warn!(
-                "SSL alert for {domain} could not be recorded; leaving the warning ladder unstamped so the next tick retries"
-            );
-            continue;
-        }
-
-        // Update state with last_warned_day — PostgreSQL serializes concurrent ON CONFLICT upserts
-        let _ = sqlx::query(
-            "INSERT INTO alert_state (site_id, alert_type, state_key, current_state, last_notified_at, metadata) \
-             VALUES ($1, 'ssl_expiry', '', 'firing', NOW(), $2) \
-             ON CONFLICT (site_id, alert_type, state_key) WHERE site_id IS NOT NULL \
-             DO UPDATE SET current_state = 'firing', last_notified_at = NOW(), metadata = $2",
-        )
-        .bind(site_id)
-        .bind(serde_json::json!({ "last_warned_day": warn_day }))
-        .execute(pool)
-        .await;
-    }
-}
-
-/// `check_ssl_expiry`'s sibling for Docker Compose stacks. Reuses
+/// The stack SSL-expiry check. Reuses
 /// `ssl_decision` and `parse_ssl_warning_days` UNCHANGED — the ladder is a
 /// pure function of days-left / expired / last-warned-day / rungs, and
 /// neither cares what kind of row it is deciding for.
@@ -1309,7 +1196,6 @@ async fn check_stack_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
                 pool,
                 *user_id,
                 Some(*server_id),
-                None,
                 "ssl_expiry",
                 &state_key,
                 &format!("SSL certificate renewed for {domain}"),
@@ -1325,7 +1211,7 @@ async fn check_stack_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
             continue;
         };
 
-        // Same unstamped-on-failure discipline as `check_ssl_expiry`: only stamp
+        // Same unstamped-on-failure discipline as the deleted site ladder: only stamp
         // the dedup key if the page actually landed, so a transient DB error
         // retries on the next tick instead of permanently silencing the stack.
         if !fire_stack_ssl_alert(
@@ -1353,10 +1239,11 @@ async fn check_stack_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
     }
 }
 
-/// `check_ssl_expiry`/`check_stack_ssl_expiry`'s sibling for a REGISTERED
+/// The sibling of the stack SSL check for a REGISTERED
 /// (uploaded, non agent-managed) certificate in `tls_certificates` — the one
-/// population neither of those two functions can see: `check_ssl_expiry` only
-/// reads `sites.ssl_expiry` (ACME-issued, single-site certs) and
+/// population neither the stack check nor the (deleted, site) check could
+/// see: the site check only read `sites.ssl_expiry` (ACME-issued,
+/// single-site certs) and
 /// `check_stack_ssl_expiry` deliberately SKIPS a `provided`-mode stack's
 /// `ssl_expiry` (it isn't the panel's cert to alert on — see that function's
 /// own comment). A certificate served through the registry has its real
@@ -1437,7 +1324,6 @@ async fn check_registered_cert_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
                 pool,
                 *user_id,
                 Some(*server_id),
-                None,
                 "ssl_expiry",
                 &state_key,
                 &format!("Registered certificate renewed for {display_name}"),
@@ -1533,26 +1419,8 @@ fn ssl_alert_copy(domain: &str, days_left: i64, expired: bool) -> (String, Strin
     (title, message)
 }
 
-async fn fire_ssl_alert(
-    pool: &PgPool,
-    user_id: Uuid,
-    site_id: Uuid,
-    domain: &str,
-    days_left: i64,
-    expired: bool,
-    severity: &str,
-) -> bool {
-    let (title, message) = ssl_alert_copy(domain, days_left, expired);
-    fire_alert_with_retry(
-        pool, user_id, None, Some(site_id), "ssl_expiry", "", severity, &title, &message,
-    )
-    .await
-}
-
-/// `fire_ssl_alert`'s sibling for a Compose stack. A stack alert has no
-/// `site_id` — a `docker_stacks` row has no `sites` row to point at — so this
-/// fires with `server_id: Some` and a domain-derived `state_key` instead of
-/// the site ladder's `site_id: Some` + empty key.
+/// Fire a stack SSL alert. A stack alert fires with `server_id: Some` and
+/// a domain-derived `state_key`.
 async fn fire_stack_ssl_alert(
     pool: &PgPool,
     user_id: Uuid,
@@ -1565,7 +1433,7 @@ async fn fire_stack_ssl_alert(
 ) -> bool {
     let (title, message) = ssl_alert_copy(domain, days_left, expired);
     fire_alert_with_retry(
-        pool, user_id, Some(server_id), None, "ssl_expiry", state_key, severity, &title, &message,
+        pool, user_id, Some(server_id), "ssl_expiry", state_key, severity, &title, &message,
     )
     .await
 }
@@ -1653,7 +1521,6 @@ async fn check_service_health(pool: &PgPool, member: &FleetMember) {
                     pool,
                     user_id,
                     Some(server_id),
-                    None,
                     "service_down",
                     name,
                     "critical",
@@ -1692,7 +1559,6 @@ async fn check_service_health(pool: &PgPool, member: &FleetMember) {
                     pool,
                     user_id,
                     Some(server_id),
-                    None,
                     "service_down",
                     name,
                     &format!("Service {} recovered on {}", name, server_name),
@@ -1803,7 +1669,6 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                     pool,
                     user_id,
                     Some(server_id),
-                    None,
                     "container_down",
                     name,
                     // The severity this product DECLARES for this alert:
@@ -1853,7 +1718,6 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                     pool,
                     user_id,
                     Some(server_id),
-                    None,
                     "container_crashloop",
                     name,
                     "critical",
@@ -1894,7 +1758,6 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                     pool,
                     user_id,
                     Some(server_id),
-                    None,
                     "container_unhealthy",
                     name,
                     "warning",
@@ -1933,7 +1796,6 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                         pool,
                         user_id,
                         Some(server_id),
-                        None,
                         alert_type,
                         name,
                         &format!("Container '{}' recovered", name),
@@ -1987,7 +1849,6 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
             pool,
             user_id,
             Some(server_id),
-            None,
             alert_type,
             state_key,
             &format!("Container '{}' is no longer present", state_key),
@@ -2660,7 +2521,7 @@ mod tests {
         assert!(SSL_EXPIRED_WARN_DAY < SSL_NEVER_WARNED);
     }
 
-    /// `fire_ssl_alert` used to build this text inline; extracting
+    /// The stack SSL alert copy used to be built inline; extracting
     /// `ssl_alert_copy` behind it (so the stack ladder can share it) must not
     /// change a single character of what a site's own SSL page already reads.
     #[test]

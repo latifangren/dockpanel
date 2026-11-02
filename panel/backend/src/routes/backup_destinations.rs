@@ -318,9 +318,16 @@ pub async fn remove(
         return Err(err(StatusCode::NOT_FOUND, "Destination not found"));
     }
 
-    // Check for dependent backup schedules
+    // Check for dependents that reference this destination: backup
+    // policies, and the database/volume backups they produced. R7: the
+    // old `backup_schedules` count died with that table; policies +
+    // recorded backups are the surviving dependents (each FK is SET
+    // NULL, so deletion still unassigns them — the count only decides
+    // whether the warning below is shown).
     let dependent_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM backup_schedules WHERE destination_id = $1"
+        "SELECT (SELECT COUNT(*) FROM backup_policies WHERE destination_id = $1) \
+         + (SELECT COUNT(*) FROM database_backups WHERE destination_id = $1) \
+         + (SELECT COUNT(*) FROM volume_backups WHERE destination_id = $1)"
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -337,11 +344,11 @@ pub async fn remove(
         return Err(err(StatusCode::NOT_FOUND, "Destination not found"));
     }
 
-    // Nullify destination_id on dependent schedules (FK is SET NULL)
+    // Nullify destination_id on dependent policies/backups (FK is SET NULL)
     let mut resp = serde_json::json!({ "ok": true });
     if dependent_count.0 > 0 {
         resp["warning"] = serde_json::json!(format!(
-            "{} backup schedule(s) were using this destination and are now unassigned",
+            "{} backup policy(ies)/backup(s) were using this destination and are now unassigned",
             dependent_count.0
         ));
     }

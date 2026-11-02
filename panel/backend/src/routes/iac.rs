@@ -20,8 +20,10 @@ use crate::AppState;
 // against `iac_tokens.token_hash` to admit a request. The line this replaced
 // claimed "Authentication via IaC tokens (Bearer token) or regular JWT" — that
 // was never true. See FEATURES.md § Withdrawn Claims.
-// Resources: sites, databases. (`dns_records` was named here too; no
-// `tf_list_dns` handler, or any dns_records reader, has ever existed.)
+// Resources: databases. (`dns_records` was named here too; no
+// `tf_list_dns` handler, or any dns_records reader, has ever existed.
+// `tf_list_sites` died with sites in R3; the default scope lost `sites`
+// with it in R7.)
 
 /// POST /api/iac/tokens — Create a new IaC token.
 pub async fn create_token(
@@ -37,7 +39,7 @@ pub async fn create_token(
         return Err(err(StatusCode::BAD_REQUEST, "Name must be 1-255 characters"));
     }
 
-    let scopes = body.get("scopes").and_then(|v| v.as_str()).unwrap_or("sites,databases");
+    let scopes = body.get("scopes").and_then(|v| v.as_str()).unwrap_or("databases");
 
     // Generate a secure random token
     let raw_token = format!("dpiac_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
@@ -137,12 +139,14 @@ pub async fn tf_list_databases(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
+    // R7: scoped on `d.user_id` directly. Before, this joined `sites` and
+    // kept only site-owned rows (stack-owned rows dropped out of the join);
+    // the backfilled `user_id` carries the same ownership for both origins.
     let dbs: Vec<(uuid::Uuid, String, String, Option<i32>, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
             "SELECT d.id, d.name, d.engine, d.port, d.created_at \
              FROM databases d \
-             JOIN sites s ON d.site_id = s.id \
-             WHERE s.user_id = $1 ORDER BY d.name"
+             WHERE d.user_id = $1 ORDER BY d.name"
         )
         .bind(claims.sub)
         .fetch_all(&state.db)

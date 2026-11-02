@@ -175,8 +175,9 @@ async fn validate_schedule_routes(
 }
 
 /// Reject `user:<uuid>` routes pointing at a user the caller may not page:
-/// anyone other than themselves, or a user they directly manage
-/// (`users.reseller_id = caller`) — the same ownership shape `list`/`create`
+/// anyone other than themselves. (R7: the directly-managed arm died with
+/// `users.reseller_id`, dropped by the terminal migration with the reseller
+/// tables — paging is self-only now.) The same ownership shape `list`/`create`
 /// in `routes/users.rs` deliberately do NOT enforce (the user directory is
 /// shared across every admin on the install), but paging someone is not
 /// browsing a directory.
@@ -192,7 +193,7 @@ async fn validate_schedule_routes(
 /// at s437 — same file, same validator set, same threat model, different
 /// route shape.
 async fn validate_user_routes(
-    db: &sqlx::PgPool,
+    _db: &sqlx::PgPool,
     input: &PolicyInput,
     owner_id: Uuid,
 ) -> Result<(), ApiError> {
@@ -208,21 +209,15 @@ async fn validate_user_routes(
             continue; // paging yourself needs no ownership check
         }
 
-        let managed: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM users WHERE id = $1 AND reseller_id = $2",
-        )
-        .bind(target_id)
-        .bind(owner_id)
-        .fetch_optional(db)
-        .await
-        .map_err(|e| internal_error("validate user routes", e))?;
-
-        if managed.is_none() {
-            return Err(err(
-                StatusCode::BAD_REQUEST,
-                &format!("step {i}: user {target_id} does not exist"),
-            ));
-        }
+        // R7: the managed arm is gone with `users.reseller_id` (dropped by
+        // the terminal migration with the reseller tables), so no other
+        // user can be managed into pageable. Reject with the same error
+        // the un-managed arm used to return: the boundary fails closed
+        // rather than opening to every existing user.
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("step {i}: user {target_id} does not exist"),
+        ));
     }
     Ok(())
 }

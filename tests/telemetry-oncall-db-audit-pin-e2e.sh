@@ -130,8 +130,8 @@ else
   bad "A5 (control) send_pending_events' payload shape changed — verify this wasn't accidentally widened"
 fi
 
-# ── §B on_call.rs: schedule members are self-or-managed, not just existing ─
-echo "── §B on_call.rs: validate_members_exist enforces self-or-managed ownership ──"
+# ── §B on_call.rs: schedule members are self-only, not just existing ─
+echo "── §B on_call.rs: validate_members_exist enforces self-only membership (R7) ──"
 
 if has "$VALIDATE_MEMBERS_BODY" 'owner_id: Uuid'; then
   ok "B1 validate_members_exist takes an owner_id parameter"
@@ -139,8 +139,10 @@ else
   bad "B1 validate_members_exist has no owner_id parameter — still existence-only"
 fi
 
-if has "$VALIDATE_MEMBERS_BODY" 'id = \$2 OR reseller_id = \$2'; then
-  ok "B2 the member query requires self-or-managed (id = \$2 OR reseller_id = \$2)"
+if has "$VALIDATE_MEMBERS_BODY" 'WHERE id = ANY\(\$1\) AND id = \$2'; then
+  ok "B2 (R7) the member query requires self-only membership (id = ANY(\$1) AND id = \$2) — the managed arm died with reseller_id"
+elif has "$VALIDATE_MEMBERS_BODY" 'reseller_id'; then
+  bad "B2 the member query still consults reseller_id — the column was dropped"
 else
   bad "B2 the member query no longer carries the ownership term — regressed to existence-only"
 fi

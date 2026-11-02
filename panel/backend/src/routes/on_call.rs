@@ -140,9 +140,11 @@ fn validate_input(input: &ScheduleInput) -> Result<(), ApiError> {
 }
 
 /// Reject a member UUID the caller may not page: anyone other than
-/// themselves, or a user they directly manage (`users.reseller_id = caller`)
-/// — the same self-or-managed boundary `escalation_policies.rs`'s
-/// `validate_user_routes` enforces for `user:<uuid>` escalation steps.
+/// themselves. (R7: the directly-managed arm died with `users.reseller_id`,
+/// dropped by the terminal migration with the reseller tables — rotation
+/// membership is self-only now.) The same self-only boundary
+/// `escalation_policies.rs`'s `validate_user_routes` enforces for `user:<uuid>`
+/// escalation steps.
 ///
 /// ⚠ SECURITY: this used to only check the IDs existed (`SELECT COUNT(*)...
 /// WHERE id = ANY($1)`), with no ownership term. A schedule's members feed
@@ -159,8 +161,12 @@ async fn validate_members_exist(
     members: &[Uuid],
     owner_id: Uuid,
 ) -> Result<(), ApiError> {
+    // R7: the `OR reseller_id = $2` managed arm is gone with the column
+    // (dropped by the terminal migration with the reseller tables).
+    // Membership is self-only; the count check below rejects any other
+    // member instead of paging them.
     let found: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE id = ANY($1) AND (id = $2 OR reseller_id = $2)",
+        "SELECT COUNT(*) FROM users WHERE id = ANY($1) AND id = $2",
     )
     .bind(members)
     .bind(owner_id)

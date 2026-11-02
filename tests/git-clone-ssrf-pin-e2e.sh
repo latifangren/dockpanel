@@ -176,6 +176,8 @@ fi
 
 # ── §D the reachable clone paths call the guard, in position ──────────────
 # (R6: 3 paths became 2 — atomic_deploy deleted; git_build path deleted in R5.)
+# (R7: 2 paths became 0 — deploy.rs::clone_or_pull deleted with zero Rust
+# callers; D3/D4 below are tombstones asserting no clone path remains.)
 echo "── §D the reachable clone paths call the guard BEFORE spawning git ──"
 
 if has "$GB_CLONE_BODY" 'ssrf_guard::validate_repo_url_not_internal\(repo_url\)\.await\?'; then
@@ -190,16 +192,20 @@ else
   bad "D2 git_build.rs::clone_or_pull's guard runs after (or never before) the subprocess spawn"
 fi
 
-if has "$DEP_CLONE_BODY" 'ssrf_guard::validate_repo_url_not_internal\(repo_url\)\.await\?'; then
-  ok "D3 deploy.rs::clone_or_pull calls the guard"
+# R7 TOMBSTONE: deploy.rs::clone_or_pull is deleted (zero Rust callers).
+# The guard property for this path is retired by asserting the path itself
+# is gone and no guard call survives without it — a reintroduced clone
+# without the guard would fail D3's tombstone first, not pass silently.
+if has "$DEPLOY_C" 'fn clone_or_pull'; then
+  bad "TOMBSTONE (R7): deploy.rs::clone_or_pull is back — it must call the guard (see D3/D4 at R6)"
 else
-  bad "D3 deploy.rs::clone_or_pull does not call the guard"
+  ok "TOMBSTONE (R7): deploy.rs::clone_or_pull is gone — no clone path left in deploy.rs to guard"
 fi
 
-if before "$DEP_CLONE_BODY" "validate_repo_url_not_internal" "cmd.output()"; then
-  ok "D4 deploy.rs::clone_or_pull validates before spawning the git subprocess"
+if has "$DEPLOY_C" 'validate_repo_url_not_internal'; then
+  bad "TOMBSTONE (R7): a guard call survives in deploy.rs with no clone path behind it — re-scope this section"
 else
-  bad "D4 deploy.rs::clone_or_pull's guard runs after (or never before) the subprocess spawn"
+  ok "TOMBSTONE (R7): no SSRF-guard call remains in deploy.rs — the only clone path that called it is deleted"
 fi
 
 # R6: D5/D6 deleted with deploy.rs::atomic_deploy (see header note).

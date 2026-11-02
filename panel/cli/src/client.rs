@@ -126,14 +126,6 @@ pub async fn agent_post_empty(path: &str, token: &str) -> Result<serde_json::Val
     agent_request("POST", path, None, token).await
 }
 
-pub async fn agent_put(
-    path: &str,
-    body: &serde_json::Value,
-    token: &str,
-) -> Result<serde_json::Value, String> {
-    agent_request("PUT", path, Some(body), token).await
-}
-
 pub async fn agent_delete(path: &str, token: &str) -> Result<serde_json::Value, String> {
     agent_request("DELETE", path, None, token).await
 }

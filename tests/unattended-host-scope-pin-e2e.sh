@@ -393,21 +393,27 @@ fi
 # counted it, so the log reported archives it had never touched.
 RC_S=$(fnbody "$AH_S" "run_retention_cleanup")
 if [ -n "$RC_S" ]; then
-  # E7 — all THREE sweeps must retire through the one guarded step.
+  # E7 — all remaining sweeps must retire through the one guarded step.
+  # R7 re-derivation: three sweeps -> two. The site sweep
+  # (`backup_schedules` -> `backups`, joining `sites`) is deleted with
+  # the hosting schema; the database and volume policy sweeps survive
+  # and both still retire through prune_policy_backup.
   PPB_CALLS=$(count "$RC_S" 'prune_policy_backup\(')
-  if [ "$PPB_CALLS" -ge 3 ]; then
-    ok "E7 all three retention sweeps retire through the guarded step ($PPB_CALLS call sites)"
+  if [ "$PPB_CALLS" -ge 2 ]; then
+    ok "E7 both retention sweeps retire through the guarded step ($PPB_CALLS call sites)"
   else
-    bad "E7 only $PPB_CALLS of 3 retention sweeps are guarded — one deletes rows on its own"
+    bad "E7 only $PPB_CALLS of 2 retention sweeps are guarded — one deletes rows on its own"
   fi
 
-  # E8 — the site sweep must NAME THE HOST. `backups` carries no server of its
-  # own, so the owning host is the site's: the join must select it, not just the
-  # domain it needs for the path.
-  if has "$RC_S" 's\.server_id'; then
-    ok "E8 the site retention sweep selects the owning server, not just the domain"
+  # E8 — TOMBSTONE (R7): the site sweep is deleted with `backup_schedules`
+  # and the `sites` table, so there is no site join left that could omit
+  # the owning server. Asserting the sweep itself is gone from the
+  # cleanup body — a reintroduced schedule sweep without server_id
+  # would fail here first.
+  if has "$RC_S" 'backup_schedules' || has "$RC_S" 'JOIN sites'; then
+    bad "E8 the site retention sweep is back without its server join — it cannot tell whose host the archive is on"
   else
-    bad "E8 the site sweep joins sites without server_id — it cannot tell whose host the archive is on"
+    ok "E8 TOMBSTONE (R7): the site retention sweep is gone with backup_schedules/sites — no unhosted sweep remains"
   fi
 
   # E9 — ABSENCE arm: no sweep may delete a backups row directly again.

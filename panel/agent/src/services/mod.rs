@@ -12,7 +12,9 @@ pub mod crontab;
 pub mod cpu_sampler;
 pub mod database;
 pub mod database_backup;
-// R6: clone_or_pull retained per the R6 keep decision although no Rust caller remains; revisit in R7/R8.
+// R7: clone_or_pull deleted (zero Rust callers); the allow now protects the
+// seven helpers below it, which production code no longer reaches but the
+// module's own #[cfg(test)] escalation/adoption tests still exercise.
 #[allow(dead_code)]
 pub mod deploy;
 pub mod diagnostics;
@@ -31,7 +33,9 @@ pub mod remote_backup;
 pub mod security;
 pub mod security_scanner;
 pub mod ssl;
-// R6: the git repo-URL validation chain lost its callers with git_build/migration/deploy routes; module and tests retained as the SSRF guard surface.
+// R7: its sole production caller was deploy.rs::clone_or_pull, deleted in R7
+// (zero Rust callers). Module and tests retained as the SSRF guard surface;
+// the guard entry point is still asserted by the git-clone-ssrf pin.
 #[allow(dead_code)]
 pub mod ssrf_guard;
 pub mod staging;

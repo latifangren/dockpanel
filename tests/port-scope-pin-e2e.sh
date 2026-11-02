@@ -100,14 +100,17 @@ $G -qF 'idx_git_deploys_host_port_server' "$WORK/portidx.txt" \
   && ok "A1-control the derivation finds the sibling that was scoped correctly in 2026-03" \
   || bad "A1-control" "idx_git_deploys_host_port_server is not in the derived set — the filter is broken, not the tree"
 
-# A1-control-neg (negative): the global preview index must be GONE from the live
-# set and PRESENT in the drop set. Asserting both directions is what separates
-# "the fix landed" from "the parse missed it".
-if $G -qxF 'idx_git_previews_host_port' "$WORK/drops.txt" \
+# A1-control-neg (negative), re-derived in R7: the global preview index's
+# DROP lived in `20260320200000_port_constraints.sql`, deleted with the
+# hosting schema — and the index itself dies with the `git_previews`
+# table, dropped by the terminal migration. Asserting all three
+# directions: creating file gone, table dropped, index not live.
+if [ ! -e "$MIG/20260320200000_port_constraints.sql" ] \
+   && $G -qF 'DROP TABLE IF EXISTS git_previews;' "$MIG/20260909000001_drop_hosting_schema.sql" \
    && ! $G -qE '^idx_git_previews_host_port\b' "$WORK/portidx.txt"; then
-  ok "A1-control-neg the global preview index is dropped and no longer live"
+  ok "A1-control-neg the global preview index is gone with its table (creating migration deleted, git_previews dropped by the terminal migration, index not live)"
 else
-  bad "A1-control-neg" "idx_git_previews_host_port is still live, or its DROP was not parsed"
+  bad "A1-control-neg" "idx_git_previews_host_port is still live, its creating migration survives, or git_previews is not dropped by the terminal migration"
 fi
 
 # A1: THE INVARIANT. For every live port-bearing unique index, the index's scope
@@ -170,23 +173,44 @@ else
   bad "A1 a port index and its allocator disagree" "$VIOL"
 fi
 
-[ "$NPORT" -ge 4 ] && ok "A2 the port-index population is $NPORT — all four port-bearing tables reached" \
-  || bad "A2 the port-index population" "only $NPORT derived — expected at least 4 (databases, git_deploys, git_previews, sites)"
+# R7 re-derivation: the port-index population is 2, not 4. The git_previews
+# and sites CREATEs died with their migration files (and their tables with
+# the terminal migration); the surviving members are exactly the two the
+# derivation still finds — databases (global, correct) and git_deploys'
+# server-scoped host_port index (whose CREATE survives in multi_server.sql).
+[ "$NPORT" -ge 2 ] && ok "A2 the port-index population is $NPORT — both surviving port-bearing tables reached (databases, git_deploys)" \
+  || bad "A2 the port-index population" "only $NPORT derived — expected at least 2 (databases, git_deploys)"
 
 # R5: MIGF was defined in §B (deleted with the git-preview arms); the §D arms
 # below still read the scoping migration, which stays until R7.
+# R7: the scoping migration is deleted with the hosting schema and the
+# `sites` table is dropped by the terminal migration, so §D's property
+# (a server-scoped site proxy_port index) retires with both. Tombstones
+# assert the file is gone, the table is dropped, and no site port index
+# survives in the derived live set.
 MIGF="$MIG/20260818000000_port_uniqueness_server_scope.sql"
 
 echo "── D. sites.proxy_port — the collision the operator was told was a domain ──"
 
-eq "D1 the site proxy_port index is scoped to the server" \
-   "$($G -cE 'idx_sites_proxy_port_server' "$MIGF")" "1"
-$G -qE 'ON sites\(proxy_port, server_id\) WHERE proxy_port IS NOT NULL' "$MIGF" \
-  && ok "D1b the partial predicate survives — a NULL proxy_port means the runtime does not proxy" \
-  || bad "D1b the partial predicate survives" "dropping WHERE proxy_port IS NOT NULL makes every non-proxying site collide"
-$G -qE 'DROP INDEX IF EXISTS idx_sites_proxy_port;' "$MIGF" \
-  && ok "D1c the global site port index is dropped" \
-  || bad "D1c the global site port index is dropped" "both indexes live means the global one still rejects"
+if [ -e "$MIGF" ]; then
+  bad "D1 TOMBSTONE (R7): the site port-scoping migration is back — the §D arms below must be restored, not assumed" "file exists again"
+elif ! $G -qF 'DROP TABLE IF EXISTS sites;' "$MIG/20260909000001_drop_hosting_schema.sql"; then
+  bad "D1 TOMBSTONE (R7): the sites table is not dropped by the terminal migration — the proxy_port index may still reject" "no DROP TABLE sites in terminal migration"
+elif $G -qE 'idx_sites_proxy_port' "$WORK/portidx.txt"; then
+  bad "D1 TOMBSTONE (R7): a site proxy_port index is still live in the derived set" "index survives"
+else
+  ok "D1 TOMBSTONE (R7): the site proxy_port index is gone with the sites table (scoping migration deleted, table dropped, no site port index live)"
+fi
+if [ -e "$MIGF" ]; then
+  bad "D1b TOMBSTONE (R7): the scoping migration survives — its partial predicate cannot be asserted from a deleted file" "file exists again"
+else
+  ok "D1b TOMBSTONE (R7): the partial predicate died with its migration file — no NULL-proxying site can collide on a dropped table"
+fi
+if [ -e "$MIGF" ]; then
+  bad "D1c TOMBSTONE (R7): the scoping migration survives — its DROP of the global index cannot be asserted from a deleted file" "file exists again"
+else
+  ok "D1c TOMBSTONE (R7): the global site port index died with its migration file and the sites table — both indexes are gone because the table is"
+fi
 
 echo "PASS $PASS / FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

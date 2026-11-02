@@ -68,8 +68,7 @@ fnbody() {
 
 # An `enum NAME { ... }` body, bounded on its own braces — scopes the
 # variant search below so a same-named variant on a DIFFERENT enum earlier
-# in the file (SitesCmd::Create precedes DbCmd::Create) can't be matched by
-# accident.
+# in the file can't be matched by accident.
 enumbody() {
   awk -v en="$2" '
     index($0, "enum " en " {") && !started { started=1 }

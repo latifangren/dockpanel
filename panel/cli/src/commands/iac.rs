@@ -50,89 +50,6 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
     let mut applied = 0;
     let mut errors = 0;
 
-    // ── Sites ───────────────────────────────────────────────────────
-    let desired_sites = desired["sites"].as_array();
-    let current_domains: Vec<&str> = current["sites"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|s| s["domain"].as_str()).collect())
-        .unwrap_or_default();
-
-    if let Some(sites) = desired_sites {
-        for site in sites {
-            let domain = site["domain"].as_str().unwrap_or("");
-            if domain.is_empty() {
-                continue;
-            }
-            let runtime = site["runtime"].as_str().unwrap_or("static");
-
-            if current_domains.contains(&domain) {
-                plan_skip.push(format!("site: {domain} (already exists)"));
-                continue;
-            }
-
-            let desc = match runtime {
-                "proxy" => {
-                    let port = site["proxy_port"].as_u64().unwrap_or(3000);
-                    format!("site: {domain} (proxy → port {port})")
-                }
-                "php" => {
-                    let ver = site["php_version"].as_str().unwrap_or("8.3");
-                    format!("site: {domain} (php {ver})")
-                }
-                _ => format!("site: {domain} (static)"),
-            };
-
-            if dry_run {
-                plan_create.push(desc);
-            } else {
-                print!("  Creating site {domain}... ");
-                let mut body = json!({ "runtime": runtime });
-                if let Some(port) = site["proxy_port"].as_u64() {
-                    body["proxy_port"] = json!(port);
-                }
-                if let Some(root) = site["root"].as_str() {
-                    body["root"] = json!(root);
-                }
-                if let Some(ver) = site["php_version"].as_str() {
-                    body["php_socket"] = json!(format!("unix:/run/php/php{ver}-fpm.sock"));
-                }
-
-                match client::agent_put(&format!("/nginx/sites/{domain}"), &body, token).await {
-                    Ok(_) => {
-                        println!("\x1b[32m✓\x1b[0m");
-                        applied += 1;
-
-                        // SSL provisioning
-                        if site["ssl"].as_bool() == Some(true) {
-                            if let Some(em) = email {
-                                print!("  Provisioning SSL for {domain}... ");
-                                let ssl_body = json!({
-                                    "email": em,
-                                    "runtime": runtime,
-                                    "proxy_port": site["proxy_port"].as_u64(),
-                                });
-                                match client::agent_post(&format!("/ssl/provision/{domain}"), &ssl_body, token).await {
-                                    Ok(_) => println!("\x1b[32m✓\x1b[0m"),
-                                    Err(e) => {
-                                        println!("\x1b[33mskipped\x1b[0m ({e})");
-                                    }
-                                }
-                            } else {
-                                println!(
-                                    "  \x1b[33m!\x1b[0m {domain} requests ssl but no --email was given — skipping SSL provisioning (re-run with --email to provision it)"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("\x1b[31m✗\x1b[0m ({e})");
-                        errors += 1;
-                    }
-                }
-            }
-        }
-    }
-
     // ── Databases ───────────────────────────────────────────────────
     let desired_dbs = desired["databases"].as_array();
     let current_db_names: Vec<&str> = current["databases"]
@@ -264,7 +181,7 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
     }
 
     // ── Cron Jobs ───────────────────────────────────────────────────
-    // Unlike sites/databases/apps/php, crons DO reconcile on a real apply —
+    // Unlike databases/apps, crons DO reconcile on a real apply —
     // /crons/sync replaces every entry whose id it's given. So the dry-run plan
     // is wrong if it always calls every cron "to create": diff against what
     // /iac/export already reported as current, the same source every other
@@ -303,61 +220,6 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
                     Ok(_) => {
                         println!("\x1b[32m✓\x1b[0m");
                         applied += 1;
-                    }
-                    Err(e) => {
-                        println!("\x1b[31m✗\x1b[0m ({e})");
-                        errors += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    // ── PHP Versions ────────────────────────────────────────────────
-    let desired_php = desired["php"].as_array();
-    let current_php: Vec<&str> = current["php"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter(|p| p["installed"].as_bool() == Some(true))
-                .filter_map(|p| p["version"].as_str())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    if let Some(phps) = desired_php {
-        for php in phps {
-            let version = php["version"].as_str().unwrap_or("");
-            if version.is_empty() {
-                continue;
-            }
-
-            if current_php.contains(&version) {
-                plan_skip.push(format!("php: {version} (already installed)"));
-                continue;
-            }
-
-            let desc = format!("php: {version}");
-
-            if dry_run {
-                plan_create.push(desc);
-            } else {
-                print!("  Installing PHP {version}... ");
-                let body = json!({ "version": version });
-                match client::agent_post("/php/install", &body, token).await {
-                    // A 200 stopped meaning success when the agent began judging
-                    // an install by whether PHP-FPM opened its socket: "installed
-                    // but the service never came up" is an honest 200 carrying
-                    // `success: false`. Counting it as applied would print a
-                    // green tick over a PHP that cannot serve a site.
-                    Ok(r) if r["success"].as_bool() != Some(false) => {
-                        println!("\x1b[32m✓\x1b[0m");
-                        applied += 1;
-                    }
-                    Ok(r) => {
-                        let msg = r["message"].as_str().unwrap_or("install did not complete");
-                        println!("\x1b[31m✗\x1b[0m ({msg})");
-                        errors += 1;
                     }
                     Err(e) => {
                         println!("\x1b[31m✗\x1b[0m ({e})");

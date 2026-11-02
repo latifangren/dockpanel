@@ -165,12 +165,18 @@ else
   bad "C5 pitr_config's inline check is missing the admin-widening"
 fi
 
-# Positive control: create()'s own predicate (the source of truth these were
-# widened to match) must still be there, unchanged.
+# Positive control, re-derived in R7: create()'s own predicate
+# (helpers::SITE_CALLER_PREDICATE) died with the `sites` table, and
+# databases.rs now scopes on the row's own denormalised columns instead.
+# The widening property §C pins survives in that new shape: list() still
+# carries the admin-widening EXISTS clause over d.server_id (C1 above),
+# so the control asserts the replacement rather than the dead predicate.
 if has "$DATABASES_C" 'SITE_CALLER_PREDICATE'; then
-  ok "C6 (control) create() still uses helpers::SITE_CALLER_PREDICATE"
+  bad "C6 (control) SITE_CALLER_PREDICATE is still named in databases.rs — it died with the sites table in R7"
+elif has "$DB_LIST_BODY" "d\\.server_id" && has "$DB_LIST_BODY" "u\\.role = 'admin'"; then
+  ok "C6 (control) list() scopes on databases' own user_id/server_id with the same admin-widening create() used to carry via SITE_CALLER_PREDICATE"
 else
-  bad "C6 (control) create()'s own predicate regressed"
+  bad "C6 (control) list() neither uses the old predicate nor the denormalised-column scoping that replaced it"
 fi
 
 # ── §D panel_update.rs: build_fleet_plan sees the whole fleet for admins ──

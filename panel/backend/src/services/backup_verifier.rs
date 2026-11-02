@@ -50,21 +50,28 @@ async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
         return Ok(());
     }
 
-    // Database backups resolve their server through the site that owns the database,
-    // not through `database_backups.server_id`: that column is nullable and a policy
-    // with no server writes NULL into it. `sites.server_id` is NOT NULL, so this join
-    // cannot produce an ambiguous host. Same join `create_db_backup` already makes.
-    let db_backups: Vec<(Uuid, String, String, String, Uuid)> = sqlx::query_as(
-        "SELECT db.id, db.db_type, db.db_name, db.filename, s.server_id FROM database_backups db \
+    // Database backups resolve their server through the database row
+    // itself: `databases.server_id` (backfilled from the old site/stack
+    // owners in R7, NOT NULL). The old INNER JOIN to `sites` dropped every
+    // stack-owned database from verification; R7 deliberately verifies
+    // those too. A NULL `server_id` (a row older than the backfill) fails
+    // the join below and stays unverified rather than being read on the
+    // wrong host.
+    //
+    // `database_backups.server_id` is NOT used here: that column is
+    // nullable and a policy with no server writes NULL into it.
+    let db_backups: Vec<(Uuid, String, String, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT db.id, db.db_type, db.db_name, db.filename, d.server_id FROM database_backups db \
          JOIN databases d ON d.id = db.database_id \
-         JOIN sites s ON s.id = d.site_id \
          LEFT JOIN backup_verifications bv ON bv.backup_type = 'database' AND bv.backup_id = db.id \
          WHERE bv.id IS NULL AND db.created_at > NOW() - INTERVAL '7 days' \
+         AND d.server_id IS NOT NULL \
          ORDER BY db.created_at DESC LIMIT 3"
     )
     .fetch_all(db).await.map_err(|e| e.to_string())?;
 
     for (backup_id, db_type, db_name, filename, server_id) in &db_backups {
+        let Some(server_id) = server_id else { continue };
         verify_one(db, agents, *server_id, "database", *backup_id, db_name, filename, Some(db_type), None).await;
     }
 
@@ -191,7 +198,7 @@ async fn verify_one(
                     "SELECT id FROM users WHERE role = 'admin' LIMIT 1"
                 ).fetch_optional(db).await {
                     notifications::fire_alert(
-                        db, user_id, None, None,
+                        db, user_id, None,
                         "backup_verification_failed", "", "warning",
                         &format!("Backup verification failed: {name}"),
                         &format!("The {backup_type} backup '{filename}' for {name} failed verification ({checks_passed}/{checks_run} checks passed)."),

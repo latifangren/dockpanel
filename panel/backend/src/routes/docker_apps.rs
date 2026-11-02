@@ -343,11 +343,6 @@ pub async fn deploy(
     let agent = agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
-    // The host this app is being deployed to. A Docker app is genuinely
-    // server-level — it runs on whichever machine the operator selected — but the
-    // A record published for it below must name THAT machine, and it named the
-    // panel instead. See `helpers::public_ip_for_server`.
-    let dns_server_id = server_id;
     let email = claims.email.clone();
     let app_name = body.name.clone();
     let template = body.template_id.clone();
@@ -359,8 +354,8 @@ pub async fn deploy(
     // and simply never consulted. So an app could be deployed onto a live site's
     // domain and the agent would replace that site's vhost, and onto the panel's
     // own hostname. The check must happen HERE and not later: the spawned task
-    // below creates a DNS A record before the agent is ever called, so a domain
-    // rejected downstream still leaves a live record behind.
+    // below deploys before the agent is ever called, so a domain rejected
+    // downstream would already have a container behind it.
     let deploy_domain = match body.domain.clone().filter(|d| !d.is_empty()) {
         Some(d) => Some(
             crate::services::domain_claim::ensure_claimable(
@@ -474,137 +469,11 @@ pub async fn deploy(
             }
         };
 
-        // Step 1: Auto-create DNS record if domain is provided
-        if let Some(ref domain) = deploy_domain {
-            emit("dns", "Creating DNS record", "in_progress", None);
-
-            // Extract parent domain (e.g., "mail.dockpanel.dev" → "dockpanel.dev")
-            let parts: Vec<&str> = domain.splitn(3, '.').collect();
-            let parent_domain = if parts.len() >= 3 {
-                format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
-            } else {
-                domain.clone()
-            };
-
-            // Look up DNS zone for this domain
-            let zone: Option<(Uuid, String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-                "SELECT id, provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
-            )
-            .bind(&parent_domain)
-            .bind(user_id)
-            .fetch_optional(&db)
-            .await
-            .ok()
-            .flatten();
-
-            if let Some((_zone_id, provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let Some(server_ip) =
-                    crate::helpers::public_ip_for_server(&db, Some(dns_server_id)).await
-                else {
-                    // No record beats a record naming the wrong machine: that one
-                    // resolves, and answers with someone else's app.
-                    emit("dns", "Creating DNS record", "failed", Some("could not determine this server's public address".to_string()));
-                    return;
-                };
-
-                if provider == "cloudflare" {
-                    if let (Some(zone_id), Some(token)) = (cf_zone_id, cf_api_token) {
-                        let client = reqwest::Client::new();
-                        let headers = crate::helpers::cf_headers(&token, cf_api_email.as_deref());
-
-                        let result = client
-                            .post(&format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"))
-                            .headers(headers)
-                            .json(&serde_json::json!({
-                                "type": "A",
-                                "name": domain,
-                                "content": server_ip,
-                                "proxied": true,
-                                "ttl": 1,
-                            }))
-                            .send()
-                            .await;
-
-                        match result {
-                            Ok(resp) => {
-                                let body = resp.json::<serde_json::Value>().await.ok();
-                                let success = body.as_ref().and_then(|b| b.get("success")).and_then(|v| v.as_bool()).unwrap_or(false);
-                                if success {
-                                    emit("dns", "Creating DNS record", "done", None);
-                                    tracing::info!("Auto-DNS: created A record {domain} → {server_ip}");
-                                } else {
-                                    let err_msg = body.as_ref()
-                                        .and_then(|b| b.get("errors"))
-                                        .and_then(|e| e.as_array())
-                                        .and_then(|a| a.first())
-                                        .and_then(|e| e.get("message"))
-                                        .and_then(|m| m.as_str())
-                                        .unwrap_or("Unknown error");
-                                    emit("dns", "Creating DNS record", "error",
-                                        Some(format!("DNS failed: {err_msg} — create manually")));
-                                    tracing::warn!("Auto-DNS failed for {domain}: {err_msg}");
-                                }
-                            }
-                            Err(e) => {
-                                emit("dns", "Creating DNS record", "error",
-                                    Some(format!("DNS API error: {e} — create manually")));
-                            }
-                        }
-                    }
-                }
-                else if provider == "powerdns" {
-                    // Get PowerDNS settings
-                    let pdns: Vec<(String, String)> = sqlx::query_as(
-                        "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
-                    ).fetch_all(&db).await.unwrap_or_default();
-                    let pdns_url = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
-                    let pdns_key_enc = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
-
-                    if let (Some(url), Some(key_enc)) = (pdns_url, pdns_key_enc) {
-                        let key = crate::services::secrets_crypto::decrypt_credential_from_env(&key_enc);
-                        let client = reqwest::Client::new();
-                        let zone_fqdn = if parent_domain.ends_with('.') { parent_domain.clone() } else { format!("{parent_domain}.") };
-
-                        let result = client
-                            .patch(&format!("{url}/api/v1/servers/localhost/zones/{zone_fqdn}"))
-                            .header("X-API-Key", &key)
-                            .json(&serde_json::json!({
-                                "rrsets": [{
-                                    "name": format!("{domain}."),
-                                    "type": "A",
-                                    "ttl": 300,
-                                    "changetype": "REPLACE",
-                                    "records": [{ "content": server_ip, "disabled": false }]
-                                }]
-                            }))
-                            .send()
-                            .await;
-
-                        match result {
-                            Ok(resp) if resp.status().is_success() => {
-                                emit("dns", "Creating DNS record", "done", None);
-                                tracing::info!("Auto-DNS (PowerDNS): created A record {domain} → {server_ip}");
-                            }
-                            Ok(resp) => {
-                                let text = resp.text().await.unwrap_or_default();
-                                emit("dns", "Creating DNS record", "error",
-                                    Some(format!("PowerDNS error: {text} — create manually")));
-                            }
-                            Err(e) => {
-                                emit("dns", "Creating DNS record", "error",
-                                    Some(format!("PowerDNS API error: {e} — create manually")));
-                            }
-                        }
-                    } else {
-                        emit("dns", "Creating DNS record", "error",
-                            Some("PowerDNS not configured — create record manually".into()));
-                    }
-                }
-            } else {
-                emit("dns", "Creating DNS record", "error",
-                    Some(format!("No DNS zone found for {parent_domain} — create record manually")));
-            }
-        }
+        // R7: Auto-DNS is deleted with the `dns_zones` table. Deploying an
+        // app no longer creates a DNS A record for its domain, and no
+        // "dns" progress event is emitted — the operator must create the
+        // record manually. The deploy flow below (pull/deploy, domain
+        // bookkeeping, monitors) is unchanged.
 
         // Step 2: Pull image + deploy container (+ proxy + SSL handled by agent)
         emit("pull", "Pulling Docker image", "in_progress", None);
@@ -754,7 +623,7 @@ pub async fn deploy(
                     .bind(&app_name)
                     .bind(&deploy_domain)
                     .bind(deploy_gpu_enabled)
-                    .bind(dns_server_id)
+                    .bind(server_id)
                     .execute(&db)
                     .await;
                 }
@@ -2188,86 +2057,12 @@ pub async fn remove_app(
         .await;
     }
 
-    // Auto-cleanup DNS record if a domain was removed
-    if let Some(domain_removed) = result.get("domain_removed").and_then(|v| v.as_str()) {
-        let dns_domain = domain_removed.to_string();
-        let dns_db = state.db.clone();
-        let dns_user = claims.sub;
-        // The host the app was removed FROM. The cleanup below deletes a record
-        // only where its content matches this address, so reading the panel's
-        // address meant a member's record never matched and outlived the app it
-        // pointed at — a dangling A record, which is a takeover surface rather
-        // than clutter.
-        let dns_server_id = server_id;
-        tokio::spawn(async move {
-            // Extract parent domain
-            let parts: Vec<&str> = dns_domain.splitn(3, '.').collect();
-            let parent = if parts.len() >= 3 {
-                format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
-            } else {
-                dns_domain.clone()
-            };
-
-            let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
-                "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
-            ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!("DB error fetching DNS zone for docker app cleanup: {e}");
-                    None
-                }
-            };
-
-            if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let Some(server_ip) =
-                    crate::helpers::public_ip_for_server(&dns_db, Some(dns_server_id)).await
-                else {
-                    tracing::warn!("Auto-DNS cleanup: could not resolve the public address of the server {dns_domain} was removed from — leaving the record in place rather than deleting one that may belong to another host");
-                    return;
-                };
-
-                if provider == "cloudflare" {
-                    if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
-                        let client = reqwest::Client::new();
-                        let headers = crate::helpers::cf_headers(&tok, cf_api_email.as_deref());
-                        // Find the A record for this domain
-                        if let Ok(resp) = client.get(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records?type=A&name={dns_domain}"))
-                            .headers(headers.clone()).send().await {
-                            if let Ok(data) = resp.json::<serde_json::Value>().await {
-                                if let Some(records) = data.get("result").and_then(|r| r.as_array()) {
-                                    for record in records {
-                                        if let (Some(rid), Some(content)) = (record.get("id").and_then(|v| v.as_str()), record.get("content").and_then(|v| v.as_str())) {
-                                            if content == server_ip {
-                                                let _ = client.delete(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{rid}"))
-                                                    .headers(headers.clone()).send().await;
-                                                tracing::info!("Auto-DNS cleanup: deleted A record for app domain {dns_domain}");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if provider == "powerdns" {
-                    let pdns: Vec<(String, String)> = sqlx::query_as(
-                        "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
-                    ).fetch_all(&dns_db).await.unwrap_or_default();
-                    let purl = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
-                    let pkey_enc = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
-                    if let (Some(url), Some(key_enc)) = (purl, pkey_enc) {
-                        let key = crate::services::secrets_crypto::decrypt_credential_from_env(&key_enc);
-                        let zfqdn = if parent.ends_with('.') { parent } else { format!("{parent}.") };
-                        let _ = reqwest::Client::new()
-                            .patch(&format!("{url}/api/v1/servers/localhost/zones/{zfqdn}"))
-                            .header("X-API-Key", &key)
-                            .json(&serde_json::json!({"rrsets":[{"name":format!("{dns_domain}."),"type":"A","ttl":300,"changetype":"DELETE","records":[]}]}))
-                            .send().await;
-                        tracing::info!("Auto-DNS cleanup (PowerDNS): deleted A record for app domain {dns_domain}");
-                    }
-                }
-            }
-        });
-    }
+    // R7: Auto-DNS cleanup is deleted with the `dns_zones` table — no
+    // DNS record is deleted on removal either. A record created by an
+    // earlier deploy now outlives the app permanently (dangling-record
+    // risk is disclosed here rather than silently kept): the operator
+    // must remove it at the DNS provider. The `docker_app_domains`
+    // DELETE above is unchanged.
 
     tracing::info!("App removed: {}", container_id);
     let ip = crate::routes::client_ip(&headers);
@@ -2851,8 +2646,7 @@ pub async fn wake_container(
     // is actually running would stay marked asleep and be permanently
     // excluded from the auto-sleep sweeper's own reconciliation (it only acts
     // on rows it believes are awake). Log it so the desync is at least
-    // observable, matching the pattern this project already uses for a
-    // non-fatal persistence failure (see `wp_hardening`'s upsert).
+    // observable.
     sqlx::query(
         "UPDATE container_sleep_config SET is_sleeping = false, last_woken_at = NOW(), \
          last_activity_at = NOW(), updated_at = NOW() WHERE container_id = $1"

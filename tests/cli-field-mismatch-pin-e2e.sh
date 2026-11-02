@@ -21,10 +21,10 @@
 #     `ScanResult`) and each finding's `message` (agent's `Finding` has
 #     `title`/`description`, no `message`). The real severity vocabulary is
 #     "critical"/"warning"/"info" (security_scanner.rs), not "low/medium/high".
-#   - `dockpanel backup list <domain>` (off-menu, completeness critic): read
-#     `created` — the agent emits `created_at`, and the file's OWN sibling
-#     functions (`cmd_db_backup_list`, `cmd_vol_backup_list`) already read
-#     `created_at` correctly, so this is a same-file regression check too.
+#   (Hosting split: the `dockpanel backup list <domain>` arm that used to
+#   head §D is gone with the site-backup CLI commands — its agent endpoint
+#   no longer exists. §D now holds only the two retained sibling controls,
+#   `cmd_db_backup_list`/`cmd_vol_backup_list`, which still read `created_at`.)
 #
 # Fix: rename every CLI read to match the agent's actual struct field
 # names (cross-checked directly against the struct definitions, not
@@ -37,7 +37,7 @@
 # §A cmd_security_overview reads the real SecurityOverview field names.
 # §B cmd_firewall_list reads the real FirewallStatus/FirewallRule field names.
 # §C cmd_security_scan reads Finding's real fields and derives risk locally.
-# §D cmd_backup_list reads created_at, matching its own sibling functions.
+# §D (retained controls) cmd_db_backup_list/cmd_vol_backup_list read created_at.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
@@ -83,7 +83,6 @@ BACKUP_C=$(code "$BACKUP")
 OVERVIEW_BODY=$(fnbody "$SECURITY_C" "cmd_security_overview")
 FIREWALL_BODY=$(fnbody "$SECURITY_C" "cmd_firewall_list")
 SCAN_BODY=$(fnbody "$SECURITY_C" "cmd_security_scan")
-BACKUP_LIST_BODY=$(fnbody "$BACKUP_C" "cmd_backup_list")
 DB_BACKUP_LIST_BODY=$(fnbody "$BACKUP_C" "cmd_db_backup_list")
 VOL_BACKUP_LIST_BODY=$(fnbody "$BACKUP_C" "cmd_vol_backup_list")
 
@@ -198,24 +197,12 @@ else
   bad "C5 still reads finding[\"message\"] — every finding line would print blank"
 fi
 
-# ── §D cmd_backup_list reads created_at, matching its own siblings ───────
-echo "── §D cmd_backup_list: created_at, matching cmd_db_backup_list/cmd_vol_backup_list ──"
+# ── §D retained controls: db/vol backup lists still read created_at ─────
+echo "── §D retained controls: cmd_db_backup_list/cmd_vol_backup_list read created_at ──"
 
-if has "$BACKUP_LIST_BODY" '"created_at"'; then
-  ok "D1 cmd_backup_list reads created_at"
-else
-  bad "D1 cmd_backup_list still reads the wrong field — CREATED column always prints '-'"
-fi
-
-if lacks "$BACKUP_LIST_BODY" '\["created"\]'; then
-  ok "D2 cmd_backup_list no longer reads the nonexistent created field"
-else
-  bad "D2 cmd_backup_list still reads [\"created\"] — BackupInfo has no such field"
-fi
-
-# Positive controls: the sibling functions were ALREADY correct and must
-# stay that way — this is the exact contrast that exposed the bug (two
-# adjacent functions in the same file got it right, one didn't).
+# These two were the positive controls for the deleted site-backup arm
+# above (the contrast that exposed the bug: two adjacent functions in the
+# same file got it right, one didn't). They pin retained commands now.
 if has "$DB_BACKUP_LIST_BODY" '"created_at"'; then
   ok "D3 (control) cmd_db_backup_list still reads created_at — unchanged, was never broken"
 else

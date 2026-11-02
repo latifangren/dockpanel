@@ -1,7 +1,7 @@
 // Prometheus exposition format renderer.
 //
 // Reads the latest snapshot from metrics_history, gpu_metrics_history,
-// sites, and alerts and renders text/plain per the Prometheus exposition
+// and alerts and renders text/plain per the Prometheus exposition
 // format spec v0.0.4. One scrape = a handful of indexed DB queries; the
 // metrics_collector task writes fresh rows every 30s so data is always
 // well within Prometheus default scrape intervals (15-60s).
@@ -16,7 +16,6 @@ pub async fn render(pool: &PgPool) -> String {
     render_info(&mut out);
     render_system(&mut out, pool).await;
     render_gpu(&mut out, pool).await;
-    render_sites(&mut out, pool).await;
     render_cert_renewals(&mut out);
     render_alerts(&mut out, pool).await;
 
@@ -116,27 +115,8 @@ async fn render_gpu(out: &mut String, pool: &PgPool) {
     }
 }
 
-async fn render_sites(out: &mut String, pool: &PgPool) {
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT COALESCE(status, 'unknown') AS status, COUNT(*) \
-         FROM sites GROUP BY status",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    if rows.is_empty() {
-        return;
-    }
-
-    let _ = writeln!(out, "# HELP dockpanel_site_count Sites grouped by status.");
-    let _ = writeln!(out, "# TYPE dockpanel_site_count gauge");
-    for (status, cnt) in &rows {
-        let _ = write!(out, "dockpanel_site_count{{status=\"");
-        push_escaped(out, status);
-        let _ = writeln!(out, "\"}} {cnt}");
-    }
-}
+// R7: `render_sites` (`dockpanel_site_count`) is deleted with the
+// `sites` table.
 
 fn render_cert_renewals(out: &mut String) {
     use crate::services::auto_healer::{SSL_RENEWALS_FAILURE, SSL_RENEWALS_SUCCESS};

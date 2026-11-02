@@ -32,7 +32,8 @@ fn decrypt_monitor_alert_urls(m: &mut Monitor, jwt_secret: &str) {
 pub struct Monitor {
     pub id: Uuid,
     pub user_id: Uuid,
-    pub site_id: Option<Uuid>,
+    // R7: `monitors.site_id` is dropped with the `sites` table. Monitors
+    // are standalone URL checks; the field is gone from the wire shape.
     pub url: String,
     pub name: String,
     pub check_interval: i32,
@@ -57,7 +58,6 @@ pub struct Monitor {
 pub struct CreateMonitor {
     pub url: String,
     pub name: String,
-    pub site_id: Option<Uuid>,
     pub check_interval: Option<i32>,
     pub alert_email: Option<bool>,
     pub alert_slack_url: Option<String>,
@@ -238,11 +238,10 @@ pub async fn create(
     let enc_discord_url = encrypt_opt(&discord_url)?;
 
     let mut monitor: Monitor = sqlx::query_as(
-        "INSERT INTO monitors (user_id, site_id, url, name, check_interval, alert_email, alert_slack_url, alert_discord_url, monitor_type, port, keyword, keyword_must_contain, custom_headers) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *",
+        "INSERT INTO monitors (user_id, url, name, check_interval, alert_email, alert_slack_url, alert_discord_url, monitor_type, port, keyword, keyword_must_contain, custom_headers) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *",
     )
     .bind(claims.sub)
-    .bind(body.site_id)
     .bind(url)
     .bind(name)
     .bind(interval)
@@ -705,63 +704,11 @@ pub(crate) fn expiry_status(days_left: Option<i64>, renewal_failing: bool) -> &'
     }
 }
 
-/// The sites among `site_ids` whose certificate renewal is currently failing.
-///
-/// ⚠ Keyed on the THREE `state_key`s that assert a renewal did not happen, taken
-/// from `notifications::renewal_success_clears` rather than re-listed here. That
-/// function answers "does a successful renewal disprove this alert?", and its own
-/// doc gives the reason the two questions have one answer: those three are exactly
-/// the keys that say a renewal DID NOT HAPPEN, which is what makes a later success
-/// contradict them. Re-listing the keys here would be a second classification of
-/// the same six keys, free to drift from the first — and its fall-through is
-/// `false`, so a key added later is excluded from both until somebody decides.
-///
-/// The other three describe the certificate installed now, not a failure to
-/// renew: `DECLINED` is somebody else's certificate, `MAIL_HOST_CONFLICT` is a
-/// renewal deliberately refused to protect a wildcard, and `DNS01_DOWNGRADED` is
-/// a renewal that succeeded and covered fewer names. Rendering any of them as
-/// "renewal failed" would report a failure the panel did not have.
-///
-/// ⚠ `status = 'firing'` ONLY, and that is a constraint rather than a
-/// simplification. `resolve_alert` matches `status = 'firing'` in every arm, so
-/// an ACKNOWLEDGED renewal alert is never resolved by a later success — including
-/// it here would pin the rung on permanently for any operator who acknowledged
-/// the alert before fixing the cause, and the page would keep asserting a failure
-/// that a successful renewal had already disproved.
-///
-/// Scoped by `site_id` alone, for both callers. The per-caller list is already
-/// filtered to its owner's sites and the admin list to one server, so the ids ARE
-/// the scope — and routing this through a `user_id`/`server_id` arm would
-/// reproduce the shape that made `resolve_alert` miss every row the security
-/// scanner raises with no server id.
-async fn renewal_failing_sites(
-    pool: &sqlx::PgPool,
-    site_ids: &[Uuid],
-) -> Result<std::collections::HashSet<Uuid>, ApiError> {
-    if site_ids.is_empty() {
-        return Ok(std::collections::HashSet::new());
-    }
+// R7: `renewal_failing_sites` is deleted — it scoped on `alerts.site_id`
+// and the `sites` table is dropped. Its sibling below (stack-scoped by
+// `user_id` + state_key) survives and is the only renewal-failure lookup.
 
-    let keys: Vec<&str> = crate::services::notifications::ssl_renewal_key::ALL
-        .into_iter()
-        .filter(|k| crate::services::notifications::renewal_success_clears(k))
-        .collect();
-
-    let rows: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT DISTINCT site_id FROM alerts \
-         WHERE alert_type = 'ssl_renewal_failure' AND status = 'firing' \
-           AND site_id = ANY($1) AND state_key = ANY($2)",
-    )
-    .bind(site_ids)
-    .bind(&keys)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| internal_error("renewal failure lookup", e))?;
-
-    Ok(rows.into_iter().map(|(id,)| id).collect())
-}
-
-/// `renewal_failing_sites`'s sibling for stacks, scoped by `user_id` instead of
+/// The stack-scoped renewal-failure lookup, keyed by `user_id` instead of
 /// `server_id`. `certificate_dashboard` (this function's only caller) has no
 /// server scope of its own — unlike `certificate_dashboard_for_admin`, whose
 /// own inline stack lookup is scoped to one server because `ServerScope` gives
@@ -809,35 +756,13 @@ pub async fn certificate_dashboard(
     // was told "SSL — 2 certs, expires in 9 days" and then met "Admin access
     // required" over "No SSL certificates found" on the page the tile points at.
     // One of those two screens was lying about the same rows; it was this one.
-    type SiteCertRow = (uuid::Uuid, String, bool, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>);
-    let certs: Vec<SiteCertRow> = sqlx::query_as(
-        "SELECT id, domain, ssl_enabled, ssl_expiry, ssl_renewal_at FROM sites WHERE user_id = $1 AND ssl_enabled = true ORDER BY ssl_expiry ASC NULLS LAST"
-    ).bind(claims.sub).fetch_all(&state.db).await.map_err(|e| internal_error("certificate list", e))?;
-
-    // A certificate whose expiry the panel does not know is `unknown`, not `ok`.
-    //
-    // The missing date used to become `999` days and therefore the green OK
-    // badge — the most reassuring answer available, produced by an absence of
-    // information. Every certificate the panel did not issue itself arrives
-    // that way: until v2.139.0 `upload_ssl` stored `ssl_enabled` alone, so an
-    // operator's own certificate had a NULL expiry by construction, and it is
-    // exactly the certificate nobody renews for you. `999` also flowed into the
-    // page's own countdown column, printing a confident "999d".
+    // R7: the site-certificate arm is deleted with the `sites` table.
+    // This endpoint now lists only the caller's ACME stacks below. The
+    // response shape is unchanged; `site_id` stays null on every row.
+    // A certificate whose expiry the panel does not know is `unknown`,
+    // not `ok` — a missing date must never become a green badge.
     let now = chrono::Utc::now();
-    let ids: Vec<Uuid> = certs.iter().map(|(id, _, _, _, _)| *id).collect();
-    let failing = renewal_failing_sites(&state.db, &ids).await?;
-    let mut items: Vec<serde_json::Value> = certs.iter().map(|(id, domain, _, expiry, renewal_at)| {
-        let days_left = expiry.map(|e| (e - now).num_days());
-        // `stack_id` is null on every site row: the field is still always on the
-        // wire, so the page that consumes this list never sees it appear and
-        // disappear between a site row and a stack row.
-        //
-        // `renewal_at` is the CA-suggested ARI renewal window start (RFC 9773),
-        // fetched and stored by the auto-healer's renewal cycle. Always on the
-        // wire (null on a stack row, or a site row the healer hasn't checked
-        // yet) for the same reason `stack_id` is — see above.
-        serde_json::json!({ "site_id": id, "stack_id": serde_json::Value::Null, "domain": domain, "expiry": expiry, "days_left": days_left, "status": expiry_status(days_left, failing.contains(id)), "renewal_at": renewal_at })
-    }).collect();
+    let mut items: Vec<serde_json::Value> = Vec::new();
 
     // The caller's own Docker Compose stacks. `certificate_dashboard_for_admin`
     // has read this table since s412; this endpoint's `stack_id` field was
@@ -888,9 +813,9 @@ pub async fn certificate_dashboard(
                     &crate::services::security_scanner::stack_renewal_state_key(domain),
                 ),
             ),
-            // `docker_stacks` has no ssl_renewal_at column — ARI is only tracked
-            // per `sites` row today. Always on the wire, null here, for the same
-            // reason `site_id` is null on a stack row.
+            // `docker_stacks` has no ssl_renewal_at column. Always on the
+            // wire, null here, for the same reason `site_id` is null on a
+            // stack row.
             "renewal_at": serde_json::Value::Null,
         })
     }));
@@ -914,11 +839,12 @@ pub async fn certificate_dashboard(
 /// admin arm); only the list refused. The finding and the list disagreed about
 /// what existed.
 ///
-/// So this returns the union of two populations, and says which is which:
-///   * every SSL-enabled site row on this server, with its owner resolved, and
-///   * every certificate the host actually holds that no such row explains —
-///     a DNS-01 wildcard apex, a Docker app's certificate (Docker apps have no
-///     table at all), one installed by hand.
+/// So this returns every certificate the host actually holds — R7: the
+/// site rows that used to anchor this list are gone with the `sites`
+/// table, so the list is the agent's disk walk (online) or the panel's
+/// stack records (offline), including a DNS-01 wildcard apex, a Docker
+/// app's certificate (Docker apps have no table at all), or one
+/// installed by hand — and says which stack, if any, each belongs to.
 ///
 /// The second half needs an agent that can enumerate certificates. An older
 /// agent has no such route, and the honest answer to that is to say so rather
@@ -930,45 +856,12 @@ pub async fn certificate_dashboard_for_admin(
     AdminUser(_claims): AdminUser,
     ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    type AdminCertRow = (uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>, Option<String>, Option<chrono::DateTime<chrono::Utc>>);
-    let certs: Vec<AdminCertRow> =
-        sqlx::query_as(
-            "SELECT s.id, s.domain, s.ssl_expiry, u.email AS owner_email, s.ssl_renewal_at \
-             FROM sites s LEFT JOIN users u ON u.id = s.user_id \
-             WHERE s.server_id = $1 AND s.ssl_enabled = true \
-             ORDER BY s.ssl_expiry ASC NULLS LAST",
-        )
-        .bind(server_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| internal_error("admin certificate list", e))?;
-
+    // R7: the site-certificate arm is deleted with the `sites` table.
+    // The list below is built from the host scan (online) or the panel's
+    // stack records (offline); `site_id` stays null on every row and the
+    // response shape is unchanged.
     let now = chrono::Utc::now();
-    let ids: Vec<Uuid> = certs.iter().map(|(id, _, _, _, _)| *id).collect();
-    let failing = renewal_failing_sites(&state.db, &ids).await?;
-    let mut items: Vec<serde_json::Value> = certs
-        .iter()
-        .map(|(id, domain, expiry, owner, renewal_at)| {
-            let days_left = expiry.map(|e| (e - now).num_days());
-            serde_json::json!({
-                "site_id": id,
-                // Always on the wire, even as null. A field that is present on
-                // some rows and absent on others reaches TypeScript as
-                // `undefined`, and `undefined !== null` is true — which would
-                // hand every ordinary site row the control meant for stacks.
-                "stack_id": serde_json::Value::Null,
-                "domain": domain,
-                "expiry": expiry,
-                "days_left": days_left,
-                "status": expiry_status(days_left, failing.contains(id)),
-                "owner_email": owner,
-                "managed": true,
-                // CA-suggested ARI renewal window start (RFC 9773). `sites`-only
-                // column — see the site-scoped dashboard above for the same note.
-                "renewal_at": renewal_at,
-            })
-        })
-        .collect();
+    let mut items: Vec<serde_json::Value> = Vec::new();
 
     // Every stack on this host that has a domain, read ONCE. The walk below needs
     // to ask "is this certificate a stack's?" per directory on disk, and a query
@@ -986,14 +879,11 @@ pub async fn certificate_dashboard_for_admin(
         .await
         .map_err(|e| internal_error("admin certificate list stacks", e))?;
 
-    // Stack-level `ssl_renewal_failure` alerts carry `site_id = NULL` (there is
-    // no sites row to name) and are keyed instead by
+    // Stack-level `ssl_renewal_failure` alerts carry no site (there is
+    // no `alerts.site_id` column anymore) and are keyed instead by
     // `stack_renewal_state_key(domain)` under this server — see that
-    // function's own doc. `renewal_failing_sites` above filters
-    // `site_id = ANY($1)`, which a NULL site_id can never satisfy, so it is the
-    // wrong lookup for these rows; this is `renewal_failing_sites`'s sibling,
-    // scoped by server + state_key instead of by site id, because a stack
-    // alert has no site id to scope by.
+    // function's own doc. This lookup is scoped by server + state_key
+    // because a stack alert has no site id to scope by.
     let stack_keys: Vec<String> = stacks
         .iter()
         .map(|(_, d, _, _, _)| crate::services::security_scanner::stack_renewal_state_key(d))
@@ -1034,8 +924,11 @@ pub async fn certificate_dashboard_for_admin(
     // the list silently reverts to the DB-only view that caused the problem.
     let host_scan = match agent.get("/ssl/certificates").await {
         Ok(v) => {
-            let known: std::collections::HashSet<&str> =
-                certs.iter().map(|(_, d, _, _, _)| d.as_str()).collect();
+            // R7: no rows are pre-listed on the online path (the site
+            // rows that used to dedupe against are gone), so the walk's
+            // rows must not be deduped away. The set stays, empty, so a
+            // future pre-listed population can rejoin it.
+            let known: std::collections::HashSet<&str> = std::collections::HashSet::new();
             if let Some(arr) = v.as_array() {
                 for c in arr {
                     let Some(domain) = c.get("domain").and_then(|d| d.as_str()) else { continue };
@@ -1089,8 +982,8 @@ pub async fn certificate_dashboard_for_admin(
                         ),
                         "issuer": c.get("issuer"),
                         "owner_email": serde_json::Value::Null,
-                        // A certificate on disk that belongs to no site and no
-                        // ACME stack: nothing here can renew or remove it, and the
+                        // A certificate on disk that belongs to no ACME
+                        // stack: nothing here can renew or remove it, and the
                         // page says so rather than offering a control that fails.
                         "managed": false,
                         "renewal_at": serde_json::Value::Null,
@@ -1103,11 +996,10 @@ pub async fn certificate_dashboard_for_admin(
             tracing::warn!("Admin certificate list: this server's agent could not enumerate certificates ({e}) — falling back to what the panel recorded");
 
             // ⭐ THE OFFLINE ANSWER, and the reason `docker_stacks.ssl_expiry`
-            //    exists. A site keeps its row in the list when the agent is
-            //    unreachable, because the panel stores `sites.ssl_expiry`. A stack
-            //    had no such column, so every stack certificate simply VANISHED
-            //    from this page for as long as the agent was down — at exactly the
-            //    moment an operator is most likely to be looking at it.
+            //    exists. A stack keeps its row in the list when the agent is
+            //    unreachable, because the panel stores the expiry the walk
+            //    last reported — at exactly the moment an operator is most
+            //    likely to be looking at it.
             //
             //    These rows are the panel's own record, not a live read. They
             //    carry no issuer (nothing re-read the file) and no control: this

@@ -447,7 +447,8 @@ pub async fn gpu_metrics_history(
 }
 
 /// GET /api/dashboard/timeline — Unified chronological event feed.
-/// Merges recent events from deploys, backups, incidents, alerts, and security scans.
+/// Merges recent events from incidents, alerts, and security scans.
+/// (Deploy and backup arms were neutralized in R7 with their tables.)
 ///
 /// ⚠ SECURITY (s432): every query below was unconditionally scoped to the
 /// caller's own `user_id` (or their own registered servers) — the same
@@ -461,59 +462,10 @@ pub async fn timeline(
     let tenant: Option<uuid::Uuid> = if claims.role == "admin" { None } else { Some(claims.sub) };
     let mut events: Vec<serde_json::Value> = Vec::new();
 
-    // Recent deploys — formerly joined sites for the domain and scoped by
-    // s.user_id. deploy_logs carries only site_id (no user_id/server_id), so
-    // without the sites table there is no non-site ownership scope and no
-    // domain to show. Admins (tenant is None) keep the fleet-wide rows with
-    // a null target; non-admins get none, rather than other tenants' rows.
-    // The rows themselves are kept: status and time are deploy_logs' own.
-    let deploys: Vec<(String, chrono::DateTime<chrono::Utc>)> = if tenant.is_none() {
-        sqlx::query_as(
-            "SELECT dl.status, dl.created_at \
-             FROM deploy_logs dl \
-             ORDER BY dl.created_at DESC LIMIT 10",
-        )
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    for (status, created_at) in &deploys {
-        events.push(serde_json::json!({
-            "type": "deploy",
-            "detail": status,
-            "target": serde_json::Value::Null,
-            "created_at": created_at.to_rfc3339(),
-        }));
-    }
-
-    // Recent backups — same shape as deploys above: backups carries only
-    // site_id, so without the sites table there is no ownership scope and
-    // no domain. Admins keep the fleet-wide rows with a null target;
-    // non-admins get none.
-    let backups: Vec<(String, chrono::DateTime<chrono::Utc>)> = if tenant.is_none() {
-        sqlx::query_as(
-            "SELECT b.filename, b.created_at \
-             FROM backups b \
-             ORDER BY b.created_at DESC LIMIT 10",
-        )
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    for (filename, created_at) in &backups {
-        events.push(serde_json::json!({
-            "type": "backup",
-            "detail": filename,
-            "target": serde_json::Value::Null,
-            "created_at": created_at.to_rfc3339(),
-        }));
-    }
+    // R7: the deploy and backup arms are neutralized — `deploy_logs` is
+    // dropped, and the site backups that fed the backup arm die with the
+    // `sites` table. Both event types contribute nothing; incidents,
+    // alerts, and scans below are unchanged.
 
     // Recent incidents (fleet-wide for an admin, else filtered by user —
     // matches fleet_overview's own active_incidents count)
@@ -609,22 +561,23 @@ pub async fn fleet_overview(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Single query replaces N+1 pattern (was: 5 queries per server in a loop).
     // Uses LEFT JOIN with subqueries to aggregate all data in one round trip.
-    // The site and database counts are no longer read from the sites table:
-    // site_count has no non-site source, and databases has no server_id, so
-    // a per-server database count cannot be derived without the sites join
-    // either. Both are reported as 0 — "not counted after hosting removal",
-    // not a claim that no databases exist — and the `sites`, `databases`,
-    // and `total_sites` fields are kept so the response shape (and the
-    // frontend FleetServer type) is unchanged. No other fleet logic is
-    // touched: firing alerts and latest metrics still aggregate per server.
+    // The site count has no non-site source and stays 0 ("not counted after
+    // hosting removal", not a claim that no sites exist — there are none).
+    // The database count is real again in R7: `databases.server_id` was
+    // backfilled from the old site/stack owners, so a per-server count is
+    // derived directly. The `sites`, `databases`, and `total_sites` fields
+    // are kept so the response shape (and the frontend FleetServer type)
+    // is unchanged. No other fleet logic is touched: firing alerts and
+    // latest metrics still aggregate per server.
     let rows: Vec<(uuid::Uuid, String, Option<String>, i64, i64, i64, Option<f32>, Option<f32>, Option<f32>)> = sqlx::query_as(
         "SELECT s.id, s.name, s.ip_address, \
          COALESCE(a.firing, 0) AS firing_alerts, \
          0::bigint AS site_count, \
-         0::bigint AS db_count, \
+         COALESCE(d.db_count, 0) AS db_count, \
          m.cpu_pct, m.mem_pct, m.disk_pct \
          FROM servers s \
          LEFT JOIN LATERAL (SELECT COUNT(*) AS firing FROM alerts WHERE server_id = s.id AND status = 'firing') a ON true \
+         LEFT JOIN LATERAL (SELECT COUNT(*) AS db_count FROM databases WHERE server_id = s.id) d ON true \
          LEFT JOIN LATERAL (SELECT cpu_pct, mem_pct, disk_pct FROM metrics_history WHERE server_id = s.id ORDER BY created_at DESC LIMIT 1) m ON true \
          ORDER BY s.name",
     )

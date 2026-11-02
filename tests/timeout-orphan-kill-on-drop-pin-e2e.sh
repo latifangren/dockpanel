@@ -23,10 +23,10 @@
 # originally pinned the six sites the p189 fixes missed:
 #   git_build.rs  : git fetch / git clone - REMOVED in R5 with the feature
 #                   (git-deploy-only; deploy.rs's independent clone_or_pull
-#                   below is the surviving implementation).
-#   deploy.rs     : git fetch (its OWN, independent clone_or_pull — a second
-#                   implementation of the same idea, not a call into git_build.rs)
-#   deploy.rs     : git clone (same function, fresh-clone branch)
+#                   below was the surviving implementation until R7 removed
+#                   it too — no git clone path survives in the agent).
+#   deploy.rs     : git fetch / git clone — REMOVED in R7 with clone_or_pull
+#                   (zero Rust callers; §C below is now a tombstone).
 #   backups.rs    : tar czf under a 300s timeout
 #   remote_backup.rs : curl to S3 under a caller-supplied timeout (s3_curl,
 #                   the one runner shared by test_s3/list_s3/delete_s3/upload)
@@ -153,11 +153,19 @@ fi
 
 echo
 echo
-echo "== C. deploy.rs's OWN, independent clone_or_pull: both network legs are annotated =="
-windowHasKillOnDrop "$DEPLOY_SVC" '"-C", &site_dir, "fetch", "origin", branch' \
-  "deploy.rs's git fetch (pull branch) carries kill_on_drop(true)"
-windowHasKillOnDrop "$DEPLOY_SVC" '"clone", "--branch", branch, "--single-branch", "--depth", "50", repo_url, &staging' \
-  "deploy.rs's git clone (fresh-clone branch) carries kill_on_drop(true)"
+echo "== C. DELETED in R7: deploy.rs's clone_or_pull took both network legs with it =="
+# R7 (2026-11-02): clone_or_pull was deleted with zero Rust callers, taking
+# the git fetch and git clone branches — and their kill_on_drop annotations —
+# with it. Deleted, not weakened: no git network leg remains in
+# services/deploy.rs to orphan on timeout.
+if grep -q 'fn clone_or_pull' "$DEPLOY_SVC" 2>/dev/null; then
+  bad "clone_or_pull is back in services/deploy.rs — re-scope this section"
+elif grep -qF '"-C", &site_dir, "fetch", "origin", branch' "$DEPLOY_SVC" 2>/dev/null \
+  || grep -qF '"clone", "--branch", branch, "--single-branch", "--depth", "50", repo_url, &staging' "$DEPLOY_SVC" 2>/dev/null; then
+  bad "a clone_or_pull network leg survived in services/deploy.rs — re-scope this section"
+else
+  ok "clone_or_pull and both of its network legs are gone from services/deploy.rs (R7 deletion)"
+fi
 
 echo
 echo "== D. DELETED in the R6 merge: backups.rs's staged tar belonged to create_backup =="
@@ -241,7 +249,9 @@ echo "== I. reachability: the database-backup dump/restore entrypoints and the b
 # the routes that reach the fixed functions still exist, so this suite does
 # not silently stop meaning anything if a route gets renamed out from under it.
 # R6 (2026-11-02): routes/deploy.rs was deleted in R6; the clone_or_pull
-# implementation itself survives in services/deploy.rs and is pinned in §C.
+# implementation itself survived in services/deploy.rs and was pinned in §C.
+# R7 (2026-11-02): clone_or_pull itself was deleted (zero Rust callers);
+# §C above is now its tombstone.
 if grep -q 'dump_mysql\|dump_postgres\|dump_mongo\|restore_mysql\|restore_postgres\|restore_mongo' "$REPO/panel/agent/src/routes/database_backup.rs" 2>/dev/null; then
   ok "database_backup.rs's route table still reaches the dump/restore functions"
 else

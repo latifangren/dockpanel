@@ -7,6 +7,9 @@
 #   §A  the GUARD exists and is complete — format, reserved, sites, git deploys
 #       and, for the first time, DOCKER APPS, whose domain lives only in a
 #       container label and which therefore no SQL guard could ever see.
+#       R7: the sites/git_deploys legs are deleted with their tables; §A now
+#       pins the surviving legs (docker_stacks + Docker apps) and tombstones
+#       the deleted ones, so a reintroduced leg reads as a regression.
 #   §B  EVERY claim path calls it. This is the arm that matters. `sites.rs` had a
 #       shared helper whose own comment said it existed "so the guard set create()
 #       enforces cannot drift" — and two of eleven paths called it.
@@ -137,20 +140,26 @@ if S=$(subj "$CLAIM"); then
   fi
 
   O=$(fnbody "$S" find_occupant)
-  if derives "$O" 'lower\(domain\) = \$1' && [ "$(count "$O" 'lower\(domain\) = \$1')" -ge 2 ]; then
-    ok "both SQL owners are matched case-insensitively"
+  # R7 re-derivation: exactly ONE SQL leg survives (docker_stacks), so the
+  # count floor drops 2 -> 1 and the arm additionally names the surviving
+  # leg — a second case-insensitive leg reappearing would go red here.
+  if derives "$O" 'lower\(domain\) = \$1' && [ "$(count "$O" 'lower\(domain\) = \$1')" -eq 1 ] && derives "$O" 'FROM docker_stacks'; then
+    ok "the surviving SQL owner (docker_stacks) is matched case-insensitively"
   else
-    bad "a SQL owner query is case-sensitive again (EXAMPLE.com would walk past example.com)"
+    bad "the surviving SQL owner query is case-sensitive again, or a second SQL leg reappeared (EXAMPLE.com would walk past example.com)"
   fi
+  # R7 TOMBSTONE: the `sites` and `git_deploys` legs died with their tables
+  # (terminal migration drops both). Asserting their ABSENCE, so a leg
+  # reintroduced against a dropped table reads as a regression, not a fix.
   if derives "$O" 'FROM sites'; then
-    ok "the guard consults the sites table"
+    bad "TOMBSTONE (R7): the guard consults the sites table again — the table was dropped"
   else
-    bad "the guard no longer consults the sites table"
+    ok "TOMBSTONE (R7): the guard no longer consults the sites table — leg deleted with the table"
   fi
   if derives "$O" 'FROM git_deploys'; then
-    ok "the guard consults git_deploys"
+    bad "TOMBSTONE (R7): the guard consults git_deploys again — the table was dropped"
   else
-    bad "the guard no longer consults git_deploys"
+    ok "TOMBSTONE (R7): the guard no longer consults git_deploys — leg deleted with the table"
   fi
   # THE new leg. A Docker app is not a row; the only way to learn its domain is
   # to ask the agent, which has been returning it all along.

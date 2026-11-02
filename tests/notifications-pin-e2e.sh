@@ -225,7 +225,12 @@ ALLOWED=$(echo "$LINKS" | sed -n 's/.*ALLOWED=\([0-9]*\).*/\1/p')
 NMISS=$(echo "$LINKS" | /usr/bin/grep -c "^MISSING" || true)
 
 # R5: floor re-derived 20 -> 17; git_deploys.rs carried the other producers.
-if [ -z "${TOTAL:-}" ] || [ "${TOTAL:-0}" -lt 17 ]; then
+# R7: floor re-derived 17 -> 16; the stale-backup producer in
+# backup_policy_executor.rs (the site sweep over `sites`/`backups.site_id`)
+# left with the hosting schema. The `backup` category it carried is now
+# phantom in the guide — that drift is N7's to report (R8 owns the guide),
+# not a reason to lower this floor further.
+if [ -z "${TOTAL:-}" ] || [ "${TOTAL:-0}" -lt 16 ]; then
   bad "N3 found only ${TOTAL:-0} notify_panel call sites — the parse is wrong, not the code"
 else
   ok "N3 parsed $TOTAL notify_panel call sites"

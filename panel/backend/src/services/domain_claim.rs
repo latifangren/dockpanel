@@ -41,28 +41,18 @@ use crate::routes::{is_reserved_domain_for, is_valid_domain};
 /// under an existing name is already refused by the name check, so an app-holder
 /// exclusion would be unreachable code. Add it together with the app-rename it
 /// is for (GitHub #95), not before.
+///
+/// R7: `Holder::Site` and `Holder::GitDeploy` are deleted with the `sites`
+/// and `git_deploys` tables — the R3/R5 notes above said to revisit in R7,
+/// and this is that revisit. No production constructor survived (verified
+/// by grep: only `Holder::New` and `Holder::Stack` are constructed), and
+/// the SQL legs they guarded are gone, so no legacy collision can be
+/// reported anymore.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum Holder {
     /// A brand-new claim — nothing may hold this domain.
     #[default]
     New,
-    /// The `sites` row with this id may hold it.
-    ///
-    /// R3: no production constructor remains — every site door died — but
-    /// the variant STAYS. `find_occupant`'s `sites` leg still reports
-    /// collisions with legacy rows, and deleting the variant would blind
-    /// the guard until R7 drops the table. Revisit in R7.
-    #[allow(dead_code)]
-    Site(Uuid),
-    /// The `git_deploys` row with this id may hold it.
-    ///
-    /// R5: no production constructor remains — its constructors died
-    /// with `routes/git_deploys.rs` — but the variant STAYS, for the
-    /// same reason as `Holder::Site` above: `find_occupant`'s
-    /// `git_deploys` leg still reports collisions with legacy rows
-    /// until R7 drops the table. Revisit in R7.
-    #[allow(dead_code)]
-    GitDeploy(Uuid),
     /// The `docker_stacks` row with this id may hold it. Unlike a Docker app, a
     /// stack *can* re-claim its own domain: `update` redeploys in place under
     /// the same id, so without this a stack could not be edited twice.
@@ -71,10 +61,10 @@ pub enum Holder {
 
 /// What already holds a domain. Carried so the error can name it — "in use" with
 /// no owner is the sentence that made these collisions hard to diagnose.
+///
+/// R7: `Site` and `GitDeploy` are deleted with their tables (see `Holder`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Occupant {
-    Site,
-    GitDeploy,
     DockerApp,
     Stack,
 }
@@ -82,8 +72,6 @@ pub enum Occupant {
 impl Occupant {
     fn message(self) -> &'static str {
         match self {
-            Occupant::Site => "Domain already in use by a site",
-            Occupant::GitDeploy => "Domain already in use by a git deployment",
             Occupant::DockerApp => {
                 "Domain already in use by a Docker app. Rename or remove the app \
                  first — deploying over it would replace its nginx configuration."
@@ -142,8 +130,8 @@ pub fn normalise(domain: &str) -> String {
 /// should be reported as malformed rather than as available.
 ///
 /// **Fleet-wide, on every leg.** It takes the registry rather than one agent
-/// because the Docker-app leg used to ask only the caller's host while the three
-/// SQL legs were fleet-wide — and an app's domain is invisible to SQL, so that
+/// because the Docker-app leg used to ask only the caller's host while the
+/// SQL leg was fleet-wide — and an app's domain is invisible to SQL, so that
 /// leg was the only thing that could ever catch it.
 ///
 /// **Reachability:** an online member that will not answer is logged by name and
@@ -205,40 +193,8 @@ pub async fn find_occupant(
 ) -> Result<Option<Occupant>, ApiError> {
     let domain = normalise(domain);
 
-    // Sites are checked fleet-wide, which is what create() already did. It is
-    // stricter than the (domain, server_id) index and tightening is safe;
-    // loosening it here would silently widen what the panel accepts.
-    let exclude_site = match holder {
-        Holder::Site(id) => Some(id),
-        _ => None,
-    };
-    let site: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM sites WHERE lower(domain) = $1 AND ($2::uuid IS NULL OR id <> $2)")
-            .bind(&domain)
-            .bind(exclude_site)
-            .fetch_optional(db)
-            .await
-            .map_err(|e| internal_error("domain availability", e))?;
-    if site.is_some() {
-        return Ok(Some(Occupant::Site));
-    }
-
-    let exclude_git = match holder {
-        Holder::GitDeploy(id) => Some(id),
-        _ => None,
-    };
-    let git: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM git_deploys WHERE lower(domain) = $1 AND ($2::uuid IS NULL OR id <> $2)",
-    )
-    .bind(&domain)
-    .bind(exclude_git)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| internal_error("domain availability", e))?;
-    if git.is_some() {
-        return Ok(Some(Occupant::GitDeploy));
-    }
-
+    // R7: the `sites` and `git_deploys` legs are deleted with their tables.
+    // The surviving SQL leg is stacks; the Docker-app leg below is unchanged.
     // Compose stacks became domain holders in v2.54.0. A path that writes a
     // vhost but is invisible to this function is how a domain ends up with two
     // owners, so the leg lands with the feature rather than after it.
@@ -263,8 +219,8 @@ pub async fn find_occupant(
     // it from `GET /apps` — a single `docker.list_containers`, on the 20-permit
     // quick lane, not the long one. The panel simply never asked.
     //
-    // ⚠ It asked exactly ONE host until v2.80.0 — the caller's — while all three
-    // SQL legs above are deliberately fleet-wide, and the comment justifying that
+    // ⚠ It asked exactly ONE host until v2.80.0 — the caller's — while the
+    // SQL leg above is deliberately fleet-wide, and the comment justifying that
     // ("the agent handle is already scoped to this server") described the code
     // accurately while missing that scoping was the defect. A domain held by an
     // app on host B therefore passed a claim made on host A, and since a Docker
@@ -339,13 +295,13 @@ mod tests {
 
     #[test]
     fn a_client_may_still_manage_the_domains_it_holds() {
-        // The whole point of the role: it HOLDS sites. A rename re-claims a
+        // The whole point of the role: it HOLDS domains. A rename re-claims a
         // domain on behalf of a row that already exists, and the handler's own
         // ownership check has already established the caller may act on it.
         // Refusing these would make the role useless rather than restricted.
+        // R7: the site/git-deploy holders are gone with their tables; the
+        // stack holder is the surviving re-claim.
         let id = Uuid::nil();
-        assert!(may_claim_new(CLIENT_ROLE, Holder::Site(id)));
-        assert!(may_claim_new(CLIENT_ROLE, Holder::GitDeploy(id)));
         assert!(may_claim_new(CLIENT_ROLE, Holder::Stack(id)));
     }
 
@@ -392,12 +348,7 @@ mod tests {
     fn every_occupant_names_what_holds_the_domain() {
         // "In use" with no owner is the sentence that made these collisions hard
         // to diagnose — the reason `Occupant` is carried at all.
-        for occupant in [
-            Occupant::Site,
-            Occupant::GitDeploy,
-            Occupant::DockerApp,
-            Occupant::Stack,
-        ] {
+        for occupant in [Occupant::DockerApp, Occupant::Stack] {
             let msg = occupant.message();
             assert!(!msg.is_empty() && msg.contains("in use by"), "{occupant:?}: {msg}");
         }

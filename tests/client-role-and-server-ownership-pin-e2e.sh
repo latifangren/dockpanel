@@ -1015,10 +1015,15 @@ fi
 
 # ── §Q  schema backstop: the migration actually adds and enforces both columns (s437) ─
 
-if [ "$(grep -c 'ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE' <<< "$MIG")" -eq 2 ]; then
-  ok "Q0 exactly 2 tables gain a user_id column via the s437 migration (escalation_policies + on_call_schedules)"
+# R7 re-derivation: a THIRD table gains the same column via the R7 terminal
+# migration (`20260909000001_drop_hosting_schema.sql`), which denormalises
+# ownership onto `databases` itself (backfilled from the old site/stack
+# joins) before dropping `databases.site_id`. The count is 3, enumerated:
+# escalation_policies + on_call_schedules (s437) + databases (R7).
+if [ "$(grep -c 'ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE' <<< "$MIG")" -eq 3 ]; then
+  ok "Q0 exactly 3 tables gain a user_id column via the s437 migration + the R7 terminal migration (escalation_policies + on_call_schedules + databases)"
 else
-  bad "Q0 expected exactly 2 ADD COLUMN user_id lines from the s437 migration, found a different count"
+  bad "Q0 expected exactly 3 ADD COLUMN user_id lines from the s437 + R7-terminal migrations, found a different count"
 fi
 if grep -qF 'ALTER TABLE escalation_policies ALTER COLUMN user_id SET NOT NULL' <<< "$MIG"; then
   ok "Q1 escalation_policies.user_id is enforced NOT NULL (guarded on a clean backfill)"

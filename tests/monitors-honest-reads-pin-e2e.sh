@@ -25,6 +25,8 @@
 #   §D  every ladder call site passes the new argument, including the host-scan
 #       half that must pass `false` — those certificates have no site row, so
 #       nothing can raise a renewal alert against them.
+#       R7: the site axis is deleted with `alerts.site_id`; §C/§D now pin the
+#       surviving stack axis and tombstone the site lookup.
 #   §E  the page renders the rung, and stops reporting a failed read as an
 #       empty list.
 #
@@ -114,7 +116,7 @@ fi
 for pair in \
   "response_chart:response chart points" \
   "status_page:status page monitors" \
-  "certificate_dashboard:certificate list" \
+  "certificate_dashboard:certificate list stacks" \
   "list_maintenance:maintenance windows"
 do
   fn=${pair%%:*}; ctx=${pair#*:}
@@ -212,22 +214,27 @@ fi
 
 echo "== §C  where the rung's truth comes from =="
 
-H=$(fnbody "$M" "renewal_failing_sites")
+# R7 re-derivation: `renewal_failing_sites` is deleted with the `sites`
+# table (it scoped on `alerts.site_id`). The surviving lookup is the
+# stack-scoped sibling below, keyed by `user_id` + the same
+# `stack_renewal_state_key` the scanner fires under. §C re-aims at it:
+# keys derived per domain, firing rows only, user+key scoped, failure
+# reported, set built from the rows read.
+H=$(fnbody "$M" "renewal_failing_stacks_for_user")
 HL=$(wc -l <<< "$H")
 if [ "$HL" -ge 15 ]; then
-  ok "C-control renewal_failing_sites body is $HL lines"
+  ok "C-control renewal_failing_stacks_for_user body is $HL lines"
 else
-  bad "C-control renewal_failing_sites body is $HL lines — subject lost"
+  bad "C-control renewal_failing_stacks_for_user body is $HL lines — subject lost"
 fi
 
-# POSITIVE: the key set is DERIVED from the shared list through the shared
-# predicate. This is the arm that matters — a re-listed literal set here would
-# be a second classification of the same six keys, free to drift from the one in
-# notifications.rs the moment a key is added.
-if grep -qF 'ssl_renewal_key::ALL' <<< "$H" && grep -qF 'renewal_success_clears' <<< "$H"; then
-  ok "C1 the keys are filtered from the shared list by the shared predicate"
+# POSITIVE: the key set is DERIVED per domain through the shared stack key
+# function and matched as a set — the same no-second-classification
+# property C1 pinned for the site lookup, on the surviving axis.
+if grep -qF 'stack_renewal_state_key' <<< "$H" && grep -qF 'state_key = ANY($2)' <<< "$H"; then
+  ok "C1 the keys are derived from the shared stack key function and matched as a set"
 else
-  bad "C1 the keys are filtered from the shared list by the shared predicate"
+  bad "C1 the keys are not derived from the shared stack key function — a re-listed set here would drift from the scanner's"
 fi
 
 # REFUSAL + BOUNDARY: the three standing conditions are never named in this
@@ -254,7 +261,7 @@ else
   bad "C2-control notifications.rs carries the standing keys on $K_ALL lines"
 fi
 
-# POSITIVE: firing rows only, and by site. `resolve_alert` clears only firing
+# POSITIVE: firing rows only, and by owner. `resolve_alert` clears only firing
 # rows, so an acknowledged alert is never resolved by a later success — reading
 # it here would pin the rung on permanently for anyone who acknowledged before
 # fixing the cause.
@@ -263,16 +270,16 @@ if grep -qF "status = 'firing'" <<< "$H"; then
 else
   bad "C3 the lookup reads firing rows only"
 fi
-if grep -qF 'site_id = ANY($1)' <<< "$H"; then
-  ok "C4 the lookup is scoped by the site ids it was given"
+if grep -qF 'user_id = $1 AND state_key = ANY($2)' <<< "$H"; then
+  ok "C4 the lookup is scoped by the caller's id and the key set it was given"
 else
-  bad "C4 the lookup is scoped by the site ids it was given"
+  bad "C4 the lookup is scoped by the caller's id and the key set it was given"
 fi
 
 # POSITIVE: the helper's failure is reported like every other read in §A. A
 # lookup that answers "not failing" when it could not read is the same defect
 # this whole ship is about, one layer in.
-if grep -qF 'internal_error("renewal failure lookup"' <<< "$H"; then
+if grep -qF 'internal_error("stack renewal failure lookup"' <<< "$H"; then
   ok "C5 a failed lookup is reported, not read as \"not failing\""
 else
   bad "C5 a failed lookup is reported, not read as \"not failing\""
@@ -301,16 +308,16 @@ echo "== §D  every ladder call site passes the second axis =="
 # vacuous arms hiding behind a control whose number said so.
 SITES=$(calls "$M" "expiry_status" | grep -vF 'Option<i64>')
 N_SITES=$(grep -c . <<< "$SITES")
-# ⛔ READ THIS NUMBER. Five call sites: the per-caller list's own sites, the
-# admin list's sites, the host-scan half, the OFFLINE half (since v2.162.0,
-# lists a stack's certificate from `docker_stacks.ssl_expiry` when the agent
-# cannot be asked at all), and — since s413 — the per-caller list's own
-# Docker Compose stacks. A count that drifts means a caller was added or
-# lost, and every arm below would still be describing only the ones it can see.
-if [ "$N_SITES" -eq 5 ]; then
+# ⛔ READ THIS NUMBER. R7 re-derivation: three call sites remain, all
+# stack-facing — `certificate_dashboard`'s own stacks, the admin list's
+# stacks, and the admin list's offline half. The two site-backed lists
+# died with `renewal_failing_sites` (D2/D4 tombstones below), so a count
+# that drifts means a caller was added or lost, and every arm below
+# would still be describing only the ones it can see.
+if [ "$N_SITES" -eq 3 ]; then
   ok "D-control the ladder has $N_SITES call sites"
 else
-  bad "D-control the ladder has $N_SITES call sites — expected 5"
+  bad "D-control the ladder has $N_SITES call sites — expected 3"
 fi
 
 # REFUSAL: no call site takes the clock alone. The compiler already refuses a
@@ -324,12 +331,15 @@ else
   bad "D1 $ONE_ARG call site(s) pass the clock alone"
 fi
 
-# POSITIVE: two of the four consult the SITE lookup (`failing`), by site id.
-N_LOOKUP=$(grep -cx '(days_left, failing.contains(id))' <<< "$SITES")
-if [ "$N_LOOKUP" -eq 2 ]; then
-  ok "D2 both site-backed lists consult the lookup ($N_LOOKUP sites)"
+# R7 TOMBSTONE: no site-backed list remains — both consulted
+# `renewal_failing_sites`, deleted with `alerts.site_id`. Asserting the
+# site-lookup call shape is gone entirely, so a reintroduced site list
+# that bypasses the stack lookup fails here first.
+N_LOOKUP=$(grep -cx '(days_left, failing.contains(id))' <<< "$SITES" || true)
+if [ "$N_LOOKUP" -eq 0 ] && ! grep -qF 'renewal_failing_sites' <<< "$M"; then
+  ok "TOMBSTONE (R7): no site-backed list consults the deleted lookup — both lists died with the sites table"
 else
-  bad "D2 both site-backed lists consult the lookup — found $N_LOOKUP"
+  bad "TOMBSTONE (R7): a site-backed list still consults renewal_failing_sites — found $N_LOOKUP"
 fi
 
 # POSITIVE: three of the five are stack-facing — none backed by a `sites` row.
@@ -365,15 +375,15 @@ else
   bad "D3b the offline half does not mark its rows stale — an operator cannot tell a stored date from a fresh one"
 fi
 
-# POSITIVE: the two site-backed lists actually CALL the lookup, so D2's value
-# came from the query rather than from a literal. One declaration plus two
-# calls; the declaration is again the occurrence carrying the type annotation.
-LOOKUPS=$(calls "$M" "renewal_failing_sites" | grep -vF '&[Uuid]')
-N_CALLS=$(grep -c . <<< "$LOOKUPS")
-if [ "$N_CALLS" -eq 2 ]; then
-  ok "D4 both lists call the lookup ($N_CALLS call sites)"
+# R7 TOMBSTONE: the site lookup itself is deleted, so no list may call
+# it. The stack sibling's call count is pinned by D5 above; this arm
+# asserts the deleted name appears nowhere callable in the file.
+LOOKUPS=$(calls "$M" "renewal_failing_sites" | grep -vF '&[Uuid]' || true)
+N_CALLS=$(grep -c . <<< "$LOOKUPS" || true)
+if [ "$N_CALLS" -eq 0 ]; then
+  ok "TOMBSTONE (R7): no list calls the deleted renewal_failing_sites lookup ($N_CALLS call sites)"
 else
-  bad "D4 both lists call the lookup — found $N_CALLS"
+  bad "TOMBSTONE (R7): a list still calls renewal_failing_sites — found $N_CALLS"
 fi
 
 # POSITIVE, same shape as D4 for the s413 user-scoped stack sibling: one

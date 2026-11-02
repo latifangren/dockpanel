@@ -1036,11 +1036,11 @@ pub async fn get_thresholds(
             global_thresholds(pool, user_id).await
         }
     } else {
-        // server_id = None means "the user's global rule" — that is exactly what
-        // check_ssl_expiry asks for (SSL is site-scoped, not server-scoped). This
-        // arm used to return None unconditionally, so the SSL ladder silently ran
-        // on the hardcoded defaults and a user's configured ssl_warning_days was
-        // never read.
+        // server_id = None means "the user's global rule" — that is exactly
+        // what the server-less checks (stack SSL, registered certificates)
+        // ask for. This arm used to return None unconditionally, so the SSL
+        // ladder silently ran on the hardcoded defaults and a user's
+        // configured ssl_warning_days was never read.
         global_thresholds(pool, user_id).await
     };
 
@@ -1119,20 +1119,19 @@ pub async fn fire_alert(
     pool: &PgPool,
     user_id: Uuid,
     server_id: Option<Uuid>,
-    site_id: Option<Uuid>,
     alert_type: &str,
     state_key: &str,
     severity: &str,
     title: &str,
     message: &str,
 ) {
-    let _ = try_fire_alert(pool, user_id, server_id, site_id, alert_type, state_key, severity, title, message).await;
+    let _ = try_fire_alert(pool, user_id, server_id, alert_type, state_key, severity, title, message).await;
 }
 
 /// The `state_key`s raised under `alert_type = "ssl_renewal_failure"`.
 ///
 /// Both SSL loops raise FIVE different conditions under that one type, and
-/// `fire_alert_deduped` below dedups on `(alert_type, site_id, state_key)`.
+/// `fire_alert_deduped` below dedups on `(alert_type, state_key)`.
 /// Feeding it the whole-server key made all five one subject, so whichever
 /// fired first muted the other four for twelve hours — four of them `critical`.
 ///
@@ -1144,10 +1143,16 @@ pub async fn fire_alert(
 /// stopped being covered could not be delivered to the only people who could
 /// ever receive it.
 ///
-/// Keyed per CONDITION, not per certificate: `site_id` already names the
+/// Keyed per CONDITION, not per certificate: `state_key` already names the
 /// certificate, and the two loops must still collapse to ONE alert when they
-/// reach the same condition on the same site — which is the flood control the
+/// reach the same condition on the same subject — which is the flood control the
 /// dedup was added for and which these keys preserve exactly.
+///
+/// R7: the site-keyed consumers are gone; the keys survive as the shared
+/// classification for the stack/docker-app renewal paths and their tests.
+/// Not every member has a live production reader today — that is the
+/// classification's completeness, not dead code to prune.
+#[allow(dead_code)]
 pub mod ssl_renewal_key {
     /// The installed certificate was issued by somebody else, so renewing it
     /// would replace it. Announced, not failed.
@@ -1167,7 +1172,7 @@ pub mod ssl_renewal_key {
     /// ⚠ Deliberately its own key rather than `BLOCKED`. The two say opposite
     /// things about what happened — `BLOCKED` reports a renewal the panel could
     /// not perform, this reports one it deliberately declined to perform — and
-    /// they are raised about the SAME `site_id`. Sharing a key would let
+    /// they are raised about the SAME subject. Sharing a key would let
     /// whichever fired first mute the other for twelve hours, which is the
     /// defect `state_key` exists to prevent and the one v2.154.0 shipped to fix.
     pub const MAIL_HOST_CONFLICT: &str = "mail_host_conflict";
@@ -1204,6 +1209,11 @@ pub mod ssl_renewal_key {
 /// somebody decides it should be. That is the safe direction: failing to clear
 /// an alert leaves a visible row, while clearing one that is still true removes
 /// the operator's only notice that it is.
+///
+/// R7: the only production caller (the site-keyed renewal-failure lookup)
+/// died with the `sites` table; the classification and its tests survive
+/// for the stack/docker-app renewal paths, which key their own lookups.
+#[allow(dead_code)]
 pub fn renewal_success_clears(key: &str) -> bool {
     matches!(
         key,
@@ -1212,19 +1222,23 @@ pub fn renewal_success_clears(key: &str) -> bool {
 }
 
 
-/// Fire an alert unless one of the same type already fired for the same site
+/// Fire an alert unless one of the same type already fired for the same subject
 /// inside `within_hours`.
 ///
 /// The loops that watch certificates run every two minutes. An unconditional
 /// alert from inside one of them is not a warning, it is a flood — and a flood
 /// is how a real alert gets muted. Deduplicating against the alerts table keeps
-/// it to one per site per window without introducing a second piece of state
+/// it to one per subject per window without introducing a second piece of state
 /// that can disagree with the first.
+///
+/// R7: the dedup bucket is `(alert_type, state_key)` — the `site_id` term died
+/// with `alerts.site_id`. Two former site-scoped subjects sharing one
+/// `state_key` now share a bucket; surviving callers use entity-specific
+/// keys (domain / container / monitor id), so no two live subjects collide.
 pub async fn fire_alert_deduped(
     pool: &PgPool,
     user_id: Uuid,
     server_id: Option<Uuid>,
-    site_id: Option<Uuid>,
     alert_type: &str,
     state_key: &str,
     severity: &str,
@@ -1236,16 +1250,15 @@ pub async fn fire_alert_deduped(
     // from having to infer a parameter type inside an interval expression.
     //
     // The dedup window is scoped by `state_key` too: two different certificates
-    // on the same site are two different subjects, and suppressing the second
+    // on the same server are two different subjects, and suppressing the second
     // because the first fired is the same conflation `resolve_alert` used to
     // make in the other direction.
     let recent: Option<(i64,)> = sqlx::query_as(&format!(
         "SELECT COUNT(*) FROM alerts \
-         WHERE alert_type = $1 AND site_id IS NOT DISTINCT FROM $2 AND state_key = $3 \
+         WHERE alert_type = $1 AND state_key = $2 \
          AND created_at > NOW() - INTERVAL '{within_hours} hours'",
     ))
     .bind(alert_type)
-    .bind(site_id)
     .bind(state_key)
     .fetch_optional(pool)
     .await
@@ -1256,7 +1269,7 @@ pub async fn fire_alert_deduped(
         return;
     }
 
-    fire_alert(pool, user_id, server_id, site_id, alert_type, state_key, severity, title, message).await;
+    fire_alert(pool, user_id, server_id, alert_type, state_key, severity, title, message).await;
 }
 
 /// Fire an alert with Result return for retry support.
@@ -1286,7 +1299,6 @@ pub async fn try_fire_alert(
     pool: &PgPool,
     user_id: Uuid,
     server_id: Option<Uuid>,
-    site_id: Option<Uuid>,
     alert_type: &str,
     state_key: &str,
     severity: &str,
@@ -1302,12 +1314,11 @@ pub async fn try_fire_alert(
     // resolve path can target this exact entity's row rather than every row of
     // this type on the server.
     sqlx::query(
-        "INSERT INTO alerts (user_id, server_id, site_id, alert_type, state_key, severity, title, message) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO alerts (user_id, server_id, alert_type, state_key, severity, title, message) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(user_id)
     .bind(server_id)
-    .bind(site_id)
     .bind(alert_type)
     .bind(state_key)
     .bind(severity)
@@ -1485,7 +1496,6 @@ pub async fn resolve_alert(
     pool: &PgPool,
     user_id: Uuid,
     server_id: Option<Uuid>,
-    site_id: Option<Uuid>,
     alert_type: &str,
     state_key: &str,
     title: &str,
@@ -1493,36 +1503,33 @@ pub async fn resolve_alert(
 ) {
     // Resolve firing alerts of this type FOR THIS ENTITY.
     //
-    // The third arm exists because `monitors.site_id` is nullable: a monitor
-    // that watches a bare URL fires with both ids NULL, and before `state_key`
-    // there was no way to name what such an alert was about, so this function
-    // could only refuse. A non-empty key IS the scope — it identifies one
-    // subject inside one user's alerts — so that case is now resolvable. Both
-    // ids NULL *and* an empty key is still a refusal: that would match every
-    // server-wide alert the user has.
+    // The second arm exists because a monitor that watches a bare URL fires
+    // with no server id, and before `state_key` there was no way to name
+    // what such an alert was about, so this function could only refuse. A
+    // non-empty key IS the scope — it identifies one subject inside one
+    // user's alerts — so that case is now resolvable. No server id *and*
+    // an empty key is still a refusal: that would match every server-wide
+    // alert the user has.
     let query = if server_id.is_some() {
         "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
          WHERE user_id = $1 AND server_id = $2 AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
-    } else if site_id.is_some() {
-        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
-         WHERE user_id = $1 AND site_id = $2 AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
     } else if !state_key.is_empty() {
         // `$2::uuid` is cast because this arm never references it for anything
         // else, and an unadorned parameter Postgres cannot type is precisely how
         // the slow-response INSERT stayed dead for months (see `uptime.rs`).
-        // Keeping the bind keeps one `.bind()` chain for all three arms.
+        // Keeping the bind keeps one `.bind()` chain for both arms.
         "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
          WHERE user_id = $1 AND $2::uuid IS NULL AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
     } else {
         tracing::warn!(
-            "resolve_alert called for '{alert_type}' with no server_id, no site_id and no state_key — refusing to resolve unscoped"
+            "resolve_alert called for '{alert_type}' with no server_id and no state_key — refusing to resolve unscoped"
         );
         return;
     };
 
     let resolved = match sqlx::query(query)
         .bind(user_id)
-        .bind(server_id.or(site_id))
+        .bind(server_id)
         .bind(alert_type)
         .bind(state_key)
         .execute(pool)

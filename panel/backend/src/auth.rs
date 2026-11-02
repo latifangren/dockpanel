@@ -67,14 +67,16 @@ pub struct Claims {
 /// fresh login all agree, and no handler downstream ever sees `reseller`
 /// as an effective role. Code that acts on the STORED value must NOT use
 /// this: the WHMCS suspend/unsuspend guards and `helpers::role_to_restore`
-/// read `users.role`/`prior_role` from the database, where `reseller` is
-/// still a real value until R7 renames it; see `role_to_restore` for the
+/// read `users.role`/`prior_role` from the database, where `reseller` was
+/// still a real value until R7 renamed it; see `role_to_restore` for the
 /// one place a stored legacy value is translated on write.
 ///
-/// R7 follow-up: rename `users.role = 'reseller'` to `'user'` (and
-/// `prior_role` likewise), drop the reseller tables/`reseller_id` handling,
-/// and narrow the `users.role` CHECK constraint. Until then the stored
-/// value remains, the mapping above is what keeps it from being a privilege.
+/// R7 (terminal migration `20260909000001`): stored `reseller` is renamed
+/// to `'user'` (and `prior_role` likewise), the reseller tables and the
+/// `users.reseller_id` column are dropped, and the code-level
+/// `reseller_id` handling is gone with them. Deliberately NOT narrowed:
+/// the `chk_users_role` CHECK still lists all five values — `user` was
+/// already legal under it, so no rewrite was needed.
 ///
 /// Login behaviour after R2, exactly: a stored-`reseller` account signs in
 /// with its existing password (or passkey/OAuth) and receives a normal

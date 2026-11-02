@@ -113,28 +113,25 @@ DEPLOYSVC="$REPO/panel/agent/src/services/deploy.rs"
 NGINXSVC="$REPO/panel/agent/src/services/nginx.rs"
 fn_body() { perl -0777 -ne 'print $1 if /\n((?:pub )?(?:async )?fn '"$2"'\b.*?\n\})\n/s' "$1"; }
 
+# R7 TOMBSTONE (2026-11-02): clone_or_pull is deleted with zero Rust
+# callers, so the whole first-deploy staging property retires with it:
+# there is no fresh clone left to stage beside the site, and no caller
+# left to refuse a populated destination. Asserting the function and
+# every shipped clone invocation are gone — a reintroduced clone that
+# targets the site directory would fail the tombstone first, not pass
+# silently as "no staging needed".
 CLONE_FN="$(fn_body "$DEPLOYSVC" clone_or_pull)"
-if [ "$(printf '%s' "$CLONE_FN" | wc -l)" -ge 40 ]; then
-  ok "extracted the clone_or_pull body ($(printf '%s' "$CLONE_FN" | wc -l) lines) — the arms below read real code"
+if [ -n "$CLONE_FN" ]; then
+  bad "TOMBSTONE (R7): clone_or_pull is back in services/deploy.rs — the first-deploy staging arms below must be restored, not assumed"
 else
-  bad "could not extract clone_or_pull — every arm below is vacuous"
+  ok "TOMBSTONE (R7): clone_or_pull is gone from services/deploy.rs — the first-deploy staging property retired with it"
 fi
-
-CLONE_DEST="$(printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -E '"clone",' || true)"
-if [ -n "$CLONE_DEST" ] && ! grep -qE '&site_dir\]' <<< "$CLONE_DEST"; then
-  ok "the fresh clone does not target the site directory git will refuse"
+CLONE_SHIPPED=$(sed -E 's|[[:space:]]*//.*$||' "$DEPLOYSVC" | sed -n '1,/#\[cfg(test)\]/p' | grep -cE '"clone",' || true)
+if [ "${CLONE_SHIPPED:-0}" -eq 0 ]; then
+  ok "TOMBSTONE (R7): no shipped clone invocation remains in services/deploy.rs (test-only git uses excluded by the same boundary §E uses)"
 else
-  bad "the fresh clone targets the populated site directory again — first deploy fails"
+  bad "TOMBSTONE (R7): $CLONE_SHIPPED shipped clone invocation(s) remain in services/deploy.rs — the staging arms must be restored"
 fi
-printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -cE 'deploy-staging' >/dev/null \
-  && ok "it stages beside the site, where nginx cannot serve a half-finished checkout" \
-  || bad "the staging directory is gone — a partial clone is reachable over HTTP"
-printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -cE 'foreign_entries\(' >/dev/null \
-  && ok "a destination holding files the panel did not write is refused" \
-  || bad "nothing checks the destination — a real site can be destroyed by a deploy"
-printf '%s' "$CLONE_FN" | grep -cE 'Refusing to deploy into' >/dev/null \
-  && ok "and the refusal names what it found instead of failing blank" \
-  || bad "the refusal no longer tells the operator which files blocked it"
 
 # The merge must be entry by entry. A whole-directory rename cannot work — the
 # destination is non-empty, which is the entire reason this path exists — and
@@ -208,10 +205,13 @@ CHOWN_CALLS=$(grep -cE '^\s*hand_tree_to_web_user\(&' <<< "$SHIPPED")
 # shipped checkout path (clone_or_pull). The property is unchanged — every
 # shipped path reaches the handover — so the floor tracks the surviving
 # path count (1), not the historical 2.
-if [ "$CHOWN_SUBJECTS" -ge 1 ] && [ "$CHOWN_CALLS" -ge "$CHOWN_SUBJECTS" ]; then
-  ok "all $CHOWN_SUBJECTS shipped checkout paths reach hand_tree_to_web_user ($((ALL_CLONES - CHOWN_SUBJECTS)) test-only clones excluded by name)"
+# R7 re-derivation: clone_or_pull was deleted too, leaving ZERO shipped
+# checkout paths. The tombstone asserts the zero and that the handover
+# helper itself survives (its own arm below still pins what it does).
+if [ "$CHOWN_SUBJECTS" -eq 0 ] && [ "$CHOWN_CALLS" -eq 0 ]; then
+  ok "TOMBSTONE (R7): 0 shipped checkout paths remain — the handover property retired with clone_or_pull, and no path deploys without one"
 else
-  bad "$CHOWN_SUBJECTS shipped checkout paths but only $CHOWN_CALLS reach the handover — a deploy succeeds and the app cannot write"
+  bad "TOMBSTONE (R7): $CHOWN_SUBJECTS shipped checkout paths but only $CHOWN_CALLS reach the handover — a deploy succeeds and the app cannot write"
 fi
 
 # PAIRED WITH THE ABOVE: the ownership work moved into a helper at v2.64.2, and
@@ -256,14 +256,17 @@ else
   bad "the site directory is not sticky — the application can unlink .git and plant its own"
 fi
 
-# A repository root does not own is DISCARDED, never repaired in place:
-# chowning content the web user wrote back to root and then executing it is the
-# same defect with an extra step.
-if grep -qE 'discard_repo_we_do_not_own\(&site_dir' <<< "$SHIPPED" \
-   && grep -qE 'remove_dir_all\(&git_dir\)' <<< "$SHIPPED"; then
-  ok "a repository root does not own is discarded before any git runs against it"
+# R7 TOMBSTONE: the discard CALL lived in clone_or_pull and died with it;
+# the helper itself survives in the file (and still removes the foreign
+# repo), but no shipped code runs git against a foreign repo any more.
+# Asserting helper-present + no-caller, so a reintroduced git path that
+# adopts a foreign repo fails here first.
+if grep -qE 'fn discard_repo_we_do_not_own' <<< "$SHIPPED" \
+   && grep -qE 'remove_dir_all\(&git_dir\)' <<< "$SHIPPED" \
+   && ! grep -qE 'discard_repo_we_do_not_own\(&site_dir' <<< "$SHIPPED"; then
+  ok "TOMBSTONE (R7): the discard helper survives but no shipped caller remains — nothing runs git against a repo root does not own"
 else
-  bad "a foreign repository is adopted rather than discarded — the escalation survives an upgrade"
+  bad "TOMBSTONE (R7): the discard helper is gone, or a shipped caller adopts a foreign repository again — the escalation survives an upgrade"
 fi
 
 
@@ -303,22 +306,29 @@ read -r CGIT CSAFE COTHER <<< "$(SRC="$SHIPPED" perl -e '$src=$ENV{SRC};'"$CLASS
 # R6 re-derivation: atomic_deploy's git -C was deleted in R6, leaving 3 shipped
 # git -C invocations. The property is unchanged — none lifts the guard — so
 # the floor tracks the surviving count (3); CSAFE == 0 is the whole point.
-if [ "${CGIT:-0}" -ge 3 ] && [ "${CSAFE:-0}" -eq 0 ]; then
-  ok "none of the $CGIT shipped git -C invocations lifts the ownership guard ($COTHER non-git -C excluded by name)"
+# R7 re-derivation: clone_or_pull's git -C invocations were deleted too,
+# leaving ZERO shipped git -C invocations. The tombstone asserts the zero
+# in both counters — no git runs, so no guard can be lifted.
+if [ "${CGIT:-0}" -eq 0 ] && [ "${CSAFE:-0}" -eq 0 ]; then
+  ok "TOMBSTONE (R7): no shipped git -C invocation remains ($COTHER non-git -C excluded by name) — nothing left to lift the ownership guard"
 else
-  bad "$CSAFE of $CGIT shipped git -C invocations still declare a directory safe — root will run git out of a tree the site controls"
+  bad "TOMBSTONE (R7): $CSAFE of $CGIT shipped git -C invocations still declare a directory safe — root will run git out of a tree the site controls"
 fi
 
 # The suppression pair, on every shipped git invocation. Ownership is the real
 # control; this is what protects a site upgrading from v2.64.x, whose repository
 # was writable and may already carry a payload. Command scope beats repo config,
 # so it is inert from the first deploy after this version.
-GITCMDS=$(grep -cE 'safe_command(_sync)?\("git"\)' <<< "$SHIPPED")
-NOEXEC_N=$(grep -cE '\.args\(GIT_NO_EXEC\)' <<< "$SHIPPED")
-if [ "$GITCMDS" -ge 4 ] && [ "$NOEXEC_N" -ge "$GITCMDS" ]; then
-  ok "all $GITCMDS shipped git invocations carry GIT_NO_EXEC"
+GITCMDS=$(grep -cE 'safe_command(_sync)?\("git"\)' <<< "$SHIPPED" || true)
+NOEXEC_N=$(grep -cE '\.args\(GIT_NO_EXEC\)' <<< "$SHIPPED" || true)
+# R7 TOMBSTONE: the shipped git invocations are gone with clone_or_pull, so
+# the pair property retires — but the GIT_NO_EXEC constant itself must
+# survive (the hooks/fsmonitor arm below still pins its coverage), or a
+# future git path would have no suppression to carry.
+if [ "$GITCMDS" -eq 0 ] && [ "$NOEXEC_N" -eq 0 ] && grep -qE 'const GIT_NO_EXEC' <<< "$SHIPPED"; then
+  ok "TOMBSTONE (R7): 0 shipped git invocations remain and the GIT_NO_EXEC constant survives for any future git path"
 else
-  bad "$GITCMDS shipped git invocations but only $NOEXEC_N carry GIT_NO_EXEC — repo config can still execute"
+  bad "TOMBSTONE (R7): $GITCMDS shipped git invocations but only $NOEXEC_N carry GIT_NO_EXEC — repo config can still execute"
 fi
 if grep -qE 'core\.hooksPath=' <<< "$SHIPPED" && grep -qE '"core\.fsmonitor="' <<< "$SHIPPED"; then
   ok "and GIT_NO_EXEC suppresses BOTH hooks and fsmonitor — a hook file is not the only vector"
@@ -326,13 +336,14 @@ else
   bad "GIT_NO_EXEC no longer covers both vectors; core.fsmonitor alone needs no hook file and no executable bit"
 fi
 
-# The reset's exit status is READ. It was not, so a reset that failed — most
-# reachably on a branch change over a checkout holding local commits — reported
-# a successful deploy over the previous release.
-if grep -qE 'if !reset\.status\.success\(\)' <<< "$SHIPPED"; then
-  ok "a failed git reset fails the deploy instead of reporting success"
+# R7 TOMBSTONE: the reset whose status was read lived in clone_or_pull's
+# pull branch and died with it. Asserting no git reset remains in shipped
+# code — a reintroduced pull branch that ignores its reset status would
+# fail here first.
+if grep -qE 'reset\.status|"reset"' <<< "$SHIPPED"; then
+  bad "TOMBSTONE (R7): a git reset is back in shipped code without the status-read arm below it — a failed reset would report a successful deploy"
 else
-  bad "reset.status is never read — a failed reset still reports a successful deploy"
+  ok "TOMBSTONE (R7): no git reset remains in shipped code — the pull branch that read its status is deleted with clone_or_pull"
 fi
 
 echo

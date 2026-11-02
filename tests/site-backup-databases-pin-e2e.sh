@@ -26,6 +26,10 @@
 # db_payload_tests`, which round-trips a real archive. This script needs no
 # running panel.
 #   run: bash tests/site-backup-databases-pin-e2e.sh
+# NOTE (hosting split): the three arms that grepped the CLI's site-backup
+# commands in panel/cli/src/commands/backup.rs were removed — those commands
+# are gone, so their wording no longer exists to pin. The arms below pin
+# backend/agent/UI/docs only.
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,7 +37,6 @@ AGENT_SVC="$REPO/panel/agent/src/services/backups.rs"
 AGENT_RT="$REPO/panel/agent/src/routes/backups.rs"
 API="$REPO/panel/backend/src/routes/backups.rs"
 UI="$REPO/panel/frontend/src/pages/Backups.tsx"
-CLI="$REPO/panel/cli/src/commands/backup.rs"
 DOC="$REPO/docs/guides/backups.md"
 CLIDOC="$REPO/docs/cli-reference.md"
 MIGRATION="$REPO/panel/backend/migrations/20260726100000_site_backup_databases.sql"
@@ -151,8 +154,6 @@ has  "$AGENT_RT" 'obj.insert("error".into()' \
      "a failed restore also carries a plain-language summary under the key clients read"
 has  "$AGENT_SVC" 'supplied no database credentials' \
      "a caller that sent no credentials is told THAT, not that the site lost its database"
-has  "$CLI" 'supplied no database credentials' \
-     "the CLI recognises that reason and explains the way out"
 
 echo
 echo "E. The surfaces tell the same story"
@@ -167,10 +168,6 @@ has  "$UI" 'Files only' \
 hasnt "$UI" 'Databases are
     not included' \
      "the UI no longer states databases are excluded as a blanket fact"
-has  "$CLI" 'Content: files only' \
-     "the CLI says what it produced"
-has  "$CLI" 'cannot resolve a site' \
-     "the CLI explains WHY it cannot include databases (it authenticates to the agent)"
 hasnt "$DOC" '\*\*Databases are not included\.\*\*' \
      "the guide no longer says databases are excluded from a site backup"
 has  "$DOC" 'and a dump of every database attached to' \

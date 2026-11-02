@@ -1,5 +1,6 @@
 //! GAP 1: Backup Policy Executor — runs every 60s, evaluates cron schedules,
-//! executes backup_policies across sites, databases, and volumes.
+//! executes backup_policies across databases and volumes. (Site backups
+//! died with the `sites` table in R7.)
 
 use chrono::{Datelike, Timelike};
 use sqlx::PgPool;
@@ -16,7 +17,6 @@ struct PolicyRow {
     user_id: Uuid,
     server_id: Option<Uuid>,
     name: String,
-    backup_sites: bool,
     backup_databases: bool,
     backup_volumes: bool,
     schedule: String,
@@ -202,8 +202,9 @@ async fn upload_to_destination(
 
 /// Run the backup policy executor loop — checks every 60 seconds for due policies.
 /// Fleet-wide policy query, so it takes the REGISTRY. Each leg resolves its own host:
-/// sites and databases per ROW (via `sites.server_id`, which is NOT NULL), volumes per
-/// POLICY (their subject list comes from the agent, so there is no row to read).
+/// databases per ROW (via `databases.server_id`, backfilled NOT NULL in R7),
+/// volumes per POLICY (their subject list comes from the agent, so there is no
+/// row to read).
 ///
 /// Left local, the volume leg was the worst shape in the codebase: it enumerated the
 /// PANEL's containers, tarred the PANEL's volumes, stamped each row with the member's
@@ -230,15 +231,12 @@ pub async fn run(db: PgPool, agents: AgentRegistry, jwt_secret: String, mut shut
     }
 }
 
-/// Track last stale-backup check to avoid spamming (once per hour).
-static LAST_STALE_CHECK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-
 async fn tick(db: &PgPool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(), String> {
     let now = chrono::Utc::now();
 
     // Fetch all enabled policies
     let policies: Vec<PolicyRow> = sqlx::query_as(
-        "SELECT id, user_id, server_id, name, backup_sites, backup_databases, backup_volumes, \
+        "SELECT id, user_id, server_id, name, backup_databases, backup_volumes, \
          schedule, destination_id, retention_count, encrypt, verify_after_backup, last_run \
          FROM backup_policies WHERE enabled = TRUE"
     )
@@ -277,27 +275,10 @@ async fn tick(db: &PgPool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(
     }
 
     // Proactive backup freshness alerting — once per hour
-    let now_ts = now.timestamp();
-    let last_check = LAST_STALE_CHECK.load(std::sync::atomic::Ordering::Relaxed);
-    if now_ts - last_check >= 3600 {
-        LAST_STALE_CHECK.store(now_ts, std::sync::atomic::Ordering::Relaxed);
-
-        let stale: Vec<(String,)> = sqlx::query_as(
-            "SELECT s.domain FROM sites s WHERE s.status = 'active' \
-             AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '48 hours' \
-                             AND (b.destination_id IS NULL OR b.uploaded))"
-        ).fetch_all(db).await.unwrap_or_default();
-
-        if !stale.is_empty() {
-            let domains: Vec<&str> = stale.iter().map(|s| s.0.as_str()).collect();
-            notifications::notify_panel(db, None,
-                &format!("{} site(s) have stale backups", stale.len()),
-                &format!("These sites have no backup in 48+ hours: {}", domains.join(", ")),
-                "warning", "backup", Some("/backup-orchestrator")
-            ).await;
-            tracing::warn!("Stale backup alert: {} sites without recent backups", stale.len());
-        }
-    }
+    // R7: the hourly stale-site-backup check that used to sit here is
+    // deleted — `sites`, `backups.site_id`, and the 48-hour site-backup
+    // notion died with the hosting tables. Policy staleness is covered
+    // by the backup_failure alert on policy runs themselves.
 
     Ok(())
 }
@@ -352,23 +333,21 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
 
     // Backup databases
     if policy.backup_databases {
-        // `server_id` comes free from the join this query already makes — the same
-        // shape `create_db_backup` uses. Without it the panel `docker exec`s whatever
-        // answers to `dockpanel-db-{name}` on ITS OWN host, and that name is unique
-        // only per owner, so the dump can be another tenant's database entirely.
-        //
-        // LEFT JOIN both owner tables + COALESCE, same pattern as databases.rs's
-        // list()/get() — a plain `JOIN sites` here silently dropped every
-        // stack-owned database (site_id IS NULL for those rows since v2.242.0's
-        // standalone-DB-for-stacks ship), so they got zero backup coverage,
-        // scheduled or manual, with no error anywhere in the chain.
+        // `server_id` comes from the row itself: `databases.server_id`
+        // (backfilled from the old site/stack owners in R7). Without it
+        // the panel `docker exec`s whatever answers to
+        // `dockpanel-db-{name}` on ITS OWN host, and that name is unique
+        // only per owner, so the dump can be another tenant's database
+        // entirely. The old LEFT JOIN to `sites`/`docker_stacks` silently
+        // dropped every stack-owned database (site_id IS NULL for those
+        // rows since v2.242.0's standalone-DB-for-stacks ship), so they
+        // got zero backup coverage, scheduled or manual, with no error
+        // anywhere in the chain; the direct column covers both origins.
         let databases: Vec<(Uuid, String, String, String, String, Option<Uuid>)> = sqlx::query_as(
             "SELECT d.id, d.name, d.engine, d.db_user, d.db_password_enc, \
-             COALESCE(s.server_id, st.server_id) \
+             d.server_id \
              FROM databases d \
-             LEFT JOIN sites s ON d.site_id = s.id \
-             LEFT JOIN docker_stacks st ON d.stack_id = st.id \
-             WHERE COALESCE(s.user_id, st.user_id) = $1"
+             WHERE d.user_id = $1"
         )
         .bind(policy.user_id)
         .fetch_all(db).await.unwrap_or_default();
@@ -377,8 +356,7 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
             let Some(db_server_id) = *db_server_id else {
                 failures += 1;
                 tracing::warn!(
-                    "Policy '{}': skipping database {db_name} — its owner (site or \
-                     stack) row has no server_id.",
+                    "Policy '{}': skipping database {db_name} — its row has no server_id.",
                     policy.name
                 );
                 continue;
@@ -661,7 +639,7 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
     // Fire alert on failure
     if failures > 0 || upload_failures > 0 {
         notifications::fire_alert(
-            db, policy.user_id, policy.server_id, None,
+            db, policy.user_id, policy.server_id,
             "backup_failure",
             "",
             // An off-site copy that didn't happen is serious but recoverable on the

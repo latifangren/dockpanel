@@ -459,27 +459,16 @@ pub async fn export_config(
         })
     }).collect();
 
-    // Gap #71: Export backup schedules
-    let schedule_rows = sqlx::query(
-        "SELECT site_id, schedule, retention_count, enabled FROM backup_schedules"
-    )
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
-
-    let schedules: Vec<serde_json::Value> = schedule_rows.iter().map(|r| {
-        use sqlx::Row;
-        serde_json::json!({
-            "site_id": r.get::<uuid::Uuid, _>("site_id"),
-            "schedule": r.get::<String, _>("schedule"),
-            "retention_count": r.get::<i32, _>("retention_count"),
-            "enabled": r.get::<bool, _>("enabled"),
-        })
-    }).collect();
+    // Gap #71: Export backup schedules — R7: the `backup_schedules` table
+    // (one row per site) is dropped with the `sites` table. The field
+    // stays on the wire as an empty array (R3 pattern) so an export's
+    // shape does not change for importers; schedules now live in
+    // `backup_policies`, exported below.
+    let schedules: Vec<serde_json::Value> = Vec::new();
 
     // Gap #71: Export backup policies
     let policy_rows = sqlx::query(
-        "SELECT name, schedule, backup_sites, backup_databases, backup_volumes, \
+        "SELECT name, schedule, backup_databases, backup_volumes, \
          retention_count, encrypt, verify_after_backup \
          FROM backup_policies WHERE user_id = $1 ORDER BY name"
     )
@@ -493,7 +482,10 @@ pub async fn export_config(
         serde_json::json!({
             "name": r.get::<String, _>("name"),
             "schedule": r.get::<String, _>("schedule"),
-            "backup_sites": r.get::<bool, _>("backup_sites"),
+            // R7: `backup_policies.backup_sites` is dropped. The key stays
+            // as a literal false (hand-built JSON, no SQL) so exports keep
+            // their shape for old importers, which ignore it below.
+            "backup_sites": false,
             "backup_databases": r.get::<bool, _>("backup_databases"),
             "backup_volumes": r.get::<bool, _>("backup_volumes"),
             "retention_count": r.get::<i32, _>("retention_count"),
@@ -703,35 +695,11 @@ pub async fn import_config(
         }
     }
 
-    // Import backup schedules
-    let mut schedules_imported = 0i64;
-    if let Some(schedules) = body.get("backup_schedules").and_then(|v| v.as_array()) {
-        for s in schedules {
-            let site_id: Option<uuid::Uuid> = s
-                .get("site_id")
-                .and_then(|v| v.as_str())
-                .and_then(|v| v.parse().ok());
-            let schedule = s.get("schedule").and_then(|v| v.as_str()).unwrap_or("0 2 * * *");
-            let retention = s.get("retention_count").and_then(|v| v.as_i64()).unwrap_or(7) as i32;
-            let enabled = s.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-
-            if let Some(sid) = site_id {
-                let result = sqlx::query(
-                    "INSERT INTO backup_schedules (site_id, schedule, retention_count, enabled) \
-                     VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-                )
-                .bind(sid)
-                .bind(schedule)
-                .bind(retention)
-                .bind(enabled)
-                .execute(&state.db)
-                .await;
-                if result.is_ok() {
-                    schedules_imported += 1;
-                }
-            }
-        }
-    }
+    // Import backup schedules — R7: the `backup_schedules` table is
+    // dropped with the `sites` table. A `backup_schedules` key in an old
+    // export is ignored (its rows named sites that no longer exist);
+    // `schedules_imported` stays 0 and the response shape is unchanged.
+    let schedules_imported = 0i64;
 
     // Import backup policies
     let mut policies_imported = 0i64;
@@ -739,7 +707,8 @@ pub async fn import_config(
         for p in policies {
             let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let schedule = p.get("schedule").and_then(|v| v.as_str()).unwrap_or("0 2 * * *");
-            let backup_sites = p.get("backup_sites").and_then(|v| v.as_bool()).unwrap_or(true);
+            // R7: a `backup_sites` key in an old export is ignored — the
+            // column is dropped, and the site kind it enabled is gone.
             let backup_databases = p.get("backup_databases").and_then(|v| v.as_bool()).unwrap_or(true);
             let backup_volumes = p.get("backup_volumes").and_then(|v| v.as_bool()).unwrap_or(false);
             let retention = p.get("retention_count").and_then(|v| v.as_i64()).unwrap_or(7) as i32;
@@ -748,14 +717,13 @@ pub async fn import_config(
 
             if !name.is_empty() {
                 let result = sqlx::query(
-                    "INSERT INTO backup_policies (user_id, name, schedule, backup_sites, backup_databases, \
+                    "INSERT INTO backup_policies (user_id, name, schedule, backup_databases, \
                      backup_volumes, retention_count, encrypt, verify_after_backup) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING",
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING",
                 )
                 .bind(claims.sub)
                 .bind(name)
                 .bind(schedule)
-                .bind(backup_sites)
                 .bind(backup_databases)
                 .bind(backup_volumes)
                 .bind(retention)

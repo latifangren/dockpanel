@@ -19,12 +19,7 @@ pub struct BackupPolicy {
     pub user_id: Uuid,
     pub server_id: Option<Uuid>,
     pub name: String,
-    /// R3: the site kind is removed. Always FALSE for policies created or
-    /// updated after R3; a stored TRUE on an older, never-edited policy is
-    /// a legacy row until the executor's site sweep is neutralised (outside
-    /// this file) and the column drops in R7. Kept in the struct because
-    /// `SELECT *`/`RETURNING *` still return the column.
-    pub backup_sites: bool,
+    // R7: `backup_policies.backup_sites` is dropped with the site kind.
     pub backup_databases: bool,
     pub backup_volumes: bool,
     pub schedule: String,
@@ -46,12 +41,9 @@ pub struct BackupPolicy {
 pub struct CreatePolicyRequest {
     pub name: String,
     pub server_id: Option<Uuid>,
-    // R3: no `backup_sites` field. The site kind is removed; a policy covers
-    // databases and volumes only. The `backup_sites` COLUMN still exists
-    // until the R7 migration (and `BackupPolicy` still carries it, always
-    // false for policies created or updated after R3), but the API no
-    // longer accepts a value for it — a client-sent field is ignored by
-    // serde, and the INSERT below binds FALSE.
+    // R7: no `backup_sites` field, and no `backup_sites` column anymore.
+    // The site kind is removed; a policy covers databases and volumes
+    // only. A client-sent field is ignored by serde.
     pub backup_databases: Option<bool>,
     pub backup_volumes: Option<bool>,
     pub schedule: Option<String>,
@@ -88,9 +80,7 @@ pub struct UpdatePolicyRequest {
     pub name: String,
     #[serde(default, deserialize_with = "de_double_option")]
     pub server_id: Option<Option<Uuid>>,
-    // R3: no `backup_sites` field — see `CreatePolicyRequest`. An update
-    // forces the stored column to FALSE (below); it can no longer be
-    // re-enabled through this endpoint.
+    // R7: no `backup_sites` field — see `CreatePolicyRequest`.
     pub backup_databases: Option<bool>,
     pub backup_volumes: Option<bool>,
     pub schedule: Option<String>,
@@ -661,7 +651,7 @@ pub async fn list_policies(
 ) -> Result<Json<Vec<BackupPolicy>>, ApiError> {
     require_admin(&claims.role)?;
     let policies: Vec<BackupPolicy> = sqlx::query_as(
-        "SELECT * FROM backup_policies WHERE user_id = $1 ORDER BY created_at DESC LIMIT 500"
+        "SELECT id, user_id, server_id, name, backup_databases, backup_volumes, schedule, destination_id, retention_count, encrypt, verify_after_backup, enabled, drill_enabled, drill_schedule, last_drill_at, last_run, last_status, created_at, updated_at FROM backup_policies WHERE user_id = $1 ORDER BY created_at DESC LIMIT 500"
     )
     .bind(claims.sub)
     .fetch_all(&state.db)
@@ -693,16 +683,15 @@ pub async fn create_policy(
     let retention = req.retention_count.unwrap_or(7).max(1).min(365);
 
     let policy: BackupPolicy = sqlx::query_as(
-        "INSERT INTO backup_policies (user_id, server_id, name, backup_sites, backup_databases, backup_volumes, \
+        "INSERT INTO backup_policies (user_id, server_id, name, backup_databases, backup_volumes, \
          schedule, destination_id, retention_count, encrypt, verify_after_backup, enabled, \
          drill_enabled, drill_schedule) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
-         RETURNING *"
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+         RETURNING id, user_id, server_id, name, backup_databases, backup_volumes, schedule, destination_id, retention_count, encrypt, verify_after_backup, enabled, drill_enabled, drill_schedule, last_drill_at, last_run, last_status, created_at, updated_at"
     )
     .bind(claims.sub)
     .bind(req.server_id)
     .bind(&req.name)
-    .bind(false)
     .bind(req.backup_databases.unwrap_or(true))
     .bind(req.backup_volumes.unwrap_or(false))
     .bind(&schedule)
@@ -773,27 +762,22 @@ pub async fn update_policy(
         "UPDATE backup_policies SET \
          name = COALESCE(NULLIF($2, ''), name), \
          server_id = $3, \
-         backup_sites = $4, \
-         backup_databases = COALESCE($5, backup_databases), \
-         backup_volumes = COALESCE($6, backup_volumes), \
-         schedule = COALESCE(NULLIF($7, ''), schedule), \
-         destination_id = $8, \
-         retention_count = $9, \
-         encrypt = COALESCE($10, encrypt), \
-         verify_after_backup = COALESCE($11, verify_after_backup), \
-         enabled = COALESCE($12, enabled), \
-         drill_enabled = COALESCE($13, drill_enabled), \
-         drill_schedule = COALESCE(NULLIF($14, ''), drill_schedule), \
+         backup_databases = COALESCE($4, backup_databases), \
+         backup_volumes = COALESCE($5, backup_volumes), \
+         schedule = COALESCE(NULLIF($6, ''), schedule), \
+         destination_id = $7, \
+         retention_count = $8, \
+         encrypt = COALESCE($9, encrypt), \
+         verify_after_backup = COALESCE($10, verify_after_backup), \
+         enabled = COALESCE($11, enabled), \
+         drill_enabled = COALESCE($12, drill_enabled), \
+         drill_schedule = COALESCE(NULLIF($13, ''), drill_schedule), \
          updated_at = NOW() \
-         WHERE id = $1 RETURNING *"
+         WHERE id = $1 RETURNING id, user_id, server_id, name, backup_databases, backup_volumes, schedule, destination_id, retention_count, encrypt, verify_after_backup, enabled, drill_enabled, drill_schedule, last_drill_at, last_run, last_status, created_at, updated_at"
     )
     .bind(id)
     .bind(&req.name)
     .bind(server_id)
-    // R3: $4 forces `backup_sites` FALSE on every update. The placeholder
-    // stays so $5..$14 keep their numbering; no value from the request
-    // can re-enable the removed site kind.
-    .bind(false)
     .bind(req.backup_databases)
     .bind(req.backup_volumes)
     .bind(req.schedule.as_deref().unwrap_or(""))
@@ -852,14 +836,13 @@ pub async fn protect_all(
             &format!("Policy '{}' already exists (id: {})", policy_name, existing_id)));
     }
 
-    // R3: "Protect Everything" covers databases and volumes only. The
-    // first TRUE below used to enable site backups; it now binds FALSE
-    // for the `backup_sites` column, which survives until R7.
+    // R7: "Protect Everything" covers databases and volumes only — the
+    // site kind is gone with its column.
     let policy: BackupPolicy = sqlx::query_as(
-        "INSERT INTO backup_policies (user_id, name, backup_sites, backup_databases, backup_volumes, \
+        "INSERT INTO backup_policies (user_id, name, backup_databases, backup_volumes, \
          schedule, retention_count, encrypt, verify_after_backup, enabled) \
-         VALUES ($1, $2, FALSE, TRUE, TRUE, '0 2 * * *', 7, FALSE, TRUE, TRUE) \
-         RETURNING *"
+         VALUES ($1, $2, TRUE, TRUE, '0 2 * * *', 7, FALSE, TRUE, TRUE) \
+         RETURNING id, user_id, server_id, name, backup_databases, backup_volumes, schedule, destination_id, retention_count, encrypt, verify_after_backup, enabled, drill_enabled, drill_schedule, last_drill_at, last_run, last_status, created_at, updated_at"
     )
     .bind(claims.sub)
     .bind(policy_name)
@@ -909,10 +892,15 @@ pub async fn create_db_backup(
     // this change (the old inner join to `sites` dropped rows whose
     // `site_id` was NULL); a stack-owned database now resolves, via
     // `docker_stacks`, where it previously could not.
+    // R7: ownership + host resolve on the row itself (`d.user_id` /
+    // `d.server_id`, backfilled from the old site/stack owners). The old
+    // stack join dropped every site-owned database from this path; the
+    // backfilled columns restore them with identical scoping (the
+    // caller's own rows, no admin widening — as before).
     let row: Option<(Uuid, String, String, String, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT d.id, d.name, d.engine, d.db_user, d.db_password_enc, st.server_id \
-         FROM databases d JOIN docker_stacks st ON d.stack_id = st.id \
-         WHERE d.id = $1 AND st.user_id = $2"
+        "SELECT d.id, d.name, d.engine, d.db_user, d.db_password_enc, d.server_id \
+         FROM databases d \
+         WHERE d.id = $1 AND d.user_id = $2"
     )
     .bind(req.database_id).bind(claims.sub)
     .fetch_optional(&state.db).await
@@ -921,8 +909,8 @@ pub async fn create_db_backup(
     let (db_id, db_name, engine, user, password_enc, server_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
 
-    // Dump on the host the database's STACK lives on. This handler already held the answer: the
-    // join above reads `st.server_id` and the INSERT below stamps the new row with it,
+    // Dump on the host the database row itself names. This handler already held the answer: the
+    // query above reads `d.server_id` and the INSERT below stamps the new row with it,
     // while the dump itself went to whatever agent the caller's server switcher named
     // (an HTTP header with a local-agent fallback). So the archive was written on host
     // A and the row claimed host B — a guaranteed lie the moment the two disagree, and
@@ -938,8 +926,8 @@ pub async fn create_db_backup(
     // secret it has no business holding. Resolving before the decrypt keeps a refusal
     // from ever unwrapping it.
     //
-    // `backup_policy_executor` runs this exact dump from the owner join (sites +
-    // stacks) and has always resolved `agents.for_server(<owner server_id>)` for it.
+    // `backup_policy_executor` runs this exact dump from the row's own
+    // `server_id` and has always resolved `agents.for_server(<owner server_id>)` for it.
     // The scheduled path was right and
     // the operator-pressed button never adopted it — that asymmetry is the whole defect.
     let agent = crate::helpers::agent_for_site_server(
@@ -1019,16 +1007,17 @@ pub async fn list_db_backups(
 ) -> Result<Json<Vec<DatabaseBackup>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
 
-    // R1: ownership resolves through the stack owner only (see create_db_backup
-    // above). Backups of site-owned databases are no longer listed; backups of
-    // stack-owned databases are now listed, where the old inner join to `sites`
-    // dropped them. Scoping by the backup row's own `server_id` instead was
-    // rejected: it would widen a non-admin caller to every local-server backup
-    // regardless of owner, and the credentials lookup in restore_db_backup
-    // below is gated only by this lookup.
+    // R7: ownership resolves on the database row itself (`d.user_id`,
+    // backfilled from the old site/stack owners) — see create_db_backup
+    // above. Backups of site-origin databases are listed again, as before
+    // R1's stack-only join dropped them. Scoping by the backup row's own
+    // `server_id` instead was rejected: it would widen a non-admin caller
+    // to every local-server backup regardless of owner, and the
+    // credentials lookup in restore_db_backup below is gated only by
+    // this lookup.
     let backups: Vec<DatabaseBackup> = sqlx::query_as(
         "SELECT db.* FROM database_backups db \
-         JOIN databases d ON d.id = db.database_id JOIN docker_stacks st ON st.id = d.stack_id AND st.user_id = $1 \
+         JOIN databases d ON d.id = db.database_id AND d.user_id = $1 \
          ORDER BY db.created_at DESC LIMIT $2 OFFSET $3"
     )
     .bind(claims.sub).bind(limit).bind(offset)
@@ -1044,10 +1033,10 @@ pub async fn delete_db_backup(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // R1: stack-owner scoping only; site-owned backups now 404 (see list_db_backups).
+    // R7: owner scoping on `d.user_id` (see list_db_backups).
     let backup: Option<DatabaseBackup> = sqlx::query_as(
         "SELECT db.* FROM database_backups db \
-         JOIN databases d ON d.id = db.database_id JOIN docker_stacks st ON st.id = d.stack_id AND st.user_id = $1 \
+         JOIN databases d ON d.id = db.database_id AND d.user_id = $1 \
          WHERE db.id = $2"
     )
     .bind(claims.sub).bind(id)
@@ -1094,10 +1083,10 @@ pub async fn restore_db_backup(
     headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Look up the backup record, verify ownership.
-    // R1: stack-owner scoping only; site-owned backups now 404 (see list_db_backups).
+    // R7: owner scoping on `d.user_id` (see list_db_backups).
     let backup: Option<DatabaseBackup> = sqlx::query_as(
         "SELECT db.* FROM database_backups db \
-         JOIN databases d ON d.id = db.database_id JOIN docker_stacks st ON st.id = d.stack_id AND st.user_id = $1 \
+         JOIN databases d ON d.id = db.database_id AND d.user_id = $1 \
          WHERE db.id = $2"
     )
     .bind(claims.sub).bind(id)
@@ -1121,7 +1110,7 @@ pub async fn restore_db_backup(
         &state, backup.server_id, &format!("database {}", backup.db_name),
     ).await?;
 
-    // Fetch database credentials (join with sites for user/password)
+    // Fetch database credentials from the database row itself.
     let creds: Option<(String, String, String)> = sqlx::query_as(
         "SELECT d.engine, d.db_user, d.db_password_enc FROM databases d WHERE d.id = $1"
     )
