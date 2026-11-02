@@ -97,8 +97,17 @@ echo
 echo "── F6: automatic renewal must resolve the ACME contact like issuance does ──"
 SS="$REPO/panel/backend/src/services/security_scanner.rs"
 AH="$REPO/panel/backend/src/services/auto_healer.rs"
-check "security_scanner renewal uses resolve_acme_contact" "$(grep -c 'resolve_acme_contact' "$SS")" "1"
-check "auto_healer renewal uses resolve_acme_contact"      "$(grep -c 'resolve_acme_contact' "$AH")" "1"
+# R8: renewal no longer calls the shared resolve_acme_contact (user email +
+# settings fallback). Each renew function takes the contact from its own
+# row's ssl_email — trimmed, non-empty, else it skips with a log line.
+# Both renew functions (stack + Docker app) carry the derivation.
+check "scanner renewals take the contact from the row's own ssl_email (x2)" "$(grep -c 'let Some(contact) = ssl_email.as_deref()' "$SS")" "2"
+# R8 TOMBSTONE: the healer performs no renewal and resolves no ACME contact.
+if [ "$(grep -c 'resolve_acme_contact\|ssl_email' "$AH")" -eq 0 ]; then
+  ok "TOMBSTONE (R8): healer resolves no ACME contact — it renews nothing"
+else
+  bad "healer contact resolution reappeared — the F6 healer arm must be restored"
+fi
 
 echo
 echo "══ $PASS passed, $FAIL failed ══"

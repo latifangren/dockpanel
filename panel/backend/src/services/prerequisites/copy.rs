@@ -959,50 +959,6 @@ pub static FIELDS: &[Field] = &[
         escalates_to: "",
     },
     Field {
-        id: "sites.create.domain",
-        surface: "Create a site",
-        label: "Domain",
-        help: "Your site's public domain name (e.g. example.com). It needs to point at this \
-               server before HTTPS can be issued — DockPanel checks that for you below.",
-        more: "You can create the site before the domain resolves; only the certificate needs \
-               DNS. If you are moving a live site, create it here first, confirm it serves \
-               correctly, and change the DNS record last — that way the switchover has no gap.",
-        escalates_to: "dns.points_here",
-    },
-    Field {
-        id: "sites.create.runtime",
-        surface: "Create a site",
-        label: "Runtime",
-        // Tooltip-only: the line under this select already describes whichever
-        // runtime is currently chosen, which is more useful than anything static.
-        help: "",
-        more: "Static serves files as they are. PHP runs them through PHP-FPM. Node and Python \
-               get a managed systemd process with nginx in front. Reverse Proxy is the one to \
-               pick when something else already listens on a port — a Docker app, or a service \
-               you run yourself — and DockPanel then owns only the front end and the certificate.",
-        escalates_to: "",
-    },
-    Field {
-        id: "sites.create.admin_password",
-        surface: "Create a site",
-        label: "Admin Password",
-        help: "Leave blank and DockPanel generates one, then stores it in this site's Secrets \
-               vault — it is not shown again anywhere else.",
-        more: "Open the site, then Secrets, to read it back. Earlier versions generated this \
-               password, used it and discarded it, which left you unable to log in to the site \
-               you had just created.",
-        escalates_to: "",
-    },
-    Field {
-        id: "sites.create.proxy_port",
-        surface: "Create a site",
-        label: "Proxy Port",
-        help: "The local port your application listens on.",
-        more: "The port as seen from the server itself, not a public one. nginx connects to it \
-               on 127.0.0.1; nothing needs to be opened in the firewall.",
-        escalates_to: "",
-    },
-    Field {
         id: "apps.deploy.name",
         surface: "Deploy a Docker app",
         label: "Container Name",
@@ -1049,18 +1005,6 @@ pub static FIELDS: &[Field] = &[
                you — you are no longer asked to run a package manager by hand. \
                Key-authenticated SFTP and every S3 destination are unaffected.",
         escalates_to: "backups.destination_configured",
-    },
-    Field {
-        id: "mail.domain.records",
-        surface: "Mail domain → DNS",
-        label: "Required DNS Records",
-        // Tooltip-only: the standing line names the domain being viewed.
-        help: "",
-        more: "These are the records DockPanel publishes for you when it manages the zone, and \
-               the ones to create by hand when it doesn't. Verify DNS checks that each points at \
-               this server rather than merely that something exists — a domain whose MX belongs \
-               to another provider is reported as such, not as a pass.",
-        escalates_to: "mail.dns_published",
     },
 ];
 

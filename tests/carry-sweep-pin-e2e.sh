@@ -40,7 +40,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 PASS=0; FAIL=0
 ok()  { printf '\033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
-bad() { printf '\033[31m✗\033[0m %s — %s\n' "$1" "$2"; FAIL=$((FAIL+1)); }
+bad() { printf '\033[31m✗\033[0m %s — %s\n' "$1" "${2:-}"; FAIL=$((FAIL+1)); }
 eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$3', got '$2'"; }
 has() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "missing: $3" ;; esac; }
 hasnt(){ case "$2" in *"$3"*) bad "$1" "present but must not be: $3" ;; *) ok "$1" ;; esac; }
@@ -74,7 +74,9 @@ AMOD=panel/agent/src/routes/mod.rs
 DASH=panel/frontend/src/pages/Dashboard.tsx
 DBTSX=panel/frontend/src/pages/Databases.tsx
 
-for f in "$ERR" "$BSSL" "$ASSL" "$ASSLR" "$AGENT" "$SITES" "$DBR" "$ADBS" "$ADBR" "$AMOD" \
+# R8: BSSL (routes/ssl.rs, R3) and SITES (routes/sites.rs, R3) removed —
+# deleted with the SSL/site features; §B/§F below are tombstoned.
+for f in "$ERR" "$ASSL" "$ASSLR" "$AGENT" "$DBR" "$ADBS" "$ADBR" "$AMOD" \
          "$DASH" "$DBTSX"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
@@ -82,17 +84,17 @@ done
 # An arm over an empty subject prints green for every absence below (lesson #143),
 # and stripping can itself eat a file (the s1093 blocks-vs-lines trap), so each
 # subject is floored on its POST-strip size before anything reads it.
-for pair in "$ERR:6000" "$BSSL:10000" "$ASSL:8000" "$ASSLR:5000" "$AGENT:20000" \
-            "$SITES:60000" "$DBR:20000" "$ADBS:8000" "$ADBR:4000" "$AMOD:2000" \
-            "$DASH:40000" "$DBTSX:30000"; do
+for pair in "$ERR:6000" "$ASSL:8000" "$ASSLR:5000" "$AGENT:20000" \
+            "$DBR:20000" "$ADBS:8000" "$ADBR:4000" "$AMOD:2000" \
+            "$DASH:40000" "$DBTSX:20000"; do  # R8: Databases.tsx stripped size measured 20613 at HEAD (759 lines); the 30000 floor predates the page shrink and was masked by the §B SETUP fatal — floor re-derived below measured, still far above vacuity
   f=${pair%:*}; min=${pair##*:}
   n=$(subj "$f" | wc -c)
   [ "$n" -ge "$min" ] || { bad "SETUP" "$f has $n chars of code, expected >= $min"; exit 1; }
 done
 
-F_ERR=$(subj "$ERR");   F_BSSL=$(subj "$BSSL"); F_ASSLR=$(subj "$ASSLR")
+F_ERR=$(subj "$ERR");   F_ASSLR=$(subj "$ASSLR")
 F_ASSL=$(subj "$ASSL")
-F_AGENT=$(subj "$AGENT"); F_SITES=$(subj "$SITES")
+F_AGENT=$(subj "$AGENT")
 F_DBR=$(subj "$DBR");   F_ADBS=$(subj "$ADBS"); F_ADBR=$(subj "$ADBR")
 F_AMOD=$(subj "$AMOD")
 F_DASH=$(subj "$DASH"); F_DBTSX=$(subj "$DBTSX")
@@ -115,7 +117,8 @@ hasnt "A5 and status alone is NOT a proof" "$F_ERR" "iftrue{"
 LABEL='"acme_order_failed"'
 eq "A6 the panel declares the label once" "$(occ "$F_ERR" "constACME_ORDER_FAILED_CODE:&str=$LABEL;")" 1
 eq "A7 the agent labels in exactly one place" "$(occ "$F_ASSLR" "$LABEL")" 1
-eq "A8 all THREE doors go through that one classifier" "$(occ "$F_ASSLR" "ca_or_internal(e)")" 3
+# R8: 3 -> 1. Agent SSL routes trimmed in R6 (upload/DNS-01/revoke deleted); one call site remains plus the definition. Measured: def + 1 call.
+eq "A8 the remaining door go through that one classifier" "$(occ "$F_ASSLR" "ca_or_internal(e)")" 1
 # ⛔ POSITIVE IDENTIFICATION, and the direction is the whole safety of it. The
 # marker is applied where the CA spoke; everything unmarked — including an arm
 # added later — stays an internal fault and keeps its incident id. Inverting this
@@ -142,7 +145,8 @@ hasnt "A9b2 the fall-through attaches no code of any kind" "$F_CLASSIFIER" 'json
 # The marker is the OTHER severed pair — declared in the service, consumed in the
 # route, and worth counting because the count is what a silent unmarking moves.
 eq "A10 the marker is declared once" "$(occ "$F_ASSL" 'pubconstCA_DECLINED:&str="[ca]";')" 1
-eq "A11 and marks the seventeen arms where the CA actually spoke" "$(occ "$F_ASSL" '{CA_DECLINED}')" 17
+# R8: 17 -> 8. ACME sentences consolidated/reworded in later slices; 8 braced {CA_DECLINED} format! sites remain. Same pattern, counted from the stripped service.
+eq "A11 and marks the eight arms where the CA actually spoke" "$(occ "$F_ASSL" '{CA_DECLINED}')" 8
 # ⛔ THE SECOND SEVERED PAIR, added when the DNS-01 door joined. Cloudflare
 # refusing to publish `_acme-challenge` is the operator's to fix and earns a
 # sentence, but it is NOT something the CA said — attributing it to the CA would
@@ -151,7 +155,12 @@ eq "A11 and marks the seventeen arms where the CA actually spoke" "$(occ "$F_ASS
 eq "A6b the panel declares the provider label once" "$(occ "$F_ERR" 'constDNS_PROVIDER_FAILED_CODE:&str="dns_provider_failed";')" 1
 eq "A7b the agent labels a provider refusal in one place" "$(occ "$F_ASSLR" '"dns_provider_failed"')" 1
 eq "A10b the provider marker is declared once" "$(occ "$F_ASSL" 'pubconstDNS_PROVIDER_DECLINED:&str="[dns]";')" 1
-eq "A11b and marks the six arms where the provider refused" "$(occ "$F_ASSL" '{DNS_PROVIDER_DECLINED}')" 6
+# R8 TOMBSTONE: the provider marker has NO emitters left. DNS-01 was deleted in R6, so nothing creates a Cloudflare challenge record anymore; DNS_PROVIDER_DECLINED is declared once (A10b) and stripped by the classifier (A9c), but no sentence is marked with it. If a DNS-01 door returns, A11b/A11d must return.
+if [ "$(occ "$F_ASSL" '{DNS_PROVIDER_DECLINED}')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): no sentence carries the provider marker — the DNS-01 door that emitted it is deleted"
+else
+  bad "TOMBSTONE (R8): a sentence carries the provider marker again — A11b/A11d must be restored"
+fi
 # ⚠ The wrapper every agent ever shipped. A panel newer than its agent recognises
 # a renewal by it alone, so removing it would silently strip the compatibility path.
 # ⛔ THE PAIRING IN THE SERVICE. A11/A11b count the two markers, and a COUNT cannot
@@ -160,67 +169,33 @@ eq "A11b and marks the six arms where the provider refused" "$(occ "$F_ASSL" '{D
 # their API token is what refused — the precise outcome the three-party split exists
 # to prevent. Pin representative arms of each class to their own marker, and forbid
 # the crossed forms outright.
-has "A11c a CA arm carries the CA marker" "$F_ASSL" '{CA_DECLINED}TheCAdidnotvalidatetheDNS-01challenge:'
-has "A11d a Cloudflare arm carries the provider marker" "$F_ASSL" '{DNS_PROVIDER_DECLINED}Cloudflarerefusedtocreatethechallengerecord:'
+has "A11c a CA arm carries the CA marker" "$F_ASSL" '{CA_DECLINED}TheCAdidnotvalidatethechallenge:'
+# R8 TOMBSTONE: the Cloudflare sentence went with the DNS-01 door (see A11b).
+if [ "$(occ "$F_ASSL" '{DNS_PROVIDER_DECLINED}')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): no Cloudflare sentence carries the provider marker — the DNS-01 door is deleted"
+else
+  bad "TOMBSTONE (R8): a Cloudflare sentence carries the provider marker again — A11d must be restored"
+fi
 hasnt "A11e no CA sentence wears the provider marker" "$F_ASSL" '{DNS_PROVIDER_DECLINED}TheCA'
 hasnt "A11f no Cloudflare sentence wears the CA marker" "$F_ASSL" '{CA_DECLINED}Cloudflare'
 eq "A12 the renewal wrapper survives the rewrite" "$(occ "$F_ASSLR" 'format!("Renewalfailed:{msg}")')" 1
 
-echo "── §B  BOTH SSL doors, not the one the register named"
-has "B1 the shared translator exists" "$F_BSSL" "fnacme_failure_or("
-eq "B2 both doors call it" "$(occ "$F_BSSL" "acme_failure_or(&site.domain,")" 2
-has "B3 provisioning is one of them" "$F_BSSL" 'acme_failure_or(&site.domain,"SSLprovisioning",e))?;'
-# ⚠ No trailing `;` since v2.145.0: the renewal call moved inside a `match` arm
-# that branches on which challenge issued the certificate, so the expression ends
-# the arm rather than a statement. The property — the renewal door propagates
-# through the shared translator, not a bare passthrough — is unchanged.
-has "B4 renewal is the other" "$F_BSSL" 'acme_failure_or(&site.domain,"SSLrenewal",e))?'
-has "B5 it answers 422, not a passthrough" "$F_BSSL" \
-    'returnerr(StatusCode::UNPROCESSABLE_ENTITY,&format!("Acertificatefor{domain}couldnotbeissued:'
-# All four 422s must survive: s386's foreign-issuer refusal, s387's declined
-# order, and the DNS-01 door's two — a provider refusal and a declined order,
-# which are different sentences because they are different parties.
-# FIVE since v2.145.0 — the DNS-01 renewal that cannot reach its Cloudflare zone
-# refuses rather than silently re-ordering over HTTP-01.
-# ⚠ `ssl-controls` F10b pins this SAME literal in this SAME file. Both move together.
-eq "B5b and every refusal that earns a 422 keeps one" "$(occ "$F_BSSL" "StatusCode::UNPROCESSABLE_ENTITY,")" 5
-# ⛔ #662. The compatibility path puts this sentence in front of a local agent
-# fault too, so it must name no cause — and must never say "try again", which on
-# a rate-limited order is the one instruction that makes it worse.
-hasnt "B5c the sentence asserts no cause" "$F_BSSL" "LetsEncryptcouldnotissue"
-hasnt "B5d and never tells the operator to retry" "$F_BSSL" "thentryagain"
-F_HTTP01MSG=$(fnbody "$BSSL" "fn acme_failure_or(" | subjin)
-F_DNS01MSG=$(fnbody "$BSSL" "fn dns01_failure_or(" | subjin)
-[ "$(printf '%s' "$F_DNS01MSG" | wc -c)" -ge 400 ] || { bad "SETUP" "dns01_failure_or body not found — B9f would pass vacuously"; exit 1; }
-has  "B5e the hint is conditional" "$F_HTTP01MSG" "Ifthatisavalidationfailure,"
-# Anything not positively identified must still reach the old path untouched.
-has "B6 everything else still goes to the generic mapper" "$F_BSSL" "agent_error(context,e)"
-# ⛔ THE THIRD DOOR, and it must NOT share the sentence above. An operator is on
-# the DNS-01 door precisely BECAUSE port 80 cannot be reached, so the sibling's
-# "check that port 80 is reachable" is false by construction here. It gets its own
-# translator naming the two things this door can actually fix.
-has "B7 the third door has its own translator" "$F_BSSL" "fndns01_failure_or("
-has "B8 and the third door is wired to it" "$F_BSSL" "dns01_failure_or(provision_domain,&zone.domain,wildcard,e))?;"
-has "B9a the provider hint names the token scope" "$F_DNS01MSG" "ascopedtokenneedstheDNS:Editpermission."
-has "B9b the CA hint names the challenge record" "$F_DNS01MSG" "the_acme-challengeTXTrecordfor{subject}"
-# ⛔ THE ZONE, NOT THE ORDERED NAME. The zone lookup exists to match a site against
-# its PARENT zone, so on the ordinary subdomain site these differ — and telling an
-# operator to look in the `blog.example.com` zone sends them after something that is
-# not in their Cloudflare account. Both hints must spell the resolved zone.
-eq "B9d both hints name the resolved zone" "$(occ "$F_DNS01MSG" 'inthe{zone}zone')" 1
-eq "B9e and the provider hint too" "$(occ "$F_DNS01MSG" 'forthe{zone}zone')" 1
-hasnt "B9f and neither names the ordered name as a zone" "$F_DNS01MSG" "the{ordered}zone"
-# ⛔ #663 — BOTH hints, which is what this arm's name has always claimed. The CA
-# branch fires on a rate limit too, where publishing a TXT record fixes nothing, so
-# an unconditional imperative there is the exact defect #663 was written about.
-has "B9c the provider hint is conditional" "$F_DNS01MSG" "IfCloudflarerejectedthechange,"
-has "B9c2 and so is the CA hint beside it" "$F_DNS01MSG" "Ifthatisavalidationfailure,"
-# ⚠ NOT a text count. This file's own tests assert the ABSENCE of the port-80
-# sentence, so their assertions carry the literal and a count would be satisfied
-# by the very test meant to prove it — the source-pin prose trap. The behaviour is
-# proved at RUNTIME; what a pin can honestly assert is that the proof still exists.
-has "B10 and a runtime test proves it never repeats the port-80 advice" "$F_BSSL" \
-    "fna_provider_refusal_names_the_token_and_never_port_80()"
+echo "── §B  BOTH SSL doors, not the one the register named [R8 TOMBSTONE]"
+# R8 TOMBSTONE: the shared translator acme_failure_or/dns01_failure_or and
+# both SSL doors lived in backend routes/ssl.rs, deleted in R3 with the
+# site-SSL feature. The ACME failure classification itself survives in
+# error.rs (§A) and the agent (§A11–A12); the two panel doors are retired.
+# If routes/ssl.rs returns, §B must be restored with it.
+if [ -f "$BSSL" ]; then
+  bad "TOMBSTONE (R8): routes/ssl.rs is back — §B's translator doors must be restored"
+else
+  ok "TOMBSTONE (R8): routes/ssl.rs is gone — both SSL translator doors retired with it"
+fi
+if [ -f "$SITES" ]; then
+  bad "TOMBSTONE (R8): routes/sites.rs is back — §B's site door must be restored with it"
+else
+  ok "TOMBSTONE (R8): routes/sites.rs is gone — the site SSL door retired with it"
+fi
 
 echo "── §C  every remote long operation takes the LONG pool"
 # ⛔ DERIVED, NOT LISTED. The register named two of these; there are three, and the
@@ -251,12 +226,16 @@ hasnt "D5 no entry point re-derives the full budget for the call" \
 # A wait that never started is not a run that overran; #662 is why it says so.
 has "D6 a queue timeout says the operation never started" "$F_AGENT" "theoperationneverstarted"
 
-echo "── §F  an uploaded certificate does not inherit a retired profile"
-has "F1 upload clears the profile" "$F_SITES" "ssl_profile=NULL,"
-# Its three siblings are COALESCE-guarded precisely because keeping a known value
-# beats erasing it; this column is the one where the stored value has stopped
-# being true, so it must NOT join them.
-hasnt "F2 and does not preserve it" "$F_SITES" "ssl_profile=COALESCE("
+echo "── §F  an uploaded certificate does not inherit a retired profile [R8 TOMBSTONE]"
+# R8 TOMBSTONE: the upload handler that cleared ssl_profile lived in
+# routes/sites.rs, deleted in R3; the `sites` table (and its ssl_profile
+# column) was dropped by the R7 terminal migration. No upload path remains
+# that could inherit a retired profile.
+if [ -f "$SITES" ]; then
+  bad "TOMBSTONE (R8): routes/sites.rs is back — §F's profile-clearing upload must be restored"
+else
+  ok "TOMBSTONE (R8): routes/sites.rs is gone — no upload path left to inherit a retired profile"
+fi
 
 echo "── §G  the dump directory goes when nothing owns it — and not before"
 eq "G1 the purge primitive exists" "$(occ "$F_ADBS" "pubasyncfnpurge_dir(db_name:&str)")" 1
@@ -297,9 +276,11 @@ eq "G10 the route is registered" "$(occ "$F_ADBR" 'route("/db-backups/{db_name}"
 # the survivor's backups. LEFT JOIN both owner tables + COALESCE (chk_databases_owner
 # guarantees exactly one of site_id/stack_id is set per row) so a stack-owned database
 # is covered by the same "doubt keeps the files" check a site-owned one always was.
-has "G11 the panel asks whether anything still uses the name" "$F_DBR" "SELECTEXISTS(SELECT1FROMdatabasesdLEFTJOINsitessONs.id=d.site_idLEFTJOINdocker_stacksstONst.id=d.stack_id"
+# R8: R7 rewrote this probe — databases carries server_id directly (backfilled from old site/stack owners); the sites/stacks joins are gone with the sites table. The probe is exact again: one row, its own host.
+has "G11 the panel asks whether anything still uses the name" "$F_DBR" "SELECTEXISTS(SELECT1FROMdatabasesWHEREname=\$1AND(server_id=\$2OR\$2::uuidISNULL))"
+# R8: same R7 rewrite — host scoping is the row's own server_id, and a NULL caller server still counts every same-named row as possibly-here.
 has "G12 scoped to this host, counting an unplaced row as possibly-here" \
-    "$F_DBR" "WHEREd.name=\$1AND(COALESCE(s.server_id,st.server_id)=\$2ORCOALESCE(s.server_id,st.server_id)ISNULL))"
+    "$F_DBR" "WHEREname=\$1AND(server_id=\$2OR\$2::uuidISNULL))"
 has "G13 doubt keeps the files" "$F_DBR" "unwrap_or(true);"
 has "G14 and a shared name is not purged" "$F_DBR" "ifshared{"
 # The write half of the same charset split: a `_`-named database could not even be
@@ -372,11 +353,18 @@ SCAN=panel/backend/src/services/security_scanner.rs
 [ -f "$SCAN" ] || { bad "SETUP" "$SCAN missing"; exit 1; }
 F_SCANFN=$(fnbody "$SCAN" 'async fn auto_fix_safe_findings(' | subjin)
 n=$(printf '%s' "$F_SCANFN" | wc -c)
-[ "$n" -ge 3000 ] || { bad "SETUP" "the scanner's auto-fix body stripped to $n chars, expected >= 3000 — the fnbody anchor has moved and §J is measuring nothing"; exit 1; }
-has "J1 the unattended renewal asks the database for the site's profile" \
-    "$F_SCANFN" "s.ssl_profile"
-has "J2 and sends it with the order, like both hand-driven paths do" \
-    "$F_SCANFN" 'agent_body["profile"]=serde_json::json!(profile)'
+[ "$n" -ge 500 ] || { bad "SETUP" "the scanner's auto-fix body stripped to $n chars, expected >= 500 — the fnbody anchor has moved and §J is measuring nothing"; exit 1; }
+# R8 TOMBSTONE: §J's premise retired with sites. The unattended renewal no
+# longer reads any site's profile — docker_stacks has no ssl_profile column
+# and the stack/app renewal bodies deliberately send no runtime/profile (the
+# panel cannot describe a stack's vhost; re-rendering would publish a proxy
+# with no upstream). No "profile" string remains anywhere in the scanner.
+# If a profile-bearing renewal returns, J1/J2 must return with it.
+if grep -q '"profile"' <<< "$F_SCANFN"; then
+  bad "TOMBSTONE (R8): auto_fix_safe_findings sends a profile again — §J must be restored"
+else
+  ok "TOMBSTONE (R8): the unattended renewal sends no certificate profile — the site-profile door retired with sites"
+fi
 
 echo
 echo "─────────────────────────────────────────────"

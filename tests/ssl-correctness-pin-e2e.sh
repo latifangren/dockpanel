@@ -58,14 +58,17 @@ set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GATE="$REPO/scripts/npm-audit-gate.mjs"
 HOOK="$REPO/scripts/hooks/pre-push"
-SITES="$REPO/panel/backend/src/routes/sites.rs"
+# R8: routes/sites.rs deleted (R3) — the SITES subject is retired, not re-pointed.
+# SITES="$REPO/panel/backend/src/routes/sites.rs"
 WP="$REPO/panel/agent/src/services/wordpress.rs"
+STACKS="$REPO/panel/backend/src/routes/stacks.rs"
 AGENT_SSL="$REPO/panel/agent/src/services/ssl.rs"
 HEALER="$REPO/panel/backend/src/services/auto_healer.rs"
 SCAN="$REPO/panel/backend/src/services/security_scanner.rs"
 NOTIF="$REPO/panel/backend/src/services/notifications.rs"
 SETUP="$REPO/scripts/setup.sh"
-BE_SSL="$REPO/panel/backend/src/routes/ssl.rs"
+# R8: routes/ssl.rs deleted (R3) — the BE_SSL subject is retired, not re-pointed.
+# BE_SSL="$REPO/panel/backend/src/routes/ssl.rs"
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); printf '  \033[0;32m✓\033[0m %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[0;31m✗\033[0m %s\n' "$1"; }
@@ -356,33 +359,14 @@ for m in $RR_MANIFESTS; do
 done
 
 echo
-echo "── B: a site is installed at the scheme it can actually serve ──"
-
-# The install runs in a task beside auto-SSL, which may still fail. Pinning the
-# literal here is the point: this is the line that decided a brand-new site was
-# unreachable on both schemes. Measured at s338: commenting that one line out
-# left this arm AND its negative twin below green together, so both halves of
-# this section went quiet at once.
-if has_code "$SITES" -F -e '"url": format!("http://{cms_domain}")'; then
-  ok "the CMS installer is handed the plain-HTTP URL"
-else
-  bad "the CMS installer no longer installs at the plain-HTTP URL"
-fi
-
-# NEGATIVE arm. Controlled in §I.
-if has_code "$SITES" -F -e '"url": format!("https'; then
-  bad "an unconditional secure install URL is back in sites.rs"
-else
-  ok "no unconditional secure install URL remains"
-fi
-
-if has_code "$SITES" -F -e 'promote-https'; then
-  ok "the panel promotes the canonical URL once the certificate lands"
-else
-  bad "nothing promotes the canonical URL after a late certificate"
-fi
-
 echo
+echo "── B: a site is installed at the scheme it can actually serve ──"
+# R8 TOMBSTONE (§B): the CMS installer + promote-https lived in routes/sites.rs
+# (R3). No site install path remains to hand a URL to, and §C's agent-side
+# promotion choke point stays live below. If a site installer returns, §B
+# must return with it.
+ok "TOMBSTONE (R8): §B retired with routes/sites.rs — no CMS install/promotion path remains"
+
 echo "── C: the promotion only ever touches the URL DockPanel itself set ──"
 
 # Extracted so it can be tested at all — the surrounding function shells out to
@@ -427,8 +411,11 @@ fi
 # commenting a call site out CONSERVES the count, so three live call sites and
 # two live ones plus a note about the third are the same number. Counted from
 # code, the count moves.
-check "auto-healer alerts when a renewal cannot be attempted" \
-  "$(code_count "$HEALER" -F -e 'ssl_renewal_blocked(')" "3"
+# R8 TOMBSTONE (healer §D arm): the healer performs no renewal and raises no
+# renewal alert (0 fire_alert_deduped / ssl_renewal_blocked occurrences in
+# code) — its notifications are exhaustion notices via notify_panel. The
+# "cannot be attempted" bail-outs died with the site renewal loop.
+ok "TOMBSTONE (R8): healer renewal-alert arm retired — the healer renews nothing and raises no renewal alert"
 # Still four, and the count is load-bearing in a new way since v2.139.0. A fifth
 # outcome exists — a renewal deliberately NOT attempted, because the installed
 # certificate was issued by someone other than Let's Encrypt and renewing would
@@ -437,16 +424,27 @@ check "auto-healer alerts when a renewal cannot be attempted" \
 # and pages at `critical`, and neither is true of a refusal the panel made on
 # purpose. If this count reaches five, check whether a declined renewal has been
 # wired into the failure wording again.
+# R8: ssl_renewal_alert( is inlined away (0 occurrences) — the two renew
+# functions call fire_alert_deduped directly, one failure fire each. The
+# count stays load-bearing: a third outcome wired into the failure wording
+# must move it deliberately.
 check "the scanner alerts on every renewal outcome it can see" \
-  "$(code_count "$SCAN" -F -e 'ssl_renewal_alert(')" "4"
-check "and a DECLINED renewal announces without claiming a failure" \
-  "$(code_count "$SCAN" -F -e 'ssl_renewal_declined_alert(')" "2"
+  "$(code_count "$SCAN" -F -e 'fire_alert_deduped')" "2"
+# R8 TOMBSTONE (DECLINED §D arm) + BEHAVIOUR CHANGE, flagged for the
+# coordinator: ssl_renewal_declined_alert( is gone (0 occurrences). A
+# foreign-certificate decline now returns after a tracing::info only
+# (security_scanner.rs, foreign_cert_issuer guard) — no alert helper, no
+# activity-log row. The decline is silent except a trace log. If a
+# decline announcement returns, this arm must return with it.
+ok "TOMBSTONE (R8): DECLINED-announcement arm retired — a foreign-cert decline is trace-log-only (see coordinator flag)"
 
 # Both loops touch the same certificate; neither may alert unconditionally.
-if has_code "$HEALER" -F -e 'fire_alert_deduped' && has_code "$SCAN" -F -e 'fire_alert_deduped'; then
-  ok "both loops dedupe, so one stuck certificate is one alert"
+# R8: the healer half is vacated (healer raises no SSL alert at all). The
+# scanner half stays live: its renewal fires go through the dedup guard.
+if has_code "$SCAN" -F -e 'fire_alert_deduped'; then
+  ok "the scanner dedupes its renewal alerts, so one stuck certificate is one alert"
 else
-  bad "a loop still alerts unconditionally"
+  bad "the scanner still alerts unconditionally on renewal failure"
 fi
 
 if has_code "$SCAN" -F -e 'fire_alert(' && has_code "$SCAN" -F -e 'ssl_renewal'; then
@@ -560,10 +558,10 @@ RENEW_SKIPPED=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   has_code "$f" -E -e 'format!\("/ssl/(provision/|\{)' || continue
-  # R6 (2026-11-02): the mail.rs exclusion was removed with mail.rs itself
-  # (deleted in R4). The pin's own premise arm below demanded this removal
-  # rather than a carve-out for a file that left the class.
-  if has_code "$f" -E -e 'FROM sites|UPDATE sites|INTO sites'; then
+  # R8: the class is re-aimed. Renewals no longer target `sites` rows (table
+  # dropped, R7) — they target docker_stacks / docker_app rows. The second
+  # half of the predicate follows the tracked row.
+  if has_code "$f" -E -e 'docker_stacks|docker_apps'; then
     RENEW_CALLERS+=("$f")
   else
     RENEW_SKIPPED=$((RENEW_SKIPPED + 1))
@@ -575,16 +573,38 @@ done < <(find "$REPO/panel/backend/src" -name '*.rs' 2>/dev/null | sort)
 [ "$RENEW_SKIPPED" -gt 0 ] && \
   echo "  · $RENEW_SKIPPED agent SSL caller(s) hold no sites row and are out of this class"
 
-if [ "${#RENEW_CALLERS[@]}" -lt 3 ]; then
+# R8: floor 3 -> 2. The site renewal doors are gone; two callers remain
+# (routes/stacks.rs + security_scanner.rs). Each door records its outcome in
+# its own documented shape: the stack doors write ssl_expiry into
+# docker_stacks; the docker-app door has no expiry column (documented in
+# code) and records the outcome in activity_logs instead, re-derived by the
+# next weekly scan.
+if [ "${#RENEW_CALLERS[@]}" -lt 2 ]; then
   bad "enumerated only ${#RENEW_CALLERS[@]} backend callers of an agent SSL issue/renew route — implausible, so the arms below would pass having examined nothing"
 else
   ok "enumerated ${#RENEW_CALLERS[@]} backend callers of an agent SSL issue/renew route"
   for f in "${RENEW_CALLERS[@]}"; do
-    if [ "$(prod_count "$f" -E -e 'ssl_expiry[ ]*=[ ]*\$')" -gt 0 ]; then
-      ok "$(basename "$f") stores the expiry it was handed"
-    else
-      bad "$(basename "$f") renews a certificate and never records it — the panel keeps describing the retired one, down to a false EXPIRED it cannot resolve"
-    fi
+    case "$f" in
+      *security_scanner.rs)
+        if [ "$(prod_count "$f" -F -e 'UPDATE docker_stacks SET ssl_expiry')" -gt 0 ]; then
+          ok "security_scanner.rs stores the stack expiry it was handed"
+        else
+          bad "security_scanner.rs renews a stack certificate and never records it"
+        fi
+        if [ "$(prod_count "$f" -F -e 'log_event')" -gt 0 ]; then
+          ok "security_scanner.rs records the docker-app renewal outcome in activity_logs (no expiry column exists for it)"
+        else
+          bad "security_scanner.rs renews a docker-app certificate and records the outcome nowhere"
+        fi
+        ;;
+      *)
+        if [ "$(prod_count "$f" -E -e 'ssl_expiry[ ]*=[ ]*\$')" -gt 0 ]; then
+          ok "$(basename "$f") stores the expiry it was handed"
+        else
+          bad "$(basename "$f") renews a certificate and never records it — the panel keeps describing the retired one, down to a false EXPIRED it cannot resolve"
+        fi
+        ;;
+    esac
   done
 fi
 
@@ -593,14 +613,12 @@ fi
 # that was just replaced. (Initial issuance in sites.rs has nothing to clear, so
 # this is asserted on the renewal paths that carry the pattern, not on every
 # writer.)
-for f in "$SCAN" "$HEALER"; do
-  if [ "$(prod_count "$f" -F -e 'ssl_renewal_at = NULL')" -gt 0 ] \
-  && [ "$(prod_count "$f" -F -e 'ssl_renewal_checked_at = NULL')" -gt 0 ]; then
-    ok "$(basename "$f") clears both ARI columns when it records a renewal"
-  else
-    bad "$(basename "$f") records a renewal without clearing the ARI window computed for the retired certificate"
-  fi
-done
+# R8 TOMBSTONE (ARI arms): the ARI bookkeeping columns exist on NO surviving
+# table (docker_stacks has no ssl_renewal_at column — see the monitors.rs
+# comment; renewal_info/fetch_ari are 0 occurrences repo-wide). The
+# "clear the ARI window" property has no subject left. If ARI returns, the
+# arms must return with its columns.
+ok "TOMBSTONE (R8): ARI-window arms retired — no surviving table carries the ARI columns"
 
 # And the host-blind re-read that already wrote across hosts. `domain` is unique
 # only per server, so a post-renewal lookup keyed on it can return another
@@ -683,10 +701,14 @@ fi
 
 # §E slices a shell helper by line range and §J compares line numbers. Deleting
 # rather than blanking would renumber every subject and change what they measure.
-SUBJECTS=("$GATE" "$HOOK" "$SITES" "$WP" "$AGENT_SSL" "$NOTIF" "$HEALER" "$SCAN" "$SETUP" "$BE_SSL")
+# R8: SITES + BE_SSL removed from the subject list (deleted, R3).
+SUBJECTS=("$GATE" "$HOOK" "$WP" "$AGENT_SSL" "$NOTIF" "$HEALER" "$SCAN" "$SETUP")
 LINEDRIFT=""
 for f in "${SUBJECTS[@]}"; do
-  a=$(wc -l < "$f"); b=$(code_lines "$f" | wc -l)
+  # R8: compare awk record counts, not wc -l. wc -l counts NEWLINES, so a
+  # file whose last line has no trailing newline (auto_healer.rs) reads
+  # one short and the arm reds on a correct stripper (the F10 family).
+  a=$(awk 'END{print NR}' "$f"); b=$(code_lines "$f" | awk 'END{print NR}')
   [ "$a" != "$b" ] && LINEDRIFT="$LINEDRIFT $(basename "$f")($a≠$b)"
 done
 if [ -z "$LINEDRIFT" ]; then
@@ -722,27 +744,17 @@ PINNED=(
   "$GATE|-F|stale "
   "$GATE|-F|const ALLOWLIST = ["
   "$HOOK|-F|npm-audit-gate.mjs"
-  "$SITES|-F|\"url\": format!(\"http://{cms_domain}\")"
-  "$SITES|-F|promote-https"
-  "$SITES|-E|ssl_expiry[ ]*=[ ]*\\\$"
   "$WP|-F|fn https_promotion_target"
   "$WP|-F|eq_ignore_ascii_case"
   "$AGENT_SSL|-F|promote_site_url_to_https(domain)"
   "$NOTIF|-F|fn fire_alert_deduped"
-  "$HEALER|-F|ssl_renewal_blocked("
-  "$HEALER|-F|fire_alert_deduped"
-  "$HEALER|-F|ssl_renewal_at = NULL"
-  "$HEALER|-F|ssl_renewal_checked_at = NULL"
-  "$HEALER|-E|ssl_expiry[ ]*=[ ]*\\\$"
-  "$SCAN|-F|ssl_renewal_alert("
   "$SCAN|-F|fire_alert_deduped"
   "$SCAN|-F|fire_alert("
   "$SCAN|-F|ssl_renewal"
-  "$SCAN|-F|ssl_renewal_at = NULL"
-  "$SCAN|-F|ssl_renewal_checked_at = NULL"
   "$SCAN|-E|ssl_expiry[ ]*=[ ]*\\\$"
+  "$SCAN|-F|UPDATE docker_stacks SET ssl_expiry"
+  "$STACKS|-F|UPDATE docker_stacks SET ssl_expiry"
   "$SETUP|-F|wait_for_unit()"
-  "$BE_SSL|-E|ssl_expiry[ ]*=[ ]*\\\$"
 )
 
 # Turn every CODE line matching the pattern into a comment, leaving the text.
@@ -842,13 +854,10 @@ else
   bad "§A's server-runtime arm no longer fires on a real request handler — the stripper is eating code"
 fi
 
-cp "$SITES" "$FIXDIR/x_sites.rs"
-printf '\n        "url": format!("https://{cms_domain}"),\n' >> "$FIXDIR/x_sites.rs"
-if has_code "$FIXDIR/x_sites.rs" -F -e '"url": format!("https'; then
-  ok "§B's secure-install-URL arm still fires when the URL is really in code"
-else
-  bad "§B's secure-install-URL arm no longer fires on a real https install URL — the stripper is eating code"
-fi
+# R8 TOMBSTONE (§I §B plant): the §B negative arm died with routes/sites.rs,
+# so its plant dies too — copying a deleted file would plant into a
+# one-line file and pass vacuously.
+ok "TOMBSTONE (R8): §I §B plant retired with §B — no secure-install-URL arm remains to control"
 
 cp "$SETUP" "$FIXDIR/x_setup.sh"
 printf '\nif systemctl is-active --quiet dockpanel; then :; fi\n' >> "$FIXDIR/x_setup.sh"
@@ -893,7 +902,7 @@ SELF="$REPO/tests/ssl-correctness-pin-e2e.sh"
 # it searches for and the scan cannot match itself. The JSON subjects are
 # deliberately absent from the list: a manifest and a lockfile are prose by
 # design and are meant to be read raw.
-SUBJ_VARS='GATE|HOOK|SITES|WP|AGENT_SSL|NOTIF|HEALER|SCAN|SETUP|BE_SSL|REPO'
+SUBJ_VARS='GATE|HOOK|WP|AGENT_SSL|NOTIF|HEALER|SCAN|SETUP|STACKS|REPO'
 RAW_ARMS=$(code_lines "$SELF" | grep -nE "grep[^|;]*\"\\\$($SUBJ_VARS)[\"/]" || true)
 if [ -z "$RAW_ARMS" ]; then
   ok "no arm greps a subject file directly; every read goes through code_lines"

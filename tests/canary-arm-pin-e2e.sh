@@ -50,9 +50,10 @@ HEALER=panel/backend/src/services/auto_healer.rs
 BACK_SEC=panel/backend/src/routes/security.rs
 ROUTER=panel/backend/src/routes/mod.rs
 SETTINGS=panel/frontend/src/pages/Settings.tsx
+CANARY_TAB=panel/frontend/src/pages/settings/AccountTab.tsx  # R8: the canary row moved to the Account tab
 GUIDE=docs/guides/security-hardening.md
 
-for f in "$AGENT_SEC" "$AGENT_UNIT" "$HEALER" "$BACK_SEC" "$ROUTER" "$SETTINGS" "$GUIDE"; do
+for f in "$AGENT_SEC" "$AGENT_UNIT" "$HEALER" "$BACK_SEC" "$ROUTER" "$SETTINGS" "$CANARY_TAB" "$GUIDE"; do
   [ -f "$f" ] || { echo "missing source file: $f"; exit 1; }
 done
 
@@ -251,11 +252,11 @@ fi
 
 # POSITIVE CONTROL for the two absence-shaped reads below: the file really does
 # contain the canary row, so a zero here would mean a broken path, not a clean UI.
-ROW=$(grep -c 'Canary File Monitoring' "$SETTINGS")
+ROW=$(grep -c 'Canary File Monitoring' "$CANARY_TAB")
 if [ "$ROW" -ge 1 ]; then
-  ok "control: the Settings canary row is present in $SETTINGS ($ROW occurrence(s))"
+  ok "control: the Settings canary row is present in $CANARY_TAB ($ROW occurrence(s))"
 else
-  bad "control failed: no canary row found in $SETTINGS — the arms below cannot be trusted"
+  bad "control failed: no canary row found in $CANARY_TAB — the arms below cannot be trusted"
 fi
 
 # Key on the QUOTED path, not the bare substring. `grep -c 'security/canary-status'`
@@ -268,7 +269,7 @@ else
   bad "Settings never calls /security/canary-status — the switch is reporting the setting again"
 fi
 
-NOTARMED=$(grep -c 'NOT ARMED' "$SETTINGS")
+NOTARMED=$(grep -c 'NOT ARMED' "$CANARY_TAB")
 if [ "$NOTARMED" -ge 1 ]; then
   ok "Settings renders an explicit NOT ARMED state for a tripwire watching nothing"
 else

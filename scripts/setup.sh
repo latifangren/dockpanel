@@ -59,8 +59,7 @@ PANEL_SSL_OK=0
 # Which firewall this box is enforcing with: firewalld | ufw | none.
 # Resolved by detect_firewall in main().
 FW_MGR="none"
-# DockPanel Lite (Alpine / postmarketOS profile): 1 skips host PHP
-# in install_recommended_services and caps the
+# DockPanel Lite (Alpine / postmarketOS profile): 1 caps the
 # Postgres container's memory in setup_database. It is a UX/resource
 # profile, not a security boundary — see FORK.md. The frontend flag is
 # driven by the same env var in the backend (panel/backend config.rs).
@@ -468,19 +467,6 @@ configure_selinux() {
         warn "the panel will answer 502 until you run: setsebool -P httpd_can_network_connect on"
         svc_fail "SELinux policy"
     fi
-}
-
-# True when apt has a real installation candidate for a package. `apt-cache
-# show` is NOT enough — on Ubuntu 26.04 `php-opcache` still has a stanza but
-# `Candidate: (none)` (OPcache became built-in in PHP 8.5), and one dead
-# package fails an entire apt transaction.
-apt_has_candidate() {
-    local c
-    # LC_ALL=C: apt-cache localises the "Candidate:" label (fr "Candidat :",
-    # de "Installationskandidat:"), which would make the sed match nothing on
-    # a non-English box and silently block the whole PHP install.
-    c=$(LC_ALL=C apt-cache policy "$1" 2>/dev/null | sed -n 's/^  Candidate: //p')
-    [ -n "$c" ] && [ "$c" != "(none)" ]
 }
 
 # ── Banner ───────────────────────────────────────────────────────────────
@@ -2195,184 +2181,11 @@ wait_for_health() {
 
 # ── Recommended Services ─────────────────────────────────────────────────
 
-# install_php_set <prefix> — install <prefix>-fpm + <prefix>-cli, then every
-# extension metapackage this apt source actually has a candidate for.
-# A fixed list would fail the whole transaction over one obsolete name:
-# PHP 8.5 (Ubuntu 26.04) absorbed OPcache, so `php-opcache` no longer has an
-# installation candidate there — that single dead package is what broke the
-# old all-or-nothing install. Skipped names are reported, not fatal.
-install_php_set() {
-    local prefix="$1"
-    local exts="" skipped="" e
-    if ! run "Installing ${prefix}-fpm + ${prefix}-cli" apt-get install -y "${prefix}-fpm" "${prefix}-cli"; then
-        return 1
-    fi
-    for e in mysql pgsql curl gd mbstring xml zip bcmath intl readline opcache; do
-        if apt_has_candidate "${prefix}-${e}"; then
-            exts="$exts ${prefix}-${e}"
-        else
-            skipped="$skipped $e"
-        fi
-    done
-    if [ -n "$exts" ]; then
-        # shellcheck disable=SC2086
-        if ! run "Installing PHP extensions ($(echo $exts | wc -w) packages)" apt-get install -y $exts; then
-            warn "Some PHP extensions failed to install — see $INSTALL_LOG"
-        fi
-    fi
-    if [ -n "$skipped" ]; then
-        info "Skipped:${skipped} (built into this PHP version or not packaged)"
-    fi
-    return 0
-}
-
-# cleanup_php_repo — remove a 3rd-party PHP source that turned out not to
-# serve this release. Leaving it behind breaks EVERY later `apt-get update`
-# on the user's box with a 404 (this exact wreckage was found on a fresh
-# Ubuntu 26.04 install after the old installer's failed PPA attempt).
-cleanup_php_repo() {
-    rm -f /etc/apt/sources.list.d/sury-php.list \
-          /etc/apt/sources.list.d/ondrej-ubuntu-php-*.sources \
-          /etc/apt/sources.list.d/ondrej-ubuntu-php-*.list 2>/dev/null || true
-    run "Refreshing package index" apt-get update -y || true
-}
-
-install_php() {
-    if command -v php &> /dev/null; then
-        log "PHP already installed: $(php -v | head -1 | awk '{print $2}')"
-        svc_ok "PHP $(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null) (FPM)"
-        return
-    fi
-
-    # Alpine: host PHP is out of scope for the Lite profile (PHP apps run
-    # as containers there). The apt/RHEL branches below name packages that
-    # do not exist on Alpine, so refuse loudly instead of letting the
-    # RHEL branch run dnf-shaped logic against apk.
-    if [ "$PKG_MGR" = "apk" ]; then
-        warn "Host PHP is not installed on Alpine — run PHP apps as Docker containers instead"
-        return
-    fi
-
-    if [ "$PKG_MGR" = "apt" ]; then
-        # Re-source /etc/os-release — detect_os' copy is local to that function.
-        local OS_ID="" OS_CODENAME=""
-        if [ -f /etc/os-release ]; then
-            OS_ID=$(. /etc/os-release && echo "${ID:-}")
-            OS_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
-        fi
-
-        # Step 1: the distro's own PHP. Covers Ubuntu 24.04 (8.3), Ubuntu
-        # 26.04 (8.5), Debian 12 (8.2), Debian 13 (8.4) — modern distros ship
-        # a usable PHP and need no 3rd-party repo at all.
-        local PHP_VER=""
-        if apt_has_candidate php-fpm && install_php_set php; then
-            PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || true)
-        fi
-
-        # Step 2: releases without a usable distro PHP fall back to a
-        # 3rd-party repo (Debian → deb.sury.org, Ubuntu → ppa:ondrej/php) —
-        # but ONLY after confirming that repo actually publishes for this
-        # release (brand-new releases lag), and with cleanup on failure so a
-        # dead source can never poison the box's apt state.
-        if [ -z "$PHP_VER" ]; then
-            local FALLBACK_VER="8.3" repo_added=0
-            if [ "$OS_ID" = "debian" ] && [ -n "$OS_CODENAME" ]; then
-                if curl -sfI --max-time 15 "https://packages.sury.org/php/dists/${OS_CODENAME}/Release" > /dev/null 2>&1; then
-                    if run "Adding deb.sury.org PHP repo (${OS_CODENAME})" bash -c "
-                        apt-get install -y apt-transport-https lsb-release ca-certificates curl gnupg &&
-                        curl -sSLo /usr/share/keyrings/deb.sury.org-php.gpg https://packages.sury.org/php/apt.gpg &&
-                        echo 'deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main' > /etc/apt/sources.list.d/sury-php.list &&
-                        apt-get update -y"; then
-                        repo_added=1
-                    fi
-                else
-                    warn "deb.sury.org publishes no PHP packages for Debian ${OS_CODENAME} yet"
-                fi
-            elif [ "$OS_ID" = "ubuntu" ] && [ -n "$OS_CODENAME" ]; then
-                if curl -sfI --max-time 15 "https://ppa.launchpadcontent.net/ondrej/php/ubuntu/dists/${OS_CODENAME}/Release" > /dev/null 2>&1; then
-                    if run "Adding ppa:ondrej/php (${OS_CODENAME})" bash -c "
-                        apt-get install -y software-properties-common &&
-                        add-apt-repository -y ppa:ondrej/php &&
-                        apt-get update -y"; then
-                        repo_added=1
-                    fi
-                else
-                    warn "ppa:ondrej/php publishes no packages for Ubuntu ${OS_CODENAME} yet"
-                fi
-            fi
-
-            if [ "$repo_added" = "1" ] && apt_has_candidate "php${FALLBACK_VER}-fpm"; then
-                if install_php_set "php${FALLBACK_VER}"; then
-                    PHP_VER="$FALLBACK_VER"
-                fi
-            fi
-            if [ -z "$PHP_VER" ] && [ "$repo_added" = "1" ]; then
-                cleanup_php_repo
-            fi
-        fi
-
-        if [ -n "$PHP_VER" ]; then
-            systemctl enable --now "php${PHP_VER}-fpm" > /dev/null 2>&1
-            log "PHP ${PHP_VER} installed with FPM"
-            svc_ok "PHP ${PHP_VER} (FPM)"
-        else
-            warn "PHP could not be installed — WordPress/PHP sites need it; retry later from Settings → Services"
-            svc_fail "PHP-FPM"
-        fi
-    else
-        # RHEL/Rocky/Fedora.
-        #
-        # SELECT THE MODULE STREAM FIRST. `dnf install php-fpm` with no stream
-        # enabled resolves to the NON-MODULAR base package — PHP 8.0.30 on
-        # Rocky 9, older than every stream the box offers (8.1/8.2/8.3) and
-        # end-of-life since November 2023 — and the install summary then
-        # cheerfully prints "PHP 8.0 (FPM)". Measured on a real box at s266,
-        # where this installer did exactly that.
-        #
-        # It also made the panel's own PHP installer unreachable: it checks
-        # whether PHP is already present, finds 8.0, and reports "already
-        # installed", so nothing ever offers the operator a supported version.
-        local php_stream
-        php_stream=$(dnf -q module list php 2>/dev/null \
-                     | awk '$1=="php" && $2 ~ /^[0-9]/ {print $2}' | sort -Vr | head -1)
-        if [ -n "$php_stream" ]; then
-            if dnf -y module enable "php:${php_stream}" > /dev/null 2>&1; then
-                info "Selected PHP ${php_stream} (module stream)"
-            else
-                warn "Could not enable the php:${php_stream} module stream — falling back to the distro default, which may be end-of-life"
-            fi
-        fi
-
-        # The extension names are passed as-is: several of them (php-curl,
-        # php-zip, php-sqlite3) are VIRTUAL provides satisfied by php-common
-        # rather than packages of their own, and dnf resolves those, so this
-        # list is not the all-or-nothing hazard the apt side has to guard
-        # against. Verified against a real dnf at s266.
-        if run "Installing PHP (distro packages)" pkg_install php-fpm php-cli php-common php-mysqlnd php-pgsql php-xml php-mbstring php-curl php-zip php-gd; then
-            systemctl enable --now php-fpm > /dev/null 2>&1
-            log "PHP installed with FPM"
-            svc_ok "PHP $(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null) (FPM)"
-        else
-            warn "PHP could not be installed — retry later from Settings → Services"
-            svc_fail "PHP-FPM"
-        fi
-    fi
-}
-
 install_recommended_services() {
     header "Recommended Services"
 
-    # Lite mode skips host PHP: on a phone
-    # that is exactly the heavyweight hosting piece the Lite profile
-    # drops (WordPress/PHP sites). The panel's Docker Apps,
-    # Databases and Backups paths do not need them. Non-lite installs
-    # are unchanged.
-    if [ "$DOCKPANEL_LITE" = "1" ]; then
-        log "Lite mode: skipping host PHP"
-    else
-        # PHP-FPM (needed for WordPress, PHP sites)
-        install_php
-    fi
+    # Host PHP was removed with the hosting backend (R8): PHP apps run as
+    # Docker containers. Nothing here installs it, in any mode.
 
     # Certbot (needed for SSL certificates)
     if ! command -v certbot &> /dev/null; then

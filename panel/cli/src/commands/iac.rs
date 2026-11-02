@@ -12,7 +12,16 @@ pub(crate) fn urlenc(s: &str) -> String {
 }
 
 pub async fn cmd_export(token: &str, output: Option<&str>) -> Result<(), String> {
-    let data = client::agent_get("/iac/export", token).await?;
+    let mut data = client::agent_get("/iac/export", token).await?;
+
+    // The agent export still scans the on-disk nginx/PHP surface, so it
+    // reports `sites` and `php` sections the hosting removal retired.
+    // Strip them here: the live sections (databases/apps/crons/firewall)
+    // serialize exactly as the agent returned them.
+    if let serde_json::Value::Object(map) = &mut data {
+        map.remove("sites");
+        map.remove("php");
+    }
 
     let yaml = serde_yaml_ng::to_string(&data)
         .map_err(|e| format!("Failed to serialize YAML: {e}"))?;
@@ -41,6 +50,23 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
 
     let desired: serde_json::Value = serde_yaml_ng::from_str(&yaml_content)
         .map_err(|e| format!("Invalid YAML: {e}"))?;
+
+    // Site/PHP hosting is no longer supported: those sections are ignored,
+    // in both modes. Say so up front — a silent ignore would let an operator
+    // believe the sites in this file were (re)created.
+    for key in ["sites", "php"] {
+        let non_empty = match desired.get(key) {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::Array(a)) => !a.is_empty(),
+            Some(serde_json::Value::Object(o)) => !o.is_empty(),
+            Some(_) => true,
+        };
+        if non_empty {
+            println!(
+                "\x1b[33m!\x1b[0m This file has a {key} section — site/PHP hosting is no longer supported; the section is ignored."
+            );
+        }
+    }
 
     // Get current state
     let current = client::agent_get("/iac/export", token).await?;

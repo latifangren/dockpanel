@@ -41,11 +41,15 @@ WP=panel/backend/src/routes/wordpress.rs
 RULES=panel/backend/src/routes/alerts.rs
 SETTINGS_RS=panel/backend/src/routes/settings.rs
 SETTINGS_TSX=panel/frontend/src/pages/Settings.tsx
+CHANNELS_TAB=panel/frontend/src/pages/settings/ChannelsTab.tsx  # R8: the Alert Behaviour grid moved here in the Settings split
 ALERTS_TSX=panel/frontend/src/pages/Alerts.tsx
 GUIDE=docs/guides/monitoring.md
 
-for f in "$NOTIF" "$ENGINE" "$HEALER" "$SCANNER" "$SEC_SCANS" "$IMG_SCANS" "$WP" "$RULES" "$SETTINGS_RS" \
-         "$SETTINGS_TSX" "$ALERTS_TSX" "$GUIDE"; do
+for f in "$NOTIF" "$ENGINE" "$HEALER" "$SCANNER" "$SEC_SCANS" "$IMG_SCANS" "$RULES" "$SETTINGS_RS" \
+         "$SETTINGS_TSX" "$CHANNELS_TAB" "$ALERTS_TSX" "$GUIDE"; do
+  # R8: routes/wordpress.rs deleted in R6 — the WP producer is retired. The
+  # wp_vuln_scan TYPE stays in both vocabularies (suppressing a stored value
+  # must keep working); its producer calls are tombstoned at A4 below.
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -66,7 +70,7 @@ BACK=$(sed -n '/^pub const SUPPRESSIBLE_ALERT_TYPES: &\[&str\] = &\[/,/^\];/p' "
 NBACK=$(grep -c . <<< "$BACK")
 
 # The tokens of the frontend grid, same treatment.
-FRONT=$(sed -n '/^const SUPPRESSIBLE_ALERT_TYPES: { key: string; label: string }\[\] = \[/,/^\];/p' "$SETTINGS_TSX" \
+FRONT=$(sed -n '/const SUPPRESSIBLE_ALERT_TYPES: { key: string; label: string }\[\] = \[/,/^\];/p' "$SETTINGS_TSX" \
         | grep -oE 'key: "[a-z_]+"' | grep -oE '"[a-z_]+"' | tr -d '"' | sort -u)
 NFRONT=$(grep -c . <<< "$FRONT")
 
@@ -97,7 +101,7 @@ fi
 # A3: the grid must RENDER from the constant. An inline array literal at the
 # JSX site is how the two halves drifted apart the first time, and it is
 # invisible to A2 — which would go on comparing a constant nothing renders.
-GRIDBLOCK=$(sed -n '/Alert Behaviour/,/GPU Alert Thresholds/p' "$SETTINGS_TSX")
+GRIDBLOCK=$(sed -n '/Alert Behaviour/,/GPU Alert Thresholds/p' "$CHANNELS_TAB")  # R8: grid moved to ChannelsTab in the Settings split
 NGRID=$(grep -c . <<< "$GRIDBLOCK")
 if [ "$NGRID" -ge 20 ]; then
   ok "A3-control the behaviour grid extracted — $NGRID lines"
@@ -133,7 +137,7 @@ fi
 BACKCOLS=$(awk '/pub async fn is_alert_enabled\(/{i=1} i{print} i && /^}$/{exit}' "$NOTIF" \
            | grep -oE '=> *"alert_[a-z_]+"' | grep -oE 'alert_[a-z_]+' | sort -u)
 NBC=$(grep -c . <<< "$BACKCOLS")
-MAPCOLS=$(sed -n '/^const RECORD_COLUMN_BY_TYPE: Record<string, string> = {/,/^};/p' "$SETTINGS_TSX" \
+MAPCOLS=$(sed -n '/const RECORD_COLUMN_BY_TYPE: Record<string, string> = {/,/^};/p' "$SETTINGS_TSX" \
           | grep -oE '"alert_[a-z_]+"' | tr -d '"' | sort -u)
 NMC=$(grep -c . <<< "$MAPCOLS")
 if [ "$NBC" -ge 7 ] && [ "$NMC" -ge 7 ]; then
@@ -162,8 +166,7 @@ PRODUCED=$( { calls "$ENGINE" fire_alert_with_retry
               calls "$SEC_SCANS" 'notifications::resolve_alert'
               calls "$IMG_SCANS" 'notifications::fire_alert'
               calls "$IMG_SCANS" 'notifications::resolve_alert'
-              calls "$WP" 'notifications::fire_alert'
-              calls "$WP" 'notifications::resolve_alert'; } 2>/dev/null \
+              } 2>/dev/null \
           | grep -oE '"[a-z][a-z_]{3,}"' | tr -d '"' \
           | grep -vE '^(critical|warning|info|all_channels)$' | sort -u )
 NPROD=$(grep -c . <<< "$PRODUCED")

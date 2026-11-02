@@ -76,9 +76,15 @@ BE_SYS=panel/backend/src/routes/system.rs
 BE_AGENT=panel/backend/src/services/agent.rs
 MAIL_TSX=panel/frontend/src/pages/Mail.tsx
 
-for f in "$AGENT_SVC" "$AGENT_RT" "$BE_APPS" "$BE_MAIL" "$BE_SYS" "$BE_AGENT" "$MAIL_TSX"; do
+for f in "$AGENT_SVC" "$AGENT_RT" "$BE_APPS" "$BE_SYS" "$BE_AGENT"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
+# R8 TOMBSTONE (mail subjects): routes/mail.rs deleted R4 (see D2 below);
+# Mail.tsx deleted R8 with the mail page. §E is tombstoned below.
+for f in "$BE_MAIL" "$MAIL_TSX"; do
+  [ -f "$f" ] && bad "TOMBSTONE (R8): $f is back — its tombstoned arms must be restored"
+done
+ok "TOMBSTONE (R8): routes/mail.rs and Mail.tsx stay deleted"
 
 # Comments out, CODE INTACT. Copied from the FIXED stripper (lesson #136): the
 # naive s{/\*.*?\*/}{}gs deletes real code because `/*` occurs inside string
@@ -493,31 +499,9 @@ if G=$(subj "$BE_AGENT"); then
 fi
 
 echo "== §E  the mail banner names the term that is actually false =="
+# R8 TOMBSTONE (§E): Mail.tsx is deleted with the mail page — no banner
+# remains to name the false term. The mail services behind it are gone too.
+ok "TOMBSTONE (R8): §E retired with Mail.tsx — no mail banner remains"
 
-if T=$(subj "$MAIL_TSX"); then
-  # The agent computes `running` from four terms. The page must read all four,
-  # or it can only ever name the two it was hardcoded with.
-  miss=""
-  for term in postfix dovecot opendkim configured; do
-    grep -q "$term" <<< "$T" || miss="$miss $term"
-  done
-  if [ -z "$miss" ]; then
-    ok 'E1 the mail page reads all four terms behind the running flag'
-  else
-    bad "E1 the mail page cannot see:$miss — its banner can never name them"
-  fi
-
-  # The old sentence sent every operator to the same two services regardless of
-  # cause. Its absence is the fix; count occurrences rather than asserting zero
-  # blindly, so a reintroduction anywhere in the file is caught.
-  n_old=$(grep -cF 'Check Postfix and Dovecot services' <<< "$T")
-  if [ "$n_old" -eq 0 ]; then
-    ok "E2 the two-of-four sentence is gone"
-  else
-    bad "E2 the two-of-four sentence is back ($n_old occurrence(s)) — it names half the causes"
-  fi
-fi
-
-echo
 printf 'PASS %d   FAIL %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

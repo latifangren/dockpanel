@@ -1,6 +1,17 @@
 # API Reference
 
-DockPanel exposes 840 REST endpoints (545 backend + 295 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+DockPanel exposes backend and agent REST endpoints. The tables below
+document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+
+> **Hosting families removed (R1–R7).** The Sites, Mail, DNS, CDN,
+> Reseller/WHMCS, Git Deploy, Migration wizard, WordPress Toolkit,
+> Deploy Approvals, site SSL, site crons and PHP families documented in
+> older versions of this file no longer exist: their route modules were
+> deleted and their tables dropped. Sections for them below have been
+> replaced with short removal notes. What survives in their place is
+> noted where it lives: ACME panel routes (`/api/ssl/*`), the TLS
+> certificate registry, app migrations (`/api/migrations/apps`), and the
+> backup orchestrator's database/volume kinds.
 
 ## Authentication
 
@@ -72,120 +83,28 @@ Get the authenticated user's profile.
 
 ---
 
-## Sites (70 endpoints)
+## Sites — removed
 
-### `POST /api/sites`
-Create a new site.
-
-```json
-{
-  "domain": "example.com",
-  "runtime": "php",
-  "php_version": "8.3",
-  "proxy_port": null,
-  "app_command": null,
-  "cms": "wordpress",
-  "site_title": "My Site",
-  "admin_email": "admin@example.com",
-  "admin_user": "admin",
-  "admin_password": "WpPass123!"
-}
-```
-
-**Runtimes**: `static`, `php`, `proxy`, `node`, `python`
-**CMS options**: `wordpress`, `laravel`, `drupal`, `joomla`, `symfony`, `codeigniter`
-
-### `GET /api/sites`
-List all sites for the authenticated user.
-
-### `GET /api/sites/{id}`
-Get site details.
-
-### `DELETE /api/sites/{id}`
-Delete site and all associated resources (database containers, nginx config, SSL, crons, backups).
-
-### Files
-
-| Method | Path | Body |
-|--------|------|------|
-| GET | `/api/sites/{id}/files?path=.` | List directory |
-| GET | `/api/sites/{id}/files/read?path=index.html` | Read file content |
-| PUT | `/api/sites/{id}/files/write` | `{ "path": "file.txt", "content": "..." }` |
-| POST | `/api/sites/{id}/files/create` | `{ "path": "dir", "is_dir": true }` |
-| POST | `/api/sites/{id}/files/rename` | `{ "from": "old.txt", "to": "new.txt" }` |
-| DELETE | `/api/sites/{id}/files?path=file.txt` | Delete file |
-| POST | `/api/sites/{id}/files/upload` | Upload a file — JSON body, `content` base64-encoded, 1.5 MB limit |
-| GET | `/api/sites/{id}/files/download?path=file.txt` | Download file |
-
-### Backups
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/sites/{id}/backups` | Create backup |
-| GET | `/api/sites/{id}/backups` | List backups |
-| POST | `/api/sites/{id}/backups/{backup_id}/restore` | Restore backup |
-| DELETE | `/api/sites/{id}/backups/{backup_id}` | Delete backup |
-| GET | `/api/sites/{id}/backup-schedule` | Get schedule |
-| PUT | `/api/sites/{id}/backup-schedule` | Set schedule |
-
-### Crons
-
-| Method | Path | Body |
-|--------|------|------|
-| POST | `/api/sites/{id}/crons` | `{ "schedule": "*/5 * * * *", "command": "echo hi" }` |
-| GET | `/api/sites/{id}/crons` | List crons |
-| PUT | `/api/sites/{id}/crons/{cron_id}` | Update cron |
-| DELETE | `/api/sites/{id}/crons/{cron_id}` | Delete cron |
-| POST | `/api/sites/{id}/crons/{cron_id}/run` | Run immediately |
-
-### SSL
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/sites/{id}/ssl` | Provision Let's Encrypt cert |
-| GET | `/api/sites/{id}/ssl` | Get SSL status, including who issued the certificate |
-| POST | `/api/sites/{id}/ssl/upload` | Upload custom certificate |
-
-`GET /api/sites/{id}/ssl` returns `provenance`, one of:
-
-| Value | Meaning |
-|-------|---------|
-| `dockpanel` | Issued by Let's Encrypt, so DockPanel issued it and renews it |
-| `foreign` | Issued by somebody else; `issuer` names them, and DockPanel will not renew it |
-| `unknown` | No answer to act on — the agent was unreachable, or the site is served by a certificate stored under its zone's name rather than its own |
-
-⛔ `unknown` must never be rendered as a CA name. It is what an unreachable agent
-returns, and a certificate that is real and healthy sits behind it.
-
-### Other site endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| PUT | `/api/sites/{id}/php` | Switch PHP version |
-| PUT | `/api/sites/{id}/limits` | Set rate limits, upload size, PHP workers |
-| GET | `/api/sites/{id}/provision-log` | SSE stream of provisioning progress |
-| POST | `/api/sites/{id}/clone` | Clone site |
-| GET/PUT | `/api/sites/{id}/env` | Environment variables |
-| GET | `/api/sites/{id}/health` | HTTP health check |
-| GET | `/api/sites/{id}/stats` | Bandwidth/traffic stats |
-| GET | `/api/sites/{id}/access-logs` | Nginx access logs |
-| GET | `/api/sites/{id}/php-errors` | PHP error log |
-| POST/GET | `/api/sites/{id}/redirects` | URL redirects |
-| POST/GET | `/api/sites/{id}/password-protect` | HTTP basic auth |
-| POST/GET | `/api/sites/{id}/aliases` | Domain aliases |
-| POST/GET/DELETE | `/api/sites/{id}/staging` | Staging environments |
-| GET/POST | `/api/sites/{id}/wordpress/*` | WordPress management |
-
----
+The `/api/sites*` family (sites, site files, site backups, site crons,
+site SSL, staging, WordPress-per-site) was deleted in R3
+(`routes/sites.rs`, `routes/staging.rs`, `routes/wordpress.rs`,
+`routes/deploy.rs`, `routes/crons.rs`, `routes/files.rs`,
+`routes/backups.rs`, and the site half of `routes/ssl.rs`), and the
+`sites` table was dropped in R7. Every route in the old section answers
+404. The surviving certificate surface is the ACME panel routes (see
+*ACME panel* under TLS below) and the TLS certificate registry;
+surviving backup is database/volume only (see *Backup Orchestrator*).
 
 ## Databases (14 endpoints)
 
 ### `POST /api/databases`
-Create a MySQL or PostgreSQL database in a Docker container.
+Create a MySQL or PostgreSQL database in a Docker container, under a
+stack. A database is created only under a stack (`stack_id` is required;
+`site_id` died with the `sites` table in R7).
 
 ```json
 {
-  "site_id": "uuid",
+  "stack_id": "uuid",
   "name": "mydb",
   "engine": "postgres"
 }
@@ -355,61 +274,33 @@ beside the per-domain tree; the panel keeps the alias and the metadata. Administ
 | PUT | `/api/tls-certificates/{id}` | Replace the pair behind an alias; refused if the new certificate stops covering a domain a stack serves under it |
 | DELETE | `/api/tls-certificates/{id}` | Remove it; 409 naming the stacks while any still uses it |
 
----
+### ACME panel (4 endpoints)
 
-## Git Deploy (16 endpoints)
-
-### `POST /api/git-deploys`
-Create a git deployment.
-
-```json
-{
-  "name": "my-app",
-  "repo_url": "https://github.com/user/repo.git",
-  "branch": "main",
-  "domain": "app.example.com",
-  "container_port": 3000,
-  "auto_deploy": true,
-  "build_context": ".",
-  "preview_ttl_hours": 24
-}
-```
-
-### `POST /api/git-deploys/{id}/deploy`
-Trigger a build + deploy. Returns `202` in **two different shapes**, and a client that
-reads only `deploy_id` will treat the second as a silent success:
-
-```json
-{ "deploy_id": "…", "message": "Deployment started" }
-```
-The build has started. Stream it via `GET /api/git-deploys/deploy/{deploy_id}/log` (SSE).
-
-```json
-{ "status": "pending_approval", "message": "Deploy requires approval from another admin …" }
-```
-The deployment has `deploy_protected` set, so **nothing was built**. A request was filed
-and a different administrator must resolve it — see *Deploy Approvals* below. There is no
-`deploy_id`, and none exists until the approval is granted. Filing a request is
-idempotent: a deployment may have only one waiting at a time, and a repeat call says so
-rather than queueing a second.
+The panel half of ACME — profiles and contact details for the
+certificates the panel orders for stacks and itself. These are the only
+`/api/ssl/*` routes left; the site provisioning/renewal/revoke routes
+that used to live beside them were deleted in R3. The agent side
+(`/ssl/certificates`, `/ssl/status/{domain}`, `/ssl/profiles`,
+`/ssl/{domain}/renewal-info`, `/ssl/{domain}/renew`) is a separate,
+agent-authenticated surface.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/git-deploys` | List deployments |
-| GET | `/api/git-deploys/{id}` | Details |
-| PUT | `/api/git-deploys/{id}` | Update config |
-| DELETE | `/api/git-deploys/{id}` | Remove |
-| POST | `/api/git-deploys/{id}/keygen` | Generate SSH deploy key |
-| GET | `/api/git-deploys/{id}/history` | Deploy history |
-| POST | `/api/git-deploys/{id}/rollback/{history_id}` | Rollback to version |
-| GET | `/api/git-deploys/{id}/logs` | Container logs |
-| POST | `/api/git-deploys/{id}/start` | Start container |
-| POST | `/api/git-deploys/{id}/stop` | Stop |
-| POST | `/api/git-deploys/{id}/restart` | Restart |
-| GET | `/api/git-deploys/{id}/previews` | Preview environments |
-| DELETE | `/api/git-deploys/{id}/previews/{preview_id}` | Delete preview |
+| GET | `/api/ssl/profiles` | List ACME profiles |
+| GET/POST | `/api/ssl/contact-email` | Read/set the ACME contact email |
+| POST | `/api/ssl/default-profile` | Set the default ACME profile |
+| GET | `/api/preflight/dns` | DNS preflight check for a domain before issuance |
 
 ---
+
+## Git Deploy — removed
+
+The `/api/git-deploys*` family was deleted in R5 (`routes/git_deploys.rs`,
+`services/deploy_scheduler.rs`, `services/preview_cleanup.rs`, agent
+`git_build`), and the `git_deploys`/`deploy_approvals` tables were dropped
+in R7. Deploy-from-git, preview environments and deploy approvals no
+longer exist. Code is deployed as Docker apps / Compose stacks instead
+(see *Docker Apps* / *Docker Compose Stacks*).
 
 ## Monitoring (13 endpoints)
 
@@ -447,49 +338,18 @@ Create an uptime monitor.
 
 ---
 
-## DNS (12 endpoints)
+## DNS — removed
 
-### `POST /api/dns/zones`
-Create a DNS zone.
-
-```json
-{
-  "domain": "example.com",
-  "provider": "cloudflare",
-  "cf_zone_id": "...",
-  "cf_api_token": "..."
-}
-```
-
-**Providers**: `cloudflare`, `powerdns`
-
-### `POST /api/dns/zones/{id}/records`
-Add a DNS record.
-
-```json
-{
-  "type": "A",
-  "name": "@",
-  "content": "1.2.3.4",
-  "ttl": 3600,
-  "proxied": true
-}
-```
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/dns/zones` | List zones |
-| DELETE | `/api/dns/zones/{id}` | Delete zone |
-| GET | `/api/dns/zones/{id}/records` | List records |
-| PUT | `/api/dns/zones/{id}/records/{record_id}` | Update record |
-| DELETE | `/api/dns/zones/{id}/records/{record_id}` | Delete record |
-| POST | `/api/dns/propagation` | Check propagation |
-| POST | `/api/dns/health-check` | DNS health check |
-| GET | `/api/dns/zones/{id}/dnssec` | DNSSEC status |
-| GET | `/api/dns/zones/{id}/changelog` | Record change history |
-| GET | `/api/dns/zones/{id}/analytics` | Query volume |
-
----
+The `/api/dns/*` family was deleted in R4 (`routes/dns.rs`, agent
+PowerDNS installer functions), and the `dns_zones` table was dropped in
+R7. DNS zones, records, propagation checks and DNSSEC no longer exist in
+the panel. The only DNS-shaped route left is the ACME DNS preflight check
+(`GET /api/preflight/dns`); it checks a domain, it does not manage DNS.
+The `pdns_api_url`/`pdns_api_key` settings keys were removed from the
+settable settings surface in R8 (no code reads them since the PowerDNS
+installer and DNS-01 issuance died in R4/R6). Rows stored by older
+installs are still masked on read and re-keyed by the credential sweep,
+so they cannot leak — but they configure nothing.
 
 ## Security (23 endpoints)
 
@@ -536,41 +396,20 @@ Add a DNS record.
 
 ---
 
-## Mail (39 endpoints)
+## Mail — removed
 
-### `POST /api/mail/install`
-Install Postfix + Dovecot + OpenDKIM. **Admin only.**
+The `/api/mail/*` family was deleted in R4 (`routes/mail.rs`, agent
+`routes/mail.rs`/`routes/smtp.rs`), and the `mail_domains` table was
+dropped in R7. Mail domains, mailboxes, queue, spam, webmail, relay and
+mail TLS no longer exist in the panel.
 
-### `POST /api/mail/domains`
-Add a mail domain.
-
-### Key mail endpoints
-
-| Category | Endpoints |
-|----------|-----------|
-| Domains | CRUD `/api/mail/domains`, `/api/mail/domains/{id}` |
-| Accounts | CRUD `/api/mail/domains/{id}/accounts` |
-| Aliases | CRUD `/api/mail/domains/{id}/aliases` |
-| DNS | `/api/mail/domains/{id}/dns`, `/api/mail/domains/{id}/dns-check` |
-| Queue | GET `/api/mail/queue`, POST `flush`, DELETE `{queue_id}` |
-| Spam | `/api/mail/rspamd/install`, `status`, `toggle` |
-| Webmail | `/api/mail/webmail/install`, `status`, `remove` |
-| Relay | `/api/mail/relay/configure`, `status`, `remove` |
-| TLS | `/api/mail/tls/status`, `enforce` |
-| Rate limit | `/api/mail/rate-limit/set`, `status`, `remove` |
-| Logs | GET `/api/mail/logs` |
-| Storage | GET `/api/mail/storage` |
-| Backup | POST `/api/mail/backup`, GET `backups`, POST `restore` |
-| Reputation | GET `/api/mail/blacklist-check` |
-
-**Account passwords** are hashed with **Argon2id** and stored in Dovecot's
-`{ARGON2ID}` scheme (since v2.13.1). Accounts created before v2.13.1 were stored
-with a hash Dovecot could not verify — **reset each mailbox's password once**
-after upgrading so login works. Address fields (e-mail, alias source/destination,
-catch-all, forward-to) are validated against a strict character set and return
-`400` on invalid input.
-
----
+What survives is **outgoing notification mail only**: `services/email.rs`
+sends via an external SMTP server configured with the `smtp_*` settings
+keys (host, port, username, password, from, encryption) using lettre —
+it is not a mail endpoint, and there is no `/api/mail` prefix and no
+`POST /api/settings/smtp/test` (the agent msmtp test handler was deleted
+in R4). Do not confuse the two: configuring `smtp_*` lets the panel send
+alert mail; it does not host mail.
 
 ## Servers (8 endpoints)
 
@@ -646,24 +485,14 @@ Create a webhook integration.
 | POST | `/api/teams/accept` | Accept invitation |
 | PUT/DELETE | `/api/teams/{id}/members/{member_id}` | Update/remove member |
 
-### Resellers (14) — Admin creates, reseller manages
-The `/api/resellers` family is admin-only and is driven by **Admin → Resellers**.
-The `/api/reseller/*` family answers for the calling reseller's own tenant and
-refuses an administrator, who has no tenant — use `/api/resellers/{id}` instead.
+### Resellers — removed
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET/POST | `/api/resellers` | List/create reseller profiles |
-| GET/PUT/DELETE | `/api/resellers/{id}` | Manage profile |
-| GET/POST/DELETE | `/api/resellers/{id}/servers` | Server allocation |
-| GET | `/api/reseller/dashboard` | Reseller's dashboard |
-| GET/POST/PUT/DELETE | `/api/reseller/users` | Reseller's sub-users |
-
-`POST /api/resellers` promotes an **existing** account and takes its `user_id`. It
-refuses an administrator (400) and an account that already has a profile (409). An
-account that kept a profile through an earlier demotion is restored with its stored
-quotas rather than re-created. `PUT` is COALESCE on every column, so a `null` field
-leaves the stored value unchanged — there is no way to clear one through this API.
+The `/api/resellers` and `/api/reseller/*` families were deleted in R2
+(`routes/resellers.rs`, `routes/reseller_dashboard.rs`). The `reseller`
+role no longer gates anything: accounts that still store the role are
+mapped to `user` at the auth boundary, and the reseller tables/columns
+were dropped or renamed in R7. There is no reseller dashboard, tenant,
+quota or sub-user surface left.
 
 ### API Keys (4)
 
@@ -699,7 +528,6 @@ leaves the stored value unchanged — there is no way to clear one through this 
 |--------|------|---------|
 | GET/PUT | `/api/settings` | Panel settings |
 | GET | `/api/settings/health` | Health check (DB + agent) |
-| POST | `/api/settings/smtp/test` | Test email delivery |
 | POST | `/api/settings/test-webhook` | Test Slack/Discord webhook |
 | GET | `/api/settings/export` | Export config as JSON |
 | POST | `/api/settings/import` | Import config |
@@ -731,21 +559,23 @@ leaves the stored value unchanged — there is no way to clear one through this 
 | POST | `/api/terminal/share` | Create shareable terminal link |
 | GET | `/api/terminal/shared/{id}` | View shared terminal |
 
-### Migration (6)
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/migration/analyze` | Analyze cPanel/Plesk/HestiaCP backup |
-| GET | `/api/migration` | List migrations |
-| GET | `/api/migration/{id}` | Migration details |
-| POST | `/api/migration/{id}/import` | Start import |
-| GET | `/api/migration/{id}/progress` | Import progress (SSE) |
-| DELETE | `/api/migration/{id}` | Delete migration |
+### Migration wizard — removed; app migrations survive
 
-### WordPress Toolkit (2 global)
+The singular `/api/migration/*` wizard (cPanel/Plesk/HestiaCP import) was
+deleted in R5 (`routes/migration.rs`). What survives under a different,
+plural path is **app migrations** — the generic migration runner moved
+verbatim out of the deleted WHMCS module in R2:
+
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/wordpress/sites` | Scan all sites for WordPress |
-| POST | `/api/wordpress/bulk-update` | Update plugins/themes across sites |
+| GET/POST | `/api/migrations/apps` | List / start app migrations |
+| GET | `/api/migrations/apps/{id}` | Migration status |
+
+### WordPress Toolkit — removed
+
+The `/api/wordpress/*` endpoints (scan, bulk update) were deleted in R3
+with `routes/wordpress.rs`. No WordPress management endpoint survives;
+see `docs/guides/wordpress.md` for what replaced the flow.
 
 ### Other
 | Method | Path | Purpose |
@@ -765,7 +595,7 @@ leaves the stored value unchanged — there is no way to clear one through this 
 | GET | `/api/ws/metrics` | WebSocket live metrics |
 | GET | `/api/activity` | Activity audit log |
 | GET | `/api/system-logs` | System event log |
-| GET/POST | `/api/services/*` | Service installers (PHP, Certbot, UFW, Fail2Ban) |
+| GET/POST | `/api/services/*` | Service installers (Certbot, UFW, Fail2Ban, Redis, Node.js, sshpass, Cloudflare Tunnel — no PHP/Composer/WAF/PowerDNS; those were removed in R4/R6) |
 
 ---
 
@@ -789,7 +619,7 @@ leaves the stored value unchanged — there is no way to clear one through this 
 | POST | `/api/backup-orchestrator/volume-backups/{id}/restore` | Restore volume backup |
 | GET | `/api/backup-orchestrator/verifications` | List verifications |
 | POST | `/api/backup-orchestrator/verify` | Verify the most recent backups |
-| POST | `/api/backup-orchestrator/drill` | Trigger end-to-end drill (site/db/volume) — async, returns 202 |
+| POST | `/api/backup-orchestrator/drill` | Trigger end-to-end drill (database/volume) — async, returns 202 |
 | GET | `/api/backup-orchestrator/drills` | List drills (paginated `{items, total}`) |
 
 ---
@@ -838,7 +668,6 @@ leaves the stored value unchanged — there is no way to clear one through this 
 | PUT | `/api/secrets/vaults/{id}/secrets/{sid}` | Update secret |
 | DELETE | `/api/secrets/vaults/{id}/secrets/{sid}` | Delete secret |
 | GET | `/api/secrets/vaults/{id}/secrets/{sid}/versions` | Version history |
-| POST | `/api/secrets/vaults/{id}/inject/{site_id}` | Inject a vault's secrets into a site's env |
 | GET | `/api/secrets/vaults/{id}/pull` | Pull secrets (CLI) |
 | GET | `/api/secrets/vaults/{id}/export` | Export vault |
 | POST | `/api/secrets/vaults/{id}/import` | Import vault |
@@ -888,36 +717,10 @@ leaves the stored value unchanged — there is no way to clear one through this 
 
 ---
 
-## Deploy Approvals
+## Deploy Approvals — removed
 
-A Git deployment with `deploy_protected` set will not build when its owner asks. The
-request is filed here and a **different** administrator has to resolve it — the panel
-surfaces this as *Pending Approvals* on the Git Deploy page.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/deploy-approvals` | List pending approvals |
-| POST | `/api/deploy-approvals/{id}/approve` | Approve, and start the deploy |
-| POST | `/api/deploy-approvals/{id}/reject` | Reject, or withdraw your own |
-
-`GET /api/deploy-approvals` returns only requests whose deployment is **still** protected,
-on machines this administrator operates — this box, or a server they registered
-themselves. Each row carries `id`, `deploy_id`, `deploy_name`, `repo_url`, `branch`,
-`requested_by`, `requested_by_email`, `status` and `created_at`.
-
-`approve` answers `202` with a fresh `deploy_id` you can stream, and refuses with:
-
-| Code | When |
-|---|---|
-| `403` | you filed the request yourself |
-| `409` | the request is already resolved, the deployment is no longer protected, or a build is already running |
-| `404` | the request is not on a machine you operate |
-
-`reject` is terminal — the requester has to ask again. It carries **no** self-rejection
-rule, deliberately: withdrawing your own request is the only exit on an install with a
-single administrator, where nobody else can ever approve it.
-
----
+Deleted with Git Deploy in R5 (`deploy_approvals` table dropped in R7).
+There is no approval queue and no `/api/deploy-approvals` route.
 
 ## Panel Self-Update (v2.10.0+, Phase 4 W4)
 
@@ -1083,16 +886,11 @@ comparable. Computed on demand (no background scan). Admin only.
 | GET | `/api/drift?reference=<uuid>&targets=<uuid,uuid>` | Drift report against the reference server |
 
 `reference` defaults to the local server; `targets` defaults to every other
-server. Four entities are compared, each in its most meaningful form:
-
-- **alert_rules** — one row per server, whole-row posture diff (the flagship
-  signal: "monitoring is not identical").
-- **sites** — per-domain inventory asymmetry (present on one server, not the
-  other) plus per-site config diffs (`waf_mode`, `ssl_enabled`, `php_version`,
-  caches, limits, …) for domains present on both.
-- **crons** — per `(domain, command)` job parity.
-- **backup_coverage** — per-server summary: how many sites have an enabled
-  backup schedule, how many are unprotected, how many destinations exist.
+server. **One entity is compared: `alert_rules`** — one row per server,
+whole-row posture diff. The `sites`, `crons` and `backup_coverage`
+entities died in R7 with the `sites`, `crons` and `backup_schedules`
+tables; the collection comparator survives in code for a future entity,
+but no collection entity is compared today.
 
 Secret-bearing fields (`notify_slack_url`, `notify_discord_url`) are compared by
 **presence only** — the report shows `set`/`unset`, never the value.

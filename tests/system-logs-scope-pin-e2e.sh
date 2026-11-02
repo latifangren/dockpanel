@@ -193,7 +193,10 @@ mapfile -t WRITTEN < <(
     '
   done | sort -u
 )
-if [ "${#WRITTEN[@]}" -lt 8 ]; then
+# R8: floor 8 -> 7. Seven sources are written now; the eighth was a
+# hosting-era writer (site/WordPress/deploy) deleted in R1–R6. The seven
+# extracted here are enumerated from the writers themselves, not typed.
+if [ "${#WRITTEN[@]}" -lt 7 ]; then
   bad "S9 only ${#WRITTEN[@]} written sources extracted — the enumeration is implausible, refusing to judge"
 else
   OFFERED=$(perl -0777 -ne 'print $1 if /const SOURCES = \[(.*?)\]/s' "$UI")

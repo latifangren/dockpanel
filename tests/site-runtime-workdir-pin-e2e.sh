@@ -57,9 +57,16 @@ OWN=panel/agent/src/services/ownership.rs
 ANR=panel/agent/src/routes/nginx.rs
 BSITES=panel/backend/src/routes/sites.rs
 
-for f in "$AP" "$NGX" "$OWN" "$ANR" "$BSITES"; do
+for f in "$AP" "$NGX" "$OWN" "$ANR"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
+# R8 TOMBSTONE: routes/sites.rs deleted in R3 — the backend half of this pin
+# (C2) retired with it; the agent half (§A/§B/C1) stays live. Absence asserted:
+if [ -f "$BSITES" ]; then
+  bad "TOMBSTONE (R8): routes/sites.rs is back — C2 must be restored"
+else
+  ok "TOMBSTONE (R8): routes/sites.rs stays deleted — the backend optimize-images door is retired"
+fi
 
 # Comments out, CODE INTACT. Copied from the FIXED stripper (lesson #136) — the
 # original opened a block comment on a `/*` inside a string literal and ran to
@@ -112,13 +119,13 @@ echo "site-runtime-workdir-pin-e2e — s370 / v2.123.0"
 echo "=============================================="
 echo
 echo "§0 harness self-check"
-stripper_self_check "$AP" "$NGX" "$OWN" "$ANR" "$BSITES"
+stripper_self_check "$AP" "$NGX" "$OWN" "$ANR"  # R8: BSITES deleted
 
 AP_S=$(subj "$AP")         || { bad "cannot read $AP"; AP_S=""; }
 NGX_S=$(subj "$NGX")       || { bad "cannot read $NGX"; NGX_S=""; }
 OWN_S=$(subj "$OWN")       || { bad "cannot read $OWN"; OWN_S=""; }
 ANR_S=$(subj "$ANR")       || { bad "cannot read $ANR"; ANR_S=""; }
-BSITES_S=$(subj "$BSITES") || { bad "cannot read $BSITES"; BSITES_S=""; }
+BSITES_S=""  # R8: routes/sites.rs deleted; C2 tombstoned below
 
 echo
 echo "§A the process starts where its code is"
@@ -165,15 +172,17 @@ fi
 
 # A4 — the blast radius. create_app_service is reached only for node|python, so
 # deriving from the runtime can never move a static or php site off public/.
-CALLWIN=$(flat "$(grep -B 6 -E 'create_app_service\(' <<< "$ANR_S" || true)")
-if [ -n "$CALLWIN" ]; then
-  if has "$CALLWIN" 'runtime == "node"' && has "$CALLWIN" 'runtime == "python"'; then
-    ok "A4 the managed-process unit is still written only for node and python"
-  else
-    bad "A4 create_app_service is reached for other runtimes now — the derived path must be re-judged"
-  fi
+# R8 TOMBSTONE (A4): create_app_service has NO callers left (0 occurrences
+# repo-wide outside its own definition and doc comment) — put_site died with
+# the site doors, and the function is retained dead-code. The blast-radius
+# question is vacated: nothing reaches it for ANY runtime. A1/A2 above still
+# pin the derivation on the function itself; if a caller returns, A4 must
+# return with it.
+CALLERS=$(grep -rn 'create_app_service' panel/agent/src --include='*.rs' | grep -v 'fn create_app_service' | grep -v '//' | grep -c . || true)
+if [ "$CALLERS" -gt 0 ]; then
+  bad "TOMBSTONE (R8): create_app_service gained a caller — A4 must be restored"
 else
-  skip "A4 — no create_app_service call site found in $ANR"
+  ok "TOMBSTONE (R8): A4 retired — create_app_service has no callers left"
 fi
 
 echo
@@ -233,16 +242,10 @@ fi
 # to be safe is also wide enough to read a sibling's payload and call it this
 # one's (p31). Proven necessary: the first cut of this arm used -A 14 and a
 # mutation deleting the runtime from a DIFFERENT handler left it green.
-BOI=$(flat "$(fnbody "$BSITES_S" "optimize_images")")
-if [ -n "$BOI" ]; then
-  if has "$BOI" '"runtime"'; then
-    ok "C2 the backend sends the site's runtime, so C1 has something to derive from"
-  else
-    bad "C2 the backend posts no runtime — the agent silently falls back and C1 measures nothing"
-  fi
-else
-  skip "C2 — no optimize-images call found in $BSITES"
-fi
+# R8 TOMBSTONE (C2): the backend optimize-images door died with
+# routes/sites.rs (R3) — no backend handler posts a runtime anymore, so the
+# reaches-arm has no live subject. C1 above still pins the agent side.
+ok "TOMBSTONE (R8): C2 retired with routes/sites.rs — no backend runtime post remains"
 
 echo
 echo "----------------------------------------------"

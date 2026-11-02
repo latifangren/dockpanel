@@ -41,6 +41,7 @@ G=/usr/bin/grep
 API=panel/backend/src/routes/docker_apps.rs
 APPS=panel/frontend/src/pages/Apps.tsx
 SETTINGS=panel/frontend/src/pages/Settings.tsx
+CHANNELS=panel/frontend/src/pages/settings/ChannelsTab.tsx  # R8: the alert-rule save block moved here
 ALERTS=panel/backend/src/routes/alerts.rs
 NOTIFY=panel/backend/src/services/notifications.rs
 MIGDIR=panel/backend/migrations
@@ -52,7 +53,9 @@ done
 
 # An arm that measures an empty subject prints green for every absence below, so
 # each subject is asserted before it is measured (lesson #143).
-for pair in "$API:2000" "$APPS:1500" "$SETTINGS:2500"; do
+# R8: SETTINGS 2500 -> 700 — the shell is 779 lines now; the settings
+# surface lives in the tab files (see §B re-aim to ChannelsTab).
+for pair in "$API:2000" "$APPS:1500" "$SETTINGS:700"; do
   f=${pair%:*}; min=${pair##*:}
   n=$($G -c '' "$f")
   [ "$n" -gt "$min" ] && ok "A0 subject extracted — $f is $n lines" \
@@ -146,11 +149,18 @@ else
       "fewer than 90 — the scan is broken, so A1 below measured nothing"
 fi
 
-if [ "${FK_VIOL:-1}" = "0" ]; then
-  ok "A1 every foreign key declares a delete action"
+# R8 TOMBSTONE (A1): the scan's one remaining violation is
+# deploy_approvals.approved_by — and the R7 terminal migration drops the
+# deploy_approvals table outright, so that FK can never fire. The arm is
+# retired as a tombstone that fails if ANY OTHER un-repaired FK appears
+# or if the drop disappears.
+VIOL_LIST=$(printf '%s' "$FK_REPORT" | $G -E '^  ' | tr -d ' ' | tr '\n' ' ')
+if [ "${FK_VIOL:-1}" = "1" ] && [ "$VIOL_LIST" = "deploy_approvals.approved_by " ] \
+   && $G -q 'DROP TABLE IF EXISTS deploy_approvals' "$MIGDIR/20260909000001_drop_hosting_schema.sql"; then
+  ok "TOMBSTONE (R8): A1 retired — the sole un-repaired FK belongs to deploy_approvals, dropped by the R7 terminal migration"
 else
-  bad "A1 every foreign key declares a delete action" \
-      "$FK_VIOL never repaired: $(printf '%s' "$FK_REPORT" | $G -E '^  ' | tr -d ' ' | tr '\n' ' ')"
+  bad "A1 every foreign key declares a delete action (or its table is dropped)" \
+      "$FK_VIOL never repaired: $VIOL_LIST"
 fi
 
 # A2: the specific table that made an account undeletable. Named as well as
@@ -173,7 +183,7 @@ echo "── B. A cleared notification destination is actually cleared ───
 
 # B1: ABSENCE arm. The three destination fields must reach the wire as the operator
 # left them. The null substitution is what the handler COALESCEs away.
-DEST_BLOCK=$(/usr/bin/sed -n '/await api.put("\/alert-rules"/,/muted_types/p' "$SETTINGS")
+DEST_BLOCK=$(/usr/bin/sed -n '/await api.put("\/alert-rules"/,/muted_types/p' "$CHANNELS")
 eq "B1 no destination field is nulled on its way to the handler" \
    "$(printf '%s' "$DEST_BLOCK" | $G -cE 'notify_(slack_url|discord_url|pagerduty_key): [A-Za-z]+ \|\| null')" "0"
 

@@ -1,95 +1,63 @@
 # Backups Guide
 
-## Create a Manual Backup
+> **Site backups are gone.** This guide used to describe backing up a
+> website — its files plus its databases — from a Sites page. The hosting
+> backend (sites, site backups, per-site schedules) was removed in R1–R7,
+> and the `sites`/`backup_schedules` tables were dropped. What survives is
+> backup of **databases and Docker volumes**: backup policies in the panel
+> (Backup Orchestrator), remote destinations, the panel's own database
+> dump, and the CLI commands below. Anything below that still says "site"
+> is describing an archive from an older install, not something you can
+> create now.
+
+## Create a Backup
 
 ### From the Panel
 
-1. Go to **Backups** in the sidebar
-2. Click **Create Backup**
-3. Select the site to back up
-4. Click **Create**
+1. Go to **Backup Manager** (backup policies) in the sidebar
+2. Create a policy covering the databases and/or volumes you want
+   protected, and pick a destination
+3. Run the policy, or let its schedule run it
 
-The backup contains the site's directory — its files — **and a dump of every database attached to
-the site**. It is saved as a single compressed tarball in `/var/backups/dockpanel/`.
-
-For a CMS such as WordPress, almost everything you think of as "the site" — posts, pages,
-comments, users, settings — lives in the database rather than in the files, so a backup that
-holds only files cannot bring the site back. Since v2.34.0 both halves travel in the same archive
-and are restored together.
-
-> **Backups made before v2.34.0 contain files only.** Nothing rewrites an archive that already
-> exists, so any backup taken by an earlier version holds no database. The Backups page marks
-> those **Files only**, and restoring one warns you before it starts. Take a fresh backup if you
-> want one that includes your content.
-
-The site's Nginx configuration is not in the tarball; the panel rewrites it from its own records.
-
-### What is inside the archive
-
-```
-./                             the site's document root, exactly as it is on disk
-.dockpanel-backup/manifest.json  what this archive holds
-.dockpanel-backup/db/*.sql.gz    one compressed dump per database
-```
-
-The `.dockpanel-backup` directory is DockPanel's own; it is extracted separately during a restore
-and never lands in your document root.
-
-A database that could not be dumped is **not** silently skipped: the backup reports which ones are
-missing, the Backups page shows the archive as incomplete, and a restore tells you before it runs.
+A policy covers databases and volumes only — `kind` is `database` or
+`volume`; `kind=site` is rejected. The backup destinations (S3-compatible
+or SFTP) configured under **Backup Manager > Destinations** receive the
+uploads; see *Configure S3 / Remote Destination* below.
 
 ### From the CLI
 
-```bash
-dockpanel backup create example.com
-```
-
-Sample output:
-
-```
-Creating backup for example.com...
-✓ Backup created
-  File:    example.com-20260320-143022.tar.gz
-  Size:    45.2 MB
-  Content: files only
-
-! This archive contains the site's files but NOT its databases.
-  The CLI talks to the agent directly and cannot resolve a site's databases.
-  Create the backup from the panel (or the panel API) to include them.
-```
-
-> **CLI backups are files only.** The CLI authenticates to the agent, and the agent has no access
-> to the panel's database records — it cannot know which databases belong to a site or hold their
-> credentials. Only the panel can assemble a complete backup.
-
-### List Backups
+Database and volume backups are separate commands — there is no single
+"back up everything" command and no restore or delete in the CLI:
 
 ```bash
-dockpanel backup list example.com
+# Database: container name + database name; password via stdin
+echo -n "s3cureP@ss" | dockpanel backup db-create dockpanel-db-blog_db blog_db --db-type postgres --password-stdin
+dockpanel backup db-list blog_db
+
+# Volume: volume name + owning container name
+dockpanel backup vol-create mydata dockpanel-app-myapp
+dockpanel backup vol-list dockpanel-app-myapp
+
+# Verify one backup, and show local backup-file counts
+dockpanel backup verify --type database blog_db blog_db-20260320-143022.sql.gz
+dockpanel backup health
 ```
 
-Sample output:
-
-```
-FILENAME                                    SIZE      DATE
-example.com_2026-03-20_143022.tar.gz        45.2 MB   2026-03-20 14:30
-example.com_2026-03-19_020000.tar.gz        44.8 MB   2026-03-19 02:00
-example.com_2026-03-18_020000.tar.gz        44.1 MB   2026-03-18 02:00
-```
+Restore and delete of database/volume backups are panel operations
+(Backup Orchestrator endpoints); the CLI does not expose them.
 
 ## Set Up Scheduled Backups
 
-1. Go to **Backups** in the sidebar
-2. Click the **Schedules** tab
-3. Click **Create Schedule**
-4. Configure:
-   - **Site**: Select the site (or "All sites")
-   - **Frequency**: Daily, weekly, or custom cron expression
-   - **Time**: When to run (e.g., 02:00)
-   - **Retention**: Number of backups to keep (older ones are automatically deleted)
-5. Click **Save**
+Scheduled backup lives in **backup policies**, not per-site schedules
+(the `backup_schedules` table is gone):
 
-Scheduled backups run in the background. The backup scheduler checks for pending jobs at the configured interval.
+1. Go to **Backup Manager** in the sidebar
+2. Create or edit a policy
+3. Configure which databases/volumes it covers, the frequency, and the
+   retention
+4. Save
+
+The policy executor runs policies on their schedule in the background.
 
 ## Configure S3 / Remote Destination
 
@@ -114,7 +82,7 @@ Use **Edit** to change a destination later. Secret fields come back masked as
 value to rotate it. The transport (S3 or SFTP) cannot be changed on an existing
 destination — delete it and add a new one instead.
 
-Once a destination is configured, edit your backup schedule and select it as the remote destination. Backups will be uploaded after creation.
+Once a destination is configured, attach it to a backup policy. Backups will be uploaded after creation.
 
 ### Provider-specific endpoints
 
@@ -128,62 +96,24 @@ Once a destination is configured, edit your backup schedule and select it as the
 
 ## Restore from Backup
 
-### From the Panel
+Restore of a database or volume backup is a panel operation: find the
+backup in the Backup Orchestrator lists and restore it from there. A
+database restore loads the dump over the live database; the current state
+is not automatically backed up before a restore — take a fresh backup
+first if you want a safety net.
 
-1. Go to **Backups**
-2. Find the backup you want to restore
-3. Click **Restore**
-4. Confirm the restore
-
-The restore replaces the site's files with the backup contents, then loads each database dump the
-archive carries **over the live database**, dropping and recreating its tables. The current state
-is not automatically backed up before a restore — create a manual backup first if you want a
-safety net.
-
-Files are restored first and databases last. A database load that fails rolls back, so the live
-data is left as it was rather than half-overwritten.
-
-Two outcomes are reported honestly rather than as a success:
-
-- **The archive has no database** (it was made before v2.34.0, or its dump failed) and the site
-  has one. You are told before the restore starts that the content will not come back.
-- **The files were restored but a database could not be.** This is called out as a failure, not a
-  success with a footnote — the site is at that point running restored files against its previous
-  content, and you need to know that.
-
-### From the CLI
-
-```bash
-dockpanel backup restore example.com example.com_2026-03-20_143022.tar.gz
-```
-
-Sample output:
-
-```
-Restoring example.com from example.com_2026-03-20_143022.tar.gz...
-✓ Backup restored
-  Content: files only (this archive holds no database)
-```
-
-> **The CLI can restore databases too — if a panel API key is configured.** `backup restore`
-> prefers a panel-API-authenticated path (`Settings → API Keys`, saved to
-> `/etc/dockpanel/backend.token`) that restores both files and databases through the same route
-> the panel UI's own Restore button uses. Without a configured key, it falls back to the older
-> agent-direct path (files only): the agent has no access to the site's database credentials, so
-> restoring an archive that carries database dumps **fails** rather than restoring the files and
-> reporting success. Mint a key from the panel, or restore from the panel UI, to include databases.
+> **Old site archives.** A tarball made by an older install that holds a
+> site's files (and, since v2.34.0, its database dumps) can no longer be
+> restored through the panel — the site it belonged to has no record left
+> to restore into. Its database dumps remain ordinary SQL dumps: extract
+> them and import them into the database container by hand (see *Manual
+> database-only backup* below, in reverse), or from the **Databases**
+> page's import control.
 
 ## Delete a Backup
 
-### From the CLI
-
-```bash
-dockpanel backup delete example.com example.com_2026-03-18_020000.tar.gz
-```
-
-### From the Panel
-
-Click the delete icon next to any backup in the list.
+Delete a database or volume backup from the panel (Backup Orchestrator
+lists). The CLI has no delete command.
 
 ## Database Backups
 
@@ -193,9 +123,9 @@ DockPanel runs an automatic daily database backup cron job for the panel's own P
 - **Retention**: 7 days (older backups are automatically deleted)
 - **Location**: `/var/backups/dockpanel/`
 
-This is separate from site backups, and it covers the panel's own database only — not your
-sites'. A site's database (its MySQL or PostgreSQL container) is not captured by either one, so
-back it up with the manual step below or from the **Databases** page.
+This covers the panel's own database only — not your databases. A
+database container is captured by a backup policy (above) or by the manual
+step below, or from the **Databases** page.
 
 ### Manual database-only backup
 

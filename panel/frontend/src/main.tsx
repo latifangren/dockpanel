@@ -83,32 +83,16 @@ const VerifyEmail = lazyRetry(() => import("./pages/VerifyEmail"));
 const Monitoring = lazyRetry(() => import("./pages/Monitoring"));
 
 // Lazy-loaded pages (split into separate chunks)
-const Sites = lazyRetry(() => import("./pages/Sites"));
-const SiteDetail = lazyRetry(() => import("./pages/SiteDetail"));
 const Databases = lazyRetry(() => import("./pages/Databases"));
 const Files = lazyRetry(() => import("./pages/Files"));
 const Terminal = lazyRetry(() => import("./pages/Terminal"));
-const Backups = lazyRetry(() => import("./pages/Backups"));
-const Crons = lazyRetry(() => import("./pages/Crons"));
-const Deploy = lazyRetry(() => import("./pages/Deploy"));
-const GitDeploys = lazyRetry(() => import("./pages/GitDeploys"));
-const Cdn = lazyRetry(() => import("./pages/Cdn"));
 const Projects = lazyRetry(() => import("./pages/Projects"));
-const NetworkingHub = lazyRetry(() => import("./pages/NetworkingHub"));
-const Dns = lazyRetry(() => import("./pages/Dns"));
-const WordPress = lazyRetry(() => import("./pages/WordPress"));
-const WordPressToolkit = lazyRetry(() => import("./pages/WordPressToolkit"));
 const Logs = lazyRetry(() => import("./pages/Logs"));
 const Apps = lazyRetry(() => import("./pages/Apps"));
 const Security = lazyRetry(() => import("./pages/Security"));
 const Settings = lazyRetry(() => import("./pages/Settings"));
 const Account = lazyRetry(() => import("./pages/Account"));
-const Mail = lazyRetry(() => import("./pages/Mail"));
 const Servers = lazyRetry(() => import("./pages/Servers"));
-const ResellerDashboard = lazyRetry(() => import("./pages/ResellerDashboard"));
-const MigrationWizard = lazyRetry(() => import("./pages/Migration"));
-const ResellerUsers = lazyRetry(() => import("./pages/ResellerUsers"));
-const Resellers = lazyRetry(() => import("./pages/Resellers"));
 const BackupOrchestrator = lazyRetry(() => import("./pages/BackupOrchestrator"));
 const PublicStatusPage = lazyRetry(() => import("./pages/PublicStatusPage"));
 const SecretsManager = lazyRetry(() => import("./pages/SecretsManager"));
@@ -138,23 +122,11 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/" element={<Dashboard />} />
               <Route path="/files" element={<Files />} />
               <Route path="/files/*" element={<Files />} />
-              <Route path="/sites" element={<Navigate to="/" replace />} />
-              <Route path="/sites/:id" element={<Navigate to="/" replace />} />
-              <Route path="/sites/:id/files" element={<Navigate to="/" replace />} />
-              <Route path="/sites/:id/backups" element={<Navigate to="/" replace />} />
-              <Route path="/sites/:id/crons" element={<Navigate to="/" replace />} />
-              <Route path="/sites/:id/deploy" element={<Navigate to="/" replace />} />
-              <Route path="/sites/:id/wordpress" element={<Navigate to="/" replace />} />
-              <Route path="/wordpress-toolkit" element={<Navigate to="/" replace />} />
               <Route path="/projects" element={<Navigate to="/" replace />} />
-              <Route path="/networking" element={<Navigate to="/" replace />} />
-              <Route path="/cdn" element={<Navigate to="/" replace />} />
-              <Route path="/dns" element={<Navigate to="/" replace />} />
               <Route path="/databases" element={<Navigate to="/" replace />} />
               <Route path="/terminal" element={<Terminal />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/apps" element={<Apps />} />
-              <Route path="/git-deploys" element={<Navigate to="/apps" replace />} />
               {/* B9: /integrations redirects to / (hosting-era tabs), so its
                   former aliases point at / directly instead of chaining
                   through a redirect that no longer lands anywhere. */}
@@ -166,12 +138,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/updates" element={<Navigate to="/system" replace />} />
               <Route path="/activity" element={<Navigate to="/logs?tab=audit" replace />} />
               <Route path="/system-logs" element={<Navigate to="/logs?tab=system" replace />} />
-              <Route path="/mail" element={<Navigate to="/" replace />} />
               <Route path="/servers" element={<Navigate to="/" replace />} />
-              <Route path="/migration" element={<Navigate to="/" replace />} />
-              <Route path="/reseller" element={<Navigate to="/" replace />} />
-              <Route path="/reseller/users" element={<Navigate to="/" replace />} />
-              <Route path="/resellers" element={<Navigate to="/" replace />} />
               <Route path="/users" element={<Users />} />
               <Route path="/container-policies" element={<Navigate to="/apps" replace />} />
               <Route path="/backup-orchestrator" element={<BackupOrchestrator />} />

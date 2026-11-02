@@ -4,6 +4,27 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Removed: hosting backend (slices R1–R8, issue #1)
+
+Backend hosting is deleted, not hidden: R1 shared-foundation decoupling,
+R2 CDN/reseller/WHMCS, R3 sites/WordPress/staging/deploy/site-SSL/site-crons/PHP,
+R4 mail/DNS, R5 git-deploy/migration wizard, R6 agent hosting surfaces,
+R7 terminal migration dropping the hosting tables (`sites`,
+`mail_domains`, `dns_zones`, `git_deploys`, `backup_schedules`, and
+related tables/columns), plus the CLI cleanup (only local `sites list`,
+`ssl status`, and database/volume backup commands survive). Kept: ACME
+panel routes, TLS certificate registry, notification SMTP
+(`services/email.rs`), `app_migrations`, and database/volume backup.
+R1–R7 and the CLI fix are pushed at `4fcec629`; the R8 working-tree work
+(dead frontend pages, `install_php` removal, docs, pin re-derivation) is
+not yet pushed or released at the time of this entry. The
+`pdns_api_url`/`pdns_api_key` settings keys were removed from the settable
+settings surface in R8 (no reader remains); rows stored by older installs
+stay masked and re-keyed by the credential sweep. No release tag has been
+cut for this removal yet.
+
 ## [2.242.1-lite.1]
 
 ### Fork release: DockPanel Lite for postmarketOS (first fork release)

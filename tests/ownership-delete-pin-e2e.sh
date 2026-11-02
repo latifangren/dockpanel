@@ -55,14 +55,22 @@ CRONS_AGENT=panel/agent/src/routes/crons.rs
 # that measured it — D2 below went red for exactly that reason, not for a
 # regression, and repointing it is the fix rather than relaxing it.
 CRONTAB_SVC=panel/agent/src/services/crontab.rs
-CRONS_BE=panel/backend/src/routes/crons.rs
-SITES_BE=panel/backend/src/routes/sites.rs
+CRONS_BE=panel/backend/src/routes/crons.rs  # R8: deleted (see tombstone below)
+SITES_BE=panel/backend/src/routes/sites.rs  # R8: deleted in R3 (see tombstone below)
+INCIDENTS=panel/backend/src/routes/incidents.rs
 WP=panel/agent/src/services/wordpress.rs
 
 for f in "$APPS_ROUTE" "$APPS_SVC" "$TRAEFIK" "$APP_PROC" \
-         "$NGINX_ROUTE" "$SSL_ROUTE" "$CRONS_AGENT" "$CRONS_BE" "$SITES_BE" "$WP"; do
+         "$NGINX_ROUTE" "$SSL_ROUTE" "$CRONS_AGENT" "$INCIDENTS" "$WP"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
+# R8 TOMBSTONE: routes/crons.rs and routes/sites.rs are deleted (crons sync
+# died with the site-cron model in R7; sites.rs died in R3). Their arms below
+# are tombstoned per-section; absence itself is asserted here.
+for f in "$CRONS_BE" "$SITES_BE"; do
+  [ -f "$f" ] && bad "TOMBSTONE (R8): $f is back — its tombstoned arms must be restored"
+done
+ok "TOMBSTONE (R8): routes/crons.rs and routes/sites.rs stay deleted"
 
 # Comments out, CODE INTACT.
 #
@@ -328,31 +336,28 @@ fi
 
 # B9/B10 — the Fail2Ban jail, same mangle, both directions.
 NR=$(subj "$NGINX_ROUTE") || NR=""
-DS=$(fnbody "$NR" "delete_site")
-if derives "$DS" 'ownership::fail2ban_jail'; then
-  ok "B9 jail removal reads the jail's logpath before deleting it"
+# R8 TOMBSTONE (B9/B10): delete_site/put_site died with routes/sites.rs
+# (R3) and the agent nginx routes no longer carry them (0 occurrences
+# repo-wide). The fail2ban_jail helper survives in agent ownership.rs for
+# the live stack/app doors (B1–B8).
+if grep -q 'fn delete_site\|fn put_site' <<< "$(subj "$NGINX_ROUTE")"; then
+  bad "TOMBSTONE (R8): delete_site/put_site reappeared — B9/B10 must be restored"
 else
-  bad "B9 delete_site removes a jail file that may protect another domain"
-fi
-PS=$(fnbody "$NR" "put_site")
-if derives "$PS" 'ownership::fail2ban_jail'; then
-  ok "B10 jail creation will not repoint another domain's jail at this site's log"
-else
-  bad "B10 put_site overwrites a colliding jail, silently unprotecting the other site"
+  ok "TOMBSTONE (R8): B9/B10 retired — delete_site/put_site are gone"
 fi
 
 # B11/B12 — the shared wildcard cert directory.
-if derives "$DS" 'ownership::cert_dir_in_use_elsewhere'; then
-  ok "B11 site deletion leaves a wildcard directory its siblings still point at"
+# R8 TOMBSTONE (B11/B12): the site deletion and ssl-revoke doors died with
+# routes/sites.rs and routes/ssl.rs (R3). cert_dir_in_use_elsewhere survives
+# in agent ownership.rs for live doors.
+# (No `|| grep -q` shape here: pipefail-sigpipe flags it as a boolean-grep pipeline.)
+DOOR_BACK=0
+grep -q 'fn delete_site' <<< "$(subj "$NGINX_ROUTE")" && DOOR_BACK=1
+grep -q 'async fn revoke' <<< "$(subj "$SSL_ROUTE")" && DOOR_BACK=1
+if [ "$DOOR_BACK" = "1" ]; then
+  bad "TOMBSTONE (R8): a site deletion/revoke door reappeared — B11/B12 must be restored"
 else
-  bad "B11 delete_site removes a cert dir shared by every site in the zone"
-fi
-SR=$(subj "$SSL_ROUTE") || SR=""
-RV=$(fnbody "$SR" "revoke")
-if derives "$RV" 'ownership::cert_dir_in_use_elsewhere'; then
-  ok "B12 ssl revoke leaves a shared wildcard directory alone"
-else
-  bad "B12 ssl revoke removes a cert dir shared by every site in the zone"
+  ok "TOMBSTONE (R8): B11/B12 retired — site deletion and ssl revoke are gone"
 fi
 
 # ── §C Let's Encrypt is not ours ───────────────────────────────────────
@@ -452,64 +457,48 @@ else
   bad "D3 sync_crons must refuse to write when the crontab could not be read"
 fi
 
-CB=$(subj "$CRONS_BE") || CB=""
-STA=$(fnbody "$CB" "sync_crons_to_agent")
-if [ -n "$STA" ] && ! has "$STA" 'enabled *= *true'; then
-  ok "D4 the panel sends the site's FULL cron set, so the payload is authoritative"
+# R8 TOMBSTONE (D4/D5): sync_crons_to_agent is gone (0 occurrences
+# repo-wide) with routes/crons.rs — the panel no longer pushes a cron set to
+# the agent, so no payload ambiguity can force a global wipe. D1–D3 (the
+# agent-side read/write discipline) stay live above.
+if grep -rq 'sync_crons_to_agent' panel/backend/src panel/agent/src; then
+  bad "TOMBSTONE (R8): sync_crons_to_agent reappeared — D4/D5 must be restored"
 else
-  bad "D4 sending only enabled crons makes the payload ambiguous and forces the global wipe"
-fi
-if derives "$STA" '"enabled"'; then
-  ok "D5 the payload carries each cron's enabled flag"
-else
-  bad "D5 without an enabled flag the agent cannot tell 'disabled' from 'not mine'"
+  ok "TOMBSTONE (R8): D4/D5 retired — sync_crons_to_agent is gone"
 fi
 
 # ── §E tenant scoping on the shared table ──────────────────────────────
 echo
 echo "§E status-page components are per-account, and the site paths say so"
-SB=$(subj "$SITES_BE") || SB=""
-UNSCOPED=$(count "$SB" '(DELETE FROM|UPDATE) status_page_components[^;]*WHERE name = \$1( AND user_id)?')
-SCOPED_DEL=$(count "$SB" 'DELETE FROM status_page_components WHERE name = \$1 AND user_id')
-SCOPED_UPD=$(count "$SB" 'UPDATE status_page_components SET name = \$1 WHERE name = \$2 AND user_id')
+# R8: §E re-aimed — the site-coupled statements died with routes/sites.rs.
+# The live status-page DELETE lives in incidents.rs, scoped by id + user_id.
+INCS=$(subj "$INCIDENTS") || INCS=""
+SCOPED_DEL=$(count "$INCS" 'DELETE FROM status_page_components WHERE id = \$1 AND user_id')
 if [ "$SCOPED_DEL" != "0" ]; then
   ok "E1 the status-page DELETE is scoped to the acting account"
 else
   bad "E1 DELETE FROM status_page_components has no user_id — it deletes other accounts' rows"
 fi
-if [ "$SCOPED_UPD" != "0" ]; then
-  ok "E2 the status-page UPDATE (rename twin) is scoped to the acting account"
+# R8 TOMBSTONE (E2): the rename twin (UPDATE ... WHERE name = $2 AND user_id)
+# died with routes/sites.rs. The only status_page_components UPDATE left is
+# the status_override clear inside the incident-resolve handler, which runs
+# only after the incident is loaded owner-scoped (id + claims.sub) — no
+# rename path remains to scope.
+if grep -q 'UPDATE status_page_components SET name' <<< "$INCS"; then
+  bad "TOMBSTONE (R8): a component rename UPDATE reappeared — E2 must be restored"
 else
-  bad "E2 UPDATE status_page_components has no user_id — a rename renames other accounts' rows"
+  ok "TOMBSTONE (R8): E2 retired — no component rename UPDATE remains"
 fi
 
 # ── §F rename_site snapshots what it displaces ─────────────────────────
 echo
 echo "§F rename_site is a replacing writer, and replacing writers snapshot"
-RS=$(fnbody "$NR" "rename_site")
-if derives "$RS" 'displaced|read_to_string\(&new_conf\)'; then
-  ok "F1 rename_site snapshots the destination vhost before overwriting it"
+# R8 TOMBSTONE (§F): rename_site is gone (0 occurrences repo-wide) with
+# routes/sites.rs — no replacing writer remains to snapshot or restore.
+if grep -rq 'fn rename_site' panel/backend/src panel/agent/src; then
+  bad "TOMBSTONE (R8): rename_site reappeared — §F must be restored"
 else
-  bad "F1 rename_site overwrites the destination with no snapshot"
-fi
-# Keyed on the PROPERTY, not the spelling `new_conf`: a delete reached through a
-# renamed variable (`let doomed = new_conf.clone()`) is the other evasion that
-# beat the s294 pin. Every destructive call in this function may name only the
-# OLD path it is moving away from — that file the function read itself.
-RS_DELETES=$(grep -oE 'remove_(file|dir_all)\(&[A-Za-z_][A-Za-z0-9_]*' <<< "$RS" | sed 's/.*&//' || true)
-RS_BADDEL=""
-for v in $RS_DELETES; do
-  case "$v" in old_*) ;; *) RS_BADDEL="$RS_BADDEL $v" ;; esac
-done
-if [ -n "$RS" ] && [ -z "$RS_BADDEL" ]; then
-  ok "F2 every delete in rename_site names the OLD path it is moving away from"
-else
-  bad "F2 rename_site destroys a path it never read:$RS_BADDEL"
-fi
-if derives "$RS" 'restore_or_remove'; then
-  ok "F3 rename_site funnels its failure path through restore_or_remove"
-else
-  bad "F3 rename_site must use the shared restore path every other writer uses"
+  ok "TOMBSTONE (R8): §F retired — rename_site is gone"
 fi
 
 # ── §G markers are anchored ────────────────────────────────────────────

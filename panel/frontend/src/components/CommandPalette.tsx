@@ -37,17 +37,9 @@ export default function CommandPalette() {
   const commands: Command[] = [
     // Hosting
     { id: "dashboard", label: "Dashboard", icon: "M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25", path: "/", category: "Hosting", keywords: "home overview health metrics" },
-    { id: "sites", label: "Sites", icon: "M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3", path: "/sites", category: "Hosting", keywords: "websites domains nginx php laravel wordpress static reverse proxy" },
-    { id: "databases", label: "Databases", icon: "M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375", path: "/databases", category: "Hosting", keywords: "mysql postgres sql schema browser query" },
-    { id: "wp-toolkit", label: "WP Toolkit", icon, path: "/wordpress-toolkit", category: "Hosting", keywords: "wordpress bulk updates vulnerabilities hardening" },
     { id: "apps", label: "Docker Apps", icon: "M21 7.5l-2.25-1.313M21 7.5v2.25m0-2.25l-2.25 1.313M3 7.5l2.25-1.313M3 7.5l2.25 1.313M3 7.5v2.25m9 3l2.25-1.313M12 12.75l-2.25-1.313M12 12.75V15", path: "/apps", category: "Hosting", keywords: "containers docker deploy template compose images registries" },
-    { id: "git-deploys", label: "Git Deploy", icon, path: "/git-deploys", category: "Hosting", keywords: "git webhook preview deploy rollback zero-downtime" },
-    { id: "migration", label: "Migration", icon, path: "/migration", category: "Hosting", keywords: "cpanel hestia import migrate backup" },
 
     // Operations
-    { id: "dns", label: "DNS", icon: "M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3", path: "/dns", category: "Operations", keywords: "records a cname mx cloudflare powerdns zones" },
-    { id: "cdn", label: "CDN", icon, path: "/cdn", category: "Operations", keywords: "bunnycdn cloudflare cache purge bandwidth" },
-    { id: "mail", label: "Mail", icon, path: "/mail", category: "Operations", keywords: "email postfix dovecot smtp mailbox alias domain" },
     { id: "backup-orchestrator", label: "Backup Manager", icon, path: "/backup-orchestrator", category: "Operations", keywords: "backup restore schedule retention s3 encryption" },
     { id: "monitoring", label: "Monitoring", icon: "M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5", path: "/monitoring", category: "Operations", keywords: "uptime ping http alerts certificates maintenance status page incidents" },
     { id: "notifications", label: "Notifications", icon, path: "/notifications", category: "Operations", keywords: "alerts email slack webhook telegram discord pagerduty" },
@@ -55,10 +47,7 @@ export default function CommandPalette() {
     { id: "terminal", label: "Terminal", icon: "M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z", path: "/terminal", category: "Operations", keywords: "ssh console shell bash command" },
 
     // Admin
-    { id: "servers", label: "Servers", icon, path: "/servers", category: "Admin", keywords: "multi-server agent fleet remote" },
     { id: "users", label: "Users", icon, path: "/users", category: "Admin", keywords: "accounts roles permissions suspend reset password" },
-    { id: "container-policies", label: "Container Policies", icon, path: "/container-policies", category: "Admin", keywords: "isolation limits quotas docker user policy network" },
-    { id: "integrations", label: "Integrations", icon, path: "/integrations", category: "Admin", keywords: "webhooks extensions whmcs terraform billing api" },
     { id: "secrets", label: "Secrets", icon, path: "/secrets", category: "Admin", keywords: "vault encrypted credentials aes keys" },
     { id: "security", label: "Security", icon: "M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z", path: "/security", category: "Admin", keywords: "firewall fail2ban ssh hardening diagnostics scan lockdown recordings audit" },
     { id: "system", label: "System", icon, path: "/system", category: "Admin", keywords: "health updates services processes network info" },
@@ -67,11 +56,6 @@ export default function CommandPalette() {
 
     // Account — the one category every role can reach
     { id: "account", label: "My Account", icon, path: "/account", category: "Account", keywords: "password 2fa totp passkey sessions api keys profile me security export" },
-
-    // Reseller
-    { id: "reseller", label: "Reseller Panel", icon, path: "/reseller", category: "Reseller", keywords: "reseller white-label" },
-    { id: "reseller-users", label: "My Users", icon, path: "/reseller/users", category: "Reseller", keywords: "reseller clients" },
-    { id: "resellers", label: "Resellers", icon, path: "/resellers", category: "Reseller", keywords: "reseller quota white-label allocate" },
   ];
 
   // Same predicate, same registry as the sidebar. A command whose path has no

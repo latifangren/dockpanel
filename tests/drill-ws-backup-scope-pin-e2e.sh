@@ -134,11 +134,13 @@ else
   bad "A2 scheduled path no longer uses post_long/DRILL_TIMEOUT_SECS — regressed to the 60s cap"
 fi
 
-TRIGGER_DRILL_LONG_CALLS=$(count "$BACKUP_ORCH_C" 'post_long\("/backups/drill/(site|db|volume)", Some\(body\), crate::services::agent::DRILL_TIMEOUT_SECS\)')
-if [ "$TRIGGER_DRILL_LONG_CALLS" -eq 3 ]; then
-  ok "A3 on-demand path (trigger_drill) calls post_long with DRILL_TIMEOUT_SECS for all 3 drill types"
+# R8: 3 -> 2. The site drill died with the sites table (R7); trigger_drill
+# now drills database + volume backups only, both via post_long + DRILL_TIMEOUT_SECS.
+TRIGGER_DRILL_LONG_CALLS=$(count "$BACKUP_ORCH_C" 'post_long\("/backups/drill/(db|volume)", Some\(body\), crate::services::agent::DRILL_TIMEOUT_SECS\)')
+if [ "$TRIGGER_DRILL_LONG_CALLS" -eq 2 ]; then
+  ok "A3 on-demand path (trigger_drill) calls post_long with DRILL_TIMEOUT_SECS for both drill types (db, volume)"
 else
-  bad "A3 expected 3 post_long(DRILL_TIMEOUT_SECS) call sites in trigger_drill, found $TRIGGER_DRILL_LONG_CALLS"
+  bad "A3 expected 2 post_long(DRILL_TIMEOUT_SECS) call sites in trigger_drill, found $TRIGGER_DRILL_LONG_CALLS"
 fi
 
 # Positive control: the real (non-drill) DB restore timeout constant is untouched.
@@ -240,10 +242,13 @@ else
 fi
 
 SCOPE_JOINS=$(count "$BUILD_CHAIN_BODY" 'JOIN servers sv ON sv\.id = .*server_id.* AND \(sv\.is_local OR sv\.user_id = \$2\)')
-if [ "$SCOPE_JOINS" -eq 3 ]; then
-  ok "D2 all 3 per-kind queries (site/database/volume) join servers and scope by is_local OR user_id"
+# R8: 3 -> 2. The site per-kind query died with the sites table (R7);
+# database + volume queries remain, both joining servers scoped by
+# is_local OR user_id.
+if [ "$SCOPE_JOINS" -eq 2 ]; then
+  ok "D2 both per-kind queries (database/volume) join servers and scope by is_local OR user_id"
 else
-  bad "D2 expected 3 ownership-scoped server joins in build_chain_report, found $SCOPE_JOINS"
+  bad "D2 expected 2 ownership-scoped server joins in build_chain_report, found $SCOPE_JOINS"
 fi
 
 CHAIN_CALLERS=$(count "$BACKUP_ORCH_C" 'build_chain_report\(&state, kind, id, claims\.sub\)')

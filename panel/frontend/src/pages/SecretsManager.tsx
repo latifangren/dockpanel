@@ -62,7 +62,11 @@ export default function SecretsManager() {
   // injector selects secrets whose vault carries the site being deployed. Without a
   // way to set that link, every "Auto-inject" tick on this page was inert, so the
   // picker below is what makes the checkbox mean anything.
-  const [siteOptions, setSiteOptions] = useState<{ id: string; domain: string }[]>([]);
+  // No site options anymore: sites (and `secret_vaults.site_id`) died with
+  // the hosting backend, so the "Linked site" pickers below offer only
+  // "(not linked)". The field itself stays — a vault with no link is still
+  // a usable vault, and stored rows keep their `site_id` value.
+  const siteOptions: { id: string; domain: string }[] = [];
 
   // Secret form
   const [showSecretForm, setShowSecretForm] = useState(false);
@@ -78,14 +82,6 @@ export default function SecretsManager() {
 
   useEffect(() => { loadVaults(); }, []);
   useEffect(() => { if (selectedVault) loadSecrets(); }, [selectedVault, reveal]);
-  useEffect(() => {
-    // Failing to load the site list must not break the page — a vault with no link is
-    // still a usable vault, so the picker degrades to "(not linked)" rather than
-    // blocking vault management behind an unrelated endpoint.
-    api.get<{ id: string; domain: string }[]>("/sites")
-      .then(s => setSiteOptions(s.map(({ id, domain }) => ({ id, domain }))))
-      .catch(() => setSiteOptions([]));
-  }, []);
 
   const loadVaults = async () => {
     setLoading(true);

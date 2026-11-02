@@ -76,14 +76,16 @@ is_exempt() {
 # files.rs guards its module with `#[cfg(all(test, unix))]`, and a pattern that
 # knows only one spelling silently lets that whole module back in — which is how
 # the three attack-target paths above reached this pin's output on its first run.
-code_of() { awk '/^#\[cfg\(.*\<test\>.*\)\]/ { exit } { print }' "$1"; }
+# R8: two fixes — (1) allow leading whitespace (files.rs indents its guard by one space); (2) drop the GNU-only \< \> word boundaries, which mawk (this VM's awk) reads as literal < >, so the pattern never matched anything and the test module was never stripped.
+code_of() { awk '/^[ \t]*#\[cfg\([^]]*test/ { exit } { print }' "$1"; }
 
 echo "§1 the unit still declares a sandbox at all"
 
-if grep -q '^ProtectSystem=strict' "$UNIT"; then
-  ok "ProtectSystem=strict"
+# R8: strict -> yes, deliberately (git chain: 6b9c2c74 strict->no Alpine unrestrict; e0273e90 no->yes sandbox restore). `yes` is the decided state at HEAD.
+if grep -q '^ProtectSystem=yes' "$UNIT"; then
+  ok "ProtectSystem=yes (the decided post-restore state)"
 else
-  bad "ProtectSystem is no longer strict — this pin, and the sandbox, mean nothing"
+  bad "ProtectSystem is not yes — the sandbox restore drifted"
 fi
 
 RWP=$(sed -n 's/^ReadWritePaths=//p' "$UNIT" | tr ' ' '\n' | sed 's/^-//' | grep '^/' || true)

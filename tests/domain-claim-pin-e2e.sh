@@ -46,9 +46,21 @@ NGINX_SVC=panel/agent/src/services/nginx.rs
 APPS_ROUTE=panel/agent/src/routes/docker_apps.rs
 TRAEFIK=panel/agent/src/services/traefik.rs
 
-for f in "$CLAIM" "$SITES" "$STAGING" "$APPS_BE" \
+for f in "$CLAIM" "$APPS_BE" \
          "$NGINX_ROUTE" "$NGINX_SVC" "$APPS_ROUTE" "$TRAEFIK"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
+done
+
+# R8 TOMBSTONE: routes/sites.rs (R3) and routes/staging.rs (R3) are deleted
+# with the site/staging features. Their five guard-calling handlers are gone;
+# the only live guard caller left is docker_apps::deploy (below). If either
+# file returns, its handlers must call the shared guard again (see §B).
+for f in "$SITES" "$STAGING"; do
+  if [ -f "$f" ]; then
+    bad "TOMBSTONE (R8): $f is back — its handlers must claim through the shared guard again"
+  else
+    ok "TOMBSTONE (R8): $f is gone — no site/staging handler left to bypass the guard"
+  fi
 done
 
 # Comments out, CODE INTACT.
@@ -250,21 +262,16 @@ check_calls_guard() {
   fi
 }
 
-check_calls_guard "$SITES"   create          "sites::create"
-check_calls_guard "$SITES"   rename_domain   "sites::rename_domain"
-check_calls_guard "$SITES"   clone_site      "sites::clone_site"
-check_calls_guard "$SITES"   add_alias       "sites::add_alias"
-check_calls_guard "$STAGING" create          "staging::create"
+# R8: the five sites/staging callers above are deleted with their files
+# (tombstoned in SETUP); docker_apps::deploy is the only live guard caller.
 check_calls_guard "$APPS_BE" deploy          "docker_apps::deploy"
 
-# The delegation itself: sites.rs must not have grown its own copy back.
-if S=$(subj "$SITES"); then
-  E=$(fnbody "$S" ensure_domain_available)
-  if derives "$E" 'domain_claim::ensure_claimable'; then
-    ok "sites' local helper delegates to the shared guard"
-  else
-    bad "sites' local helper stopped delegating — the guards can drift again"
-  fi
+# R8 TOMBSTONE: sites.rs's local helper is deleted with the file; there
+# is no local copy left that could drift from the shared guard.
+if [ -f "$SITES" ]; then
+  bad "TOMBSTONE (R8): sites.rs is back — its local helper must delegate to the shared guard again"
+else
+  ok "TOMBSTONE (R8): sites.rs is gone — no local guard copy left to drift"
 fi
 
 echo
@@ -273,7 +280,8 @@ echo "== §B2  no claim path keeps a private conflict query =="
 # The negative that makes §B stick. A domain-conflict SELECT anywhere but the
 # guard means some path can answer the question its own way again, which is how
 # `create` and `update` came to disagree in the first place.
-for f in "$SITES" "$STAGING" "$APPS_BE"; do
+# R8: sites.rs/staging.rs removed from this loop (deleted; tombstoned in SETUP).
+for f in "$APPS_BE"; do
   if S=$(subj "$f"); then
     # Anchored on the opening quote: sites.rs:883 has
     #   VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', ...)
@@ -362,7 +370,15 @@ check_writer() {
   fi
 }
 
-check_writer "$NGINX_ROUTE" put_site   "put_site"
+# R8 TOMBSTONE: put_site is deleted (agent routes/nginx.rs was trimmed to
+# its 4 kept endpoints in R6; no site vhost writer remains). The surviving
+# vhost writer — the Docker-app auto-proxy write below — still carries the
+# snapshot/restore arms. If put_site returns it must pass check_writer again.
+if grep -qE 'fn put_site\b' "$NGINX_ROUTE"; then
+  bad "TOMBSTONE (R8): put_site is back in the agent nginx route — it must pass check_writer again"
+else
+  ok "TOMBSTONE (R8): put_site is gone — no site vhost writer left to snapshot/restore"
+fi
 check_writer "$APPS_ROUTE"  "expose_domain|deploy" "the Docker-app auto-proxy write"
 
 # ...and the extraction must stay reachable. A shared writer nothing calls is a
@@ -485,7 +501,8 @@ fi
 # request; a literal makes the gate vacuous while leaving every other arm green.
 # Flattened, because these calls are formatted across many lines.
 BYPASS=0
-for f in "$SITES" "$STAGING" "$APPS_BE" panel/backend/src/routes/stacks.rs; do
+# R8: sites.rs/staging.rs removed from this loop (deleted; tombstoned in SETUP).
+for f in "$APPS_BE" panel/backend/src/routes/stacks.rs; do
   S=$(subj "$f") || continue
   F=$(tr '\n' ' ' <<< "$S")
   # A string literal in the role position of a call to the guard.

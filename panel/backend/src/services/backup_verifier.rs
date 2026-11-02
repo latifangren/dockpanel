@@ -54,9 +54,9 @@ async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
     // itself: `databases.server_id` (backfilled from the old site/stack
     // owners in R7, NOT NULL). The old INNER JOIN to `sites` dropped every
     // stack-owned database from verification; R7 deliberately verifies
-    // those too. A NULL `server_id` (a row older than the backfill) fails
-    // the join below and stays unverified rather than being read on the
-    // wrong host.
+    // those too. The `d.server_id IS NOT NULL` predicate below is
+    // belt-and-braces against a row the R7 backfill guard rejected: it
+    // stays unverified rather than being read on the wrong host.
     //
     // `database_backups.server_id` is NOT used here: that column is
     // nullable and a policy with no server writes NULL into it.

@@ -180,16 +180,20 @@ fi
 # callers; D3/D4 below are tombstones asserting no clone path remains.)
 echo "── §D the reachable clone paths call the guard BEFORE spawning git ──"
 
-if has "$GB_CLONE_BODY" 'ssrf_guard::validate_repo_url_not_internal\(repo_url\)\.await\?'; then
-  ok "D1 git_build.rs::clone_or_pull calls the guard"
+# R8 TOMBSTONE: git_build.rs is deleted (R5; the whole git-deploy feature
+# went with it), so git_build.rs::clone_or_pull no longer exists to guard.
+# Same shape as the R7 deploy.rs tombstone below: assert the path itself is
+# gone, and no guard call survives without it.
+if [ -f "$GITBUILD" ]; then
+  bad "TOMBSTONE (R8): git_build.rs is back — its clone_or_pull must call the guard (see D1/D2 at R6)"
 else
-  bad "D1 git_build.rs::clone_or_pull does not call the guard"
+  ok "TOMBSTONE (R8): git_build.rs is gone — no clone path left in git_build.rs to guard"
 fi
 
-if before "$GB_CLONE_BODY" "validate_repo_url_not_internal" "cmd.output()"; then
-  ok "D2 git_build.rs::clone_or_pull validates before spawning the git subprocess"
+if has "$GITBUILD_C" 'validate_repo_url_not_internal'; then
+  bad "TOMBSTONE (R8): a guard call survives in git_build.rs with no clone path behind it — re-scope this section"
 else
-  bad "D2 git_build.rs::clone_or_pull's guard runs after (or never before) the subprocess spawn"
+  ok "TOMBSTONE (R8): no SSRF-guard call remains in git_build.rs — the only clone path that called it is deleted"
 fi
 
 # R7 TOMBSTONE: deploy.rs::clone_or_pull is deleted (zero Rust callers).

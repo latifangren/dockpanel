@@ -78,29 +78,36 @@ SERVICE_INSTALLER_RS=panel/agent/src/routes/service_installer.rs
 IAC_RS=panel/agent/src/routes/iac.rs
 SECURITY_SCANNER_RS=panel/agent/src/services/security_scanner.rs
 DIAGNOSTICS_RS=panel/agent/src/services/diagnostics.rs
-for f in "$PKG_RS" "$PHP_RS" "$NGINX_ROUTE_RS" "$NGINX_SVC_RS" "$SITES_RS" \
-         "$OWNERSHIP_RS" "$GIT_BUILD_SVC_RS" "$DOCKER_APPS_ROUTE_RS" "$DOCKER_APPS_SVC_RS" \
+for f in "$PKG_RS" "$NGINX_ROUTE_RS" "$NGINX_SVC_RS" \
+         "$OWNERSHIP_RS" "$DOCKER_APPS_ROUTE_RS" "$DOCKER_APPS_SVC_RS" \
          "$SERVICE_INSTALLER_RS" "$IAC_RS" "$SECURITY_SCANNER_RS" "$DIAGNOSTICS_RS"; do
   [ -f "$f" ] || { echo "MISSING SUBJECT FILE: $f"; exit 1; }
 done
+# R8: agent routes/php.rs, services/git_build.rs and backend routes/sites.rs
+# are deleted (PHP routes + git build + site doors retired). Their arms are
+# tombstoned per-section below; absence is asserted here.
+for f in "$PHP_RS" "$GIT_BUILD_SVC_RS" "$SITES_RS"; do
+  [ -f "$f" ] && bad "TOMBSTONE (R8): $f is back — its tombstoned arms must be restored"
+done
+ok "TOMBSTONE (R8): routes/php.rs, services/git_build.rs and routes/sites.rs stay deleted"
 
 # Strip // line comments so an arm can't match its own explanatory prose
 # (lesson #149) — the fix's comments deliberately name both families' paths.
 strip() { sed 's://.*::' "$1"; }
 
 SRC_PKG=$(strip "$PKG_RS")
-SRC_PHP=$(strip "$PHP_RS")
+SRC_PHP=""  # R8: routes/php.rs deleted; §2/§5 tombstoned
 SRC_NGINX_ROUTE=$(strip "$NGINX_ROUTE_RS")
 SRC_NGINX_SVC=$(strip "$NGINX_SVC_RS")
 SRC_OWNERSHIP=$(strip "$OWNERSHIP_RS")
-SRC_GIT_BUILD_SVC=$(strip "$GIT_BUILD_SVC_RS")
+SRC_GIT_BUILD_SVC=""  # R8: services/git_build.rs deleted; §7 arm tombstoned
 SRC_DOCKER_APPS_ROUTE=$(strip "$DOCKER_APPS_ROUTE_RS")
 SRC_DOCKER_APPS_SVC=$(strip "$DOCKER_APPS_SVC_RS")
 SRC_SERVICE_INSTALLER=$(strip "$SERVICE_INSTALLER_RS")
 SRC_IAC=$(strip "$IAC_RS")
 SRC_SECURITY_SCANNER=$(strip "$SECURITY_SCANNER_RS")
 SRC_DIAGNOSTICS=$(strip "$DIAGNOSTICS_RS")
-SRC_SITES=$(strip "$SITES_RS")
+SRC_SITES=""  # R8: routes/sites.rs deleted; §4 tombstoned
 
 # Here-strings, never pipelines: a `grep -q` closing the pipe SIGPIPEs the
 # upstream sed, and pipefail turns that into a failed arm non-deterministically.
@@ -134,86 +141,43 @@ else
 fi
 
 echo
-echo "§2 the two call sites share the resolver, not their own copies"
-
-SOCKET_EXISTS=$(fnbody "$SRC_PHP" 'async fn socket_exists')
-readable "socket_exists" "$SOCKET_EXISTS"
-if has "$SOCKET_EXISTS" 'resolve_php_fpm_socket(version).await.is_some()'; then
-  ok "php.rs::socket_exists() delegates to the shared resolver"
+echo
+echo "§2 [R8 TOMBSTONE] both resolver call sites retired with their files"
+# R8 TOMBSTONE: php.rs::socket_exists and nginx.rs::put_site died with
+# routes/php.rs and the site doors. resolve_php_fpm_socket itself survives
+# in pkg.rs (§1) but has ZERO callers left — the sharing property is
+# vacated, not violated. If a PHP door returns and calls the resolver,
+# §2 must return with it.
+CALLERS=$(grep -rn 'resolve_php_fpm_socket(' panel/agent/src panel/backend/src --include='*.rs' | grep -v 'pub async fn resolve_php_fpm_socket' | grep -v '//' | grep -c . || true)
+if [ "$CALLERS" -eq 0 ]; then
+  ok "TOMBSTONE (R8): §2 retired — no resolver call sites remain (resolver retained uncalled in pkg.rs)"
 else
-  bad "php.rs::socket_exists() re-implements its own check — the two can drift apart again"
-fi
-
-# The historical bug, pinned as an absence: put_site() must NOT independently
-# stat the raw wire-format path as its verdict. It may still strip/parse the
-# string to extract a version, but the EXISTENCE question has to go through
-# the resolver.
-PUT_SITE=$(fnbody "$SRC_NGINX_ROUTE" 'async fn put_site')
-readable "put_site" "$PUT_SITE"
-
-if hasE "$PUT_SITE" 'resolve_php_fpm_socket\(version\)\.await'; then
-  ok "put_site() resolves the real socket instead of trusting the literal path"
-else
-  bad "put_site() does not call the resolver — RHEL site creation is unfixed"
-fi
-
-if hasE "$PUT_SITE" '!std::path::Path::new\(socket_path\)\.exists\(\)'; then
-  bad "put_site() still has the old literal-existence check — the RHEL bug is back"
-else
-  ok "the old Debian-only literal existence check is gone from put_site()"
+  bad "TOMBSTONE (R8): the resolver gained $CALLERS call site(s) — §2 must be restored"
 fi
 
 echo
-echo "§3 a resolved RHEL socket naturally skips the Debian-only per-site pool"
-
-# The per-site FPM pool feature (memory/worker limits) is Debian-shaped
-# (/etc/php/{version}/fpm/pool.d) and out of scope for this fix. It must
-# degrade to the shared pool on RHEL, not error — proven by the guard that
-# gates it still matching only a Debian-shaped resolved socket.
-POOL_BLOCK=$(awk '/let mut per_site_socket: Option<String> = None;/,/if let Some\(sock\) = per_site_socket \{/' <<< "$SRC_NGINX_ROUTE")
-readable "the per-site pool block" "$POOL_BLOCK"
-
-if hasE "$POOL_BLOCK" 'strip_prefix\("unix:/run/php/php"\)'; then
-  ok "the per-site pool block only activates on a Debian-shaped resolved socket"
+echo "§3 [R8 TOMBSTONE] the per-site FPM pool feature retired with put_site"
+# R8 TOMBSTONE: the per-site pool block lived in put_site (deleted) and
+# write_php_pool_config is gone (0 occurrences) — no Debian pool.d writer
+# remains to degrade on RHEL.
+if grep -rq 'write_php_pool_config\|per_site_socket' panel/agent/src --include='*.rs'; then
+  bad "TOMBSTONE (R8): per-site pool code reappeared — §3 must be restored"
 else
-  bad "the per-site pool block's guard changed — verify it still excludes RHEL's resolved socket"
-fi
-
-WRITE_POOL=$(fnbody "$SRC_NGINX_SVC" 'pub fn write_php_pool_config')
-readable "write_php_pool_config" "$WRITE_POOL"
-if has "$WRITE_POOL" 'return Ok(());'; then
-  ok "write_php_pool_config no-ops rather than erroring when the Debian pool.d tree is absent"
-else
-  bad "write_php_pool_config no longer degrades gracefully on a missing pool.d tree"
+  ok "TOMBSTONE (R8): §3 retired — no per-site pool code remains"
 fi
 
 echo
-echo "§4 the backend's hardcoded string is documented as a version carrier"
-
-# sites.rs cannot know the target server's distro, so it is correct for it to
-# keep sending the Debian-shaped literal — but only if that's understood as
-# an input to the resolver, not an assertion of the real path. Pinned as a
-# comment so a future reader doesn't "fix" this into a redundant distro branch
-# on the wrong side of the wire.
-carrier_comments=$(grep -c 'VERSION CARRIER\|[Vv]ersion carrier' "$SITES_RS")
-if [ "$carrier_comments" -ge 4 ]; then
-  ok "all $carrier_comments php_socket construction sites document the version-carrier contract"
-else
-  bad "only $carrier_comments of the 4 known php_socket construction sites are documented"
-fi
+echo "§4 [R8 TOMBSTONE] the version-carrier contract retired with sites.rs"
+# R8 TOMBSTONE: the php_socket construction sites died with routes/sites.rs
+# (R3) — no backend string carries a version to the resolver anymore.
+ok "TOMBSTONE (R8): §4 retired with routes/sites.rs — no php_socket construction sites remain"
 
 echo
-echo "§5 the version-status API stops advertising a socket that may not be real"
+echo "§5 [R8 TOMBSTONE] the version-status API retired with routes/php.rs"
+# R8 TOMBSTONE: list_versions died with routes/php.rs — no versions API
+# remains to advertise a socket.
+ok "TOMBSTONE (R8): §5 retired with routes/php.rs — no versions API remains"
 
-LIST_VERSIONS=$(fnbody "$SRC_PHP" 'async fn list_versions')
-readable "list_versions" "$LIST_VERSIONS"
-if has "$LIST_VERSIONS" 'resolve_php_fpm_socket(v).await'; then
-  ok "the versions API reports the real resolved socket, not a Debian-only guess"
-else
-  bad "the versions API still hardcodes the Debian socket path in its response"
-fi
-
-echo
 echo "§6 the nginx vhost directory itself — no site of ANY runtime worked on RHEL"
 
 SITES_DIR_FOR=$(fnbody "$SRC_NGINX_SVC" 'pub fn sites_dir_for')
@@ -265,12 +229,16 @@ echo "§7 every other reader/writer of a site's vhost shares the one decision, n
 # paths for the PANEL's own vhost before this fix existed, which is a
 # different (already-correct) shape.
 declare -A PROPAGATION=(
-  ["ssl.rs (routes)"]="panel/agent/src/routes/ssl.rs"
+  # R8: ssl.rs (routes) and service_installer.rs dropped from the census —
+  # neither holds vhost-path code anymore (ssl.rs mentions vhosts only in
+  # comments + one test name; service_installer installs certbot, never
+  # reads a vhost). Their vhost logic lives in services/nginx.rs (§6).
   ["ownership.rs"]="$OWNERSHIP_RS"
-  ["git_build.rs (services)"]="$GIT_BUILD_SVC_RS"
+  # R8: git_build.rs deleted (R5) — its propagation arm is tombstoned; the
+  # shared-decision census below covers the surviving files.
   ["docker_apps.rs (routes)"]="$DOCKER_APPS_ROUTE_RS"
   ["docker_apps.rs (services)"]="$DOCKER_APPS_SVC_RS"
-  ["service_installer.rs"]="$SERVICE_INSTALLER_RS"
+
   ["iac.rs"]="$IAC_RS"
   ["security_scanner.rs"]="$SECURITY_SCANNER_RS"
   ["diagnostics.rs"]="$DIAGNOSTICS_RS"

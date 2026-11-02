@@ -695,7 +695,7 @@ for f in "$BE/routes/auth.rs" "$BE/routes/oauth.rs" "$BE/routes/passkeys.rs" \
          "$BE/routes/mod.rs" "$BE/routes/security.rs" "$BE/routes/users.rs" \
          "$BE/services/activity.rs" "$BE/services/auto_healer.rs" \
          "$AG/routes/security.rs" "$GUIDE" tests/access-recovery-pin-e2e.sh; do
-  a=$(wc -l < "$f"); b=$(code_lines "$f" | wc -l)
+  a=$(awk 'END{print NR}' "$f"); b=$(code_lines "$f" | wc -l)  # R8: wc -l undercounts a file with no trailing newline (auto_healer.rs ends in `}`); NR is the true height
   [ "$a" != "$b" ] && LINEDRIFT="$LINEDRIFT $f($a≠$b)"
 done
 if [ -z "$LINEDRIFT" ]; then

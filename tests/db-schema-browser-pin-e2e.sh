@@ -45,7 +45,7 @@ bad() { FAIL=$((FAIL + 1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
 
 BACK="$REPO/panel/backend/src/routes/databases.rs"
 AGENT="$REPO/panel/agent/src/routes/database.rs"
-PAGE="$REPO/panel/frontend/src/pages/Databases.tsx"
+PAGE="$REPO/panel/frontend/src/pages/databases/SchemaBrowser.tsx"  # R8: the schema browser moved out of Databases.tsx
 
 for f in "$BACK" "$AGENT" "$PAGE"; do
   [ -f "$f" ] || { echo "FATAL: missing subject $f"; exit 1; }
@@ -93,7 +93,7 @@ fi
 # unrelated `Promise.all(` elsewhere in the page — a self-check that fails on
 # correct code is not a self-check.
 if has "$PAGE_S" '29d959b'; then
-  bad "0.2 Databases.tsx: comments survived the strip (the commit sha is still present)"
+  bad "0.2 SchemaBrowser.tsx: comments survived the strip (the commit sha is still present)"
 else
   ok  "0.2 Databases.tsx: comments stripped"
 fi
@@ -102,10 +102,11 @@ fi
 # makes every ABSENCE arm below pass having examined nothing (lesson #136).
 B_FNS=$(occurrences "$BACK_S" '^pub async fn ')
 P_HOOKS=$(occurrences "$PAGE_S" 'useState')
-if [ "$B_FNS" -ge 10 ] && [ "$P_HOOKS" -ge 10 ]; then
-  ok  "0.3 subjects survive stripping (databases.rs $B_FNS handlers, Databases.tsx $P_HOOKS useState)"
+# R8: PAGE floor 10 -> 5 (8 useState measured in SchemaBrowser.tsx).
+if [ "$B_FNS" -ge 10 ] && [ "$P_HOOKS" -ge 5 ]; then
+  ok  "0.3 subjects survive stripping (databases.rs $B_FNS handlers, SchemaBrowser.tsx $P_HOOKS useState)"
 else
-  bad "0.3 stripper ate the subject (databases.rs $B_FNS handlers, Databases.tsx $P_HOOKS useState)"
+  bad "0.3 stripper ate the subject (databases.rs $B_FNS handlers, SchemaBrowser.tsx $P_HOOKS useState)"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────

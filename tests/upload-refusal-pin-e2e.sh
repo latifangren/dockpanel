@@ -50,14 +50,22 @@ ERRS=panel/backend/src/error.rs
 GUIDE=docs/guides/file-uploads.md
 SPA=panel/frontend/src
 
-for f in "$PANEL" "$AGENT" "$CONST" "$FILES" "$TERM" "$ERRS" "$GUIDE"; do
+for f in "$AGENT" "$CONST" "$FILES" "$TERM" "$ERRS" "$GUIDE"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
+# R8 TOMBSTONE: routes/files.rs (the panel upload door) is deleted — the panel
+# no longer serves file uploads, so it states no limit. The surviving
+# reference surface is the agent; §A/§B/§D/§E panel arms are tombstoned below.
+if [ -f "$PANEL" ]; then
+  bad "TOMBSTONE (R8)" "routes/files.rs is back — the panel upload arms must be restored"
+else
+  ok "TOMBSTONE (R8): routes/files.rs stays deleted — the panel upload door is retired"
+fi
 [ -d "$SPA" ] || { bad "SETUP" "$SPA missing"; exit 1; }
 
 # An arm that measures an empty subject prints green for every absence below, so
 # each subject is asserted before it is measured (lesson #143).
-for pair in "$PANEL:300" "$AGENT:300" "$FILES:250" "$TERM:700" "$GUIDE:80"; do
+for pair in "$AGENT:300" "$TERM:700" "$GUIDE:80"; do  # R8: Files.tsx is a 12-line AList iframe shell now — no upload code to measure
   f=${pair%:*}; min=${pair##*:}
   n=$($G -c '' "$f")
   [ "$n" -gt "$min" ] && ok "A0 subject extracted — $f is $n lines" \
@@ -72,25 +80,26 @@ echo "── A. One limit, stated identically on every surface that states one �
 # mentioning the constant by name must not satisfy this (#627).
 num() { printf '%s' "$1" | tr -d '_,'; }
 
-P_NUM=$(num "$($G -oP 'const\s+UPLOAD_MAX_FILE_BYTES\s*:\s*usize\s*=\s*\K[0-9_]+' "$PANEL" | head -1)")
+P_NUM=""  # R8: the panel declares no limit anymore (routes/files.rs deleted)
 A_NUM=$(num "$($G -oP 'const\s+UPLOAD_MAX_FILE_BYTES\s*:\s*usize\s*=\s*\K[0-9_]+' "$AGENT" | head -1)")
 C_NUM=$(num "$($G -oP 'export\s+const\s+UPLOAD_MAX_FILE_BYTES\s*=\s*\K[0-9_]+' "$CONST" | head -1)")
 D_NUM=$(num "$($G -oP '(?<![0-9,])\K[0-9]{1,3}(,[0-9]{3})+(?=\s+to leave room)' "$GUIDE" | head -1)")
 
-[ -n "$P_NUM" ] && ok "A1 panel declares a limit — $P_NUM bytes" \
-  || bad "A1 panel declares a limit" "no UPLOAD_MAX_FILE_BYTES declaration in $PANEL"
-eq  "A2 agent states the same limit as the panel"     "$A_NUM" "$P_NUM"
-eq  "A3 the SPA states the same limit as the panel"   "$C_NUM" "$P_NUM"
-eq  "A4 the published guide states the same limit"    "$D_NUM" "$P_NUM"
+# R8 TOMBSTONE (A1/A2): the panel states no limit — its upload door is gone.
+ok "TOMBSTONE (R8): A1/A2 retired — the panel declares no upload limit anymore"
+[ -n "$A_NUM" ] && ok "A1b the agent declares the limit — $A_NUM bytes" \
+  || bad "A1b the agent declares the limit" "no UPLOAD_MAX_FILE_BYTES declaration in $AGENT"
+eq  "A3 the SPA states the same limit as the agent"   "$C_NUM" "$A_NUM"
+eq  "A4 the published guide states the same limit"    "$D_NUM" "$A_NUM"
 
 # The limit must stay BELOW the envelope that rejects before any of it runs,
 # or the panel is advertising an unenforceable number again — which is the
 # defect this suite exists for, not a smaller version of it.
-if [ -n "$P_NUM" ] && [ "$P_NUM" -lt 1572864 ]; then
+if [ -n "$A_NUM" ] && [ "$A_NUM" -lt 1572864 ]; then
   ok "A5 the advertised limit fits inside the 2 MiB body envelope"
 else
   bad "A5 the advertised limit fits inside the 2 MiB body envelope" \
-      "$P_NUM is not below 1572864 — an oversize body would be refused by the framework, unexplained"
+      "$A_NUM is not below 1572864 — an oversize body would be refused by the framework, unexplained"
 fi
 
 echo "── B. Both upload handlers can ANSWER an oversize body ───────────────────────"
@@ -101,7 +110,7 @@ echo "── B. Both upload handlers can ANSWER an oversize body ─────
 # no-op before (#585/#638).
 flat() { tr -d ' \n' < "$1"; }
 
-for pair in "$PANEL:UploadBody" "$AGENT:UploadRequest"; do
+for pair in "$AGENT:UploadRequest"; do  # R8: panel door retired (see SETUP tombstone)
   f=${pair%:*}; ty=${pair##*:}
   if flat "$f" | $G -q "Result<Json<$ty>,JsonRejection>"; then
     ok "B1 ${f##*/} takes the body rejection rather than short-circuiting on it"
@@ -113,11 +122,8 @@ done
 
 # The rejection must be routed by STATUS, not by matching the dependency's
 # composite enum shape, which has changed between axum releases.
-if flat "$PANEL" | $G -q 'e.status()==StatusCode::PAYLOAD_TOO_LARGE'; then
-  ok "B2 the panel routes the rejection on its status"
-else
-  bad "B2 the panel routes the rejection on its status" "no status comparison found"
-fi
+# R8 TOMBSTONE (B2): the panel rejection routing died with routes/files.rs.
+ok "TOMBSTONE (R8): B2 retired with routes/files.rs — no panel rejection routing remains"
 
 echo "── C. CLASS — no user-initiated write discards why it failed ──────────────────"
 
@@ -144,42 +150,44 @@ eq "C1 no user-initiated write swallows its failure" "$SWALLOW" "0"
 # The two upload doors specifically: each must check the size BEFORE spending
 # the upload, and must bind its catch. Keyed on the guard's comparison and on
 # the binding, never on the constant's name — both files mention it in prose.
-for f in "$FILES" "$TERM"; do
-  if flat "$f" | $G -q 'file.size>UPLOAD_MAX_FILE_BYTES'; then
-    ok "C2 ${f##*/} refuses an oversize file before uploading it"
-  else
-    bad "C2 ${f##*/} refuses an oversize file before uploading it" \
-        "no size comparison — the operator learns of the limit only after the whole body has travelled"
-  fi
-done
+# R8 TOMBSTONE (C2): the SPA uploads nothing anymore — Files.tsx is an AList
+# iframe shell and Terminal.tsx carries no upload code, so no SPA surface
+# pre-checks a size. The size enforcement that remains is the agent handler's
+# (bytes.len() > UPLOAD_MAX_FILE_BYTES before processing), pinned here.
+if ! $G -q 'file.size>UPLOAD_MAX_FILE_BYTES' "$FILES" "$TERM" && flat "$AGENT" | $G -q 'bytes.len()>UPLOAD_MAX_FILE_BYTES'; then
+  ok "TOMBSTONE (R8): C2 retired — no SPA upload pre-check remains; the agent enforces the limit"
+else
+  bad "TOMBSTONE (R8): C2" "a SPA upload pre-check reappeared, or the agent enforcement moved"
+fi
 
 # A bound catch is what carries the reason. Counting the BARE form inside each
 # upload door: the region is delimited by the door's own markers so an unrelated
 # bare catch elsewhere in a 900-line page does not fail this arm.
-BARE_FILES=$(sed -n '/for (const file of Array.from(files))/,/setUploading(false)/p' "$FILES" | $G -c '} catch {')
-eq "C3 the file manager's upload loop binds its catch" "$BARE_FILES" "0"
-
-BARE_TERM=$(sed -n '/reader.onload = async () => {/,/reader.readAsDataURL(file)/p' "$TERM" | $G -c '} catch {')
-eq "C4 the terminal's upload binds its catch" "$BARE_TERM" "0"
+# R8 TOMBSTONE (C3/C4): both upload loops are gone with the SPA upload
+# doors — the delimiters match nothing, so the old eq-0 arms passed
+# vacuously. Assert the regions are really absent instead of counting them.
+if [ "$($G -c 'Array.from(files)' "$FILES")" -eq 0 ] && [ "$($G -c 'readAsDataURL' "$TERM")" -eq 0 ]; then
+  ok "TOMBSTONE (R8): C3/C4 retired — no SPA upload loop remains to bind a catch"
+else
+  bad "TOMBSTONE (R8): C3/C4" "an SPA upload loop reappeared — C3/C4 must be restored"
+fi
 
 echo "── D. The refusal carries a marker a client can branch on ────────────────────"
 
 DECL=$($G -c 'pub const CODE_PAYLOAD_TOO_LARGE: &str' "$ERRS")
 eq "D1 the marker is declared exactly once" "$DECL" "1"
 
-if flat "$PANEL" | $G -q 'err_coded(StatusCode::PAYLOAD_TOO_LARGE'; then
-  ok "D2 the panel's refusal is coded, not a bare status"
-else
-  bad "D2 the panel's refusal is coded, not a bare status" \
-      "no err_coded(StatusCode::PAYLOAD_TOO_LARGE — a client cannot tell this 413 from any other"
-fi
+# R8 TOMBSTONE (D2): the panel coded refusal died with routes/files.rs.
+ok "TOMBSTONE (R8): D2 retired with routes/files.rs — no panel refusal remains"
 
 echo "── E. The unreachable numbers stay dead ──────────────────────────────────────"
 
 # These two literals were the whole fiction: 100 MB in the panel and 50 MB in
 # the agent, both sitting below a 2 MiB framework rejection. Reinstating either
 # reinstates a number the product cannot honour.
-eq "E1 the panel's unreachable 100 MB check is gone" "$($G -c '100 \* 1024 \* 1024' "$PANEL")" "0"
+# R8 TOMBSTONE (E1): the panel's 100 MB check died with routes/files.rs — the
+# file's absence (SETUP tombstone) is the proof; there is no literal to count.
+ok "TOMBSTONE (R8): E1 retired with routes/files.rs — the panel's unreachable number is gone with the file"
 eq "E2 the agent's unreachable 50 MB check is gone"  "$($G -c '50 \* 1024 \* 1024' "$AGENT")"  "0"
 
 echo

@@ -51,8 +51,12 @@ ORCH_TSX=panel/frontend/src/pages/BackupOrchestrator.tsx
 SETTINGS_TSX=panel/frontend/src/pages/Settings.tsx
 BACKUPS_TSX=panel/frontend/src/pages/Backups.tsx
 
-for f in "$BD_RS" "$BSCHED_RS" "$BPOL_RS" "$BSCHEDR_RS" \
-         "$ORCH_TSX" "$SETTINGS_TSX" "$BACKUPS_TSX"; do
+# R8: BSCHED_RS (services/backup_scheduler.rs) removed — deleted in R3;
+# its destination-posting role moved to the policy executor (BPOL_RS).
+# R8 follow-up: BACKUPS_TSX removed — Backups.tsx deleted with its page; its
+# §8 arm retired with it (tombstone in §8 below).
+for f in "$BD_RS" "$BPOL_RS" "$BSCHEDR_RS" \
+         "$ORCH_TSX" "$SETTINGS_TSX"; do
   [ -f "$f" ] || { echo "missing file: $f"; exit 1; }
 done
 
@@ -105,12 +109,12 @@ countf() { code_of "$1" | grep -cF -- "$2" || true; }
 
 echo "§0 the source these pins read survives comment stripping"
 STRIP_OK=0
-for f in "$BD_RS" "$BSCHED_RS" "$BPOL_RS" "$BSCHEDR_RS" \
-         "$ORCH_TSX" "$SETTINGS_TSX" "$BACKUPS_TSX"; do
+for f in "$BD_RS" "$BPOL_RS" "$BSCHEDR_RS" \
+         "$ORCH_TSX" "$SETTINGS_TSX"; do
   assert_readable "$f" && STRIP_OK=$((STRIP_OK+1))
 done
-if [ "$STRIP_OK" -eq 7 ]; then
-  ok "all 7 inspected files survive stripping"
+if [ "$STRIP_OK" -eq 5 ]; then
+  ok "all 5 inspected files survive stripping"
 fi
 
 echo
@@ -118,20 +122,19 @@ echo "§5 the destination the agent is given has been decrypted (#93, the silent
 
 # Discovery: every site that posts a destination to the agent, versus the one
 # helper that decrypts. These must be the same set.
-DECRYPT_CALLERS=$(
-  { countre "$BD_RS"    'agent_destination_payload\('
-    countre "$BSCHED_RS" 'agent_destination_payload\('
-    countre "$BPOL_RS"   'agent_destination_payload\('
-  } | paste -sd+ | bc
-)
+# R8: the scheduler count is gone with the scheduler; the executor is the
+# only remaining poster besides the helper's own file (measured 3 + 1 = 4).
+# R8: summed in shell arithmetic — `bc` is not installed on the VM runner,
+# and the count is two numbers, not a pipeline that needs it.
+DECRYPT_CALLERS=$(( $(countre "$BD_RS" 'agent_destination_payload\(') + $(countre "$BPOL_RS" 'agent_destination_payload\(') ))
 
 if [ "$DECRYPT_CALLERS" -ge 3 ]; then
   ok "$DECRYPT_CALLERS call sites route through agent_destination_payload"
 else
-  bad "only $DECRYPT_CALLERS uses of agent_destination_payload — the scheduler and the policy executor must both go through it, or they post ciphertext as the credential while Test Connection reports success"
+  bad "only $DECRYPT_CALLERS uses of agent_destination_payload — the policy executor must go through it, or it posts ciphertext as the credential while Test Connection reports success"
 fi
 
-for f in "$BSCHED_RS" "$BPOL_RS"; do
+for f in "$BPOL_RS"; do
   if hasre "$f" 'insert\("type"\.to_string\(\)'; then
     bad "$(basename "$f") folds \"type\" into a destination payload by hand — that is the hand-rolled path that skipped the decrypt"
   else
@@ -206,13 +209,22 @@ else
   ok "Settings has no disabled-in-place block"
 fi
 
-for f in "$ORCH_TSX" "$BACKUPS_TSX" "$SETTINGS_TSX"; do
+for f in "$ORCH_TSX" "$SETTINGS_TSX"; do
   if hasre "$f" '(via|in) \*{0,2}Settings'; then
     bad "$(basename "$f") still sends the operator to Settings for a destination"
   else
     ok "$(basename "$f") does not send the operator to Settings for a destination"
   fi
 done
+
+# R8 follow-up TOMBSTONE: the third file in the loop above was Backups.tsx —
+# its empty state was the remaining "via Settings" pointer. The page is gone;
+# if it returns, its arm must return with it.
+if [ -f "$BACKUPS_TSX" ]; then
+  bad "TOMBSTONE (R8 follow-up): Backups.tsx is back — its §8 'via Settings' arm must be restored"
+else
+  ok "TOMBSTONE (R8 follow-up): Backups.tsx is gone — its §8 arm retired with the page"
+fi
 
 echo
 echo "§9 the deep link the guidance layer already used actually lands (#93)"
@@ -261,7 +273,11 @@ while IFS= read -r f; do
   [ -n "$f" ] && VAULT_FILES+=("$f")
 done < <(grep -rlE "$VAULT_SURFACE" panel/backend/src --include=*.rs 2>/dev/null | sort)
 
-if [ "${#VAULT_FILES[@]}" -lt 3 ]; then
+# R8: floor 3 -> 1. Measured surface is exactly {secrets.rs}: the vault-crypto
+# callers in deploy.rs/git_deploys died with those features, and
+# secrets_crypto.rs calls decrypt_vault unqualified (never matching this
+# qualified grep). 1 is the true population; 0 still means the grep broke.
+if [ "${#VAULT_FILES[@]}" -lt 1 ]; then
   bad "enumerated only ${#VAULT_FILES[@]} files on the vault surface — implausible, so every arm below would pass having examined nothing"
 else
   ok "enumerated ${#VAULT_FILES[@]} files on the vault surface"
@@ -331,17 +347,22 @@ fi
 # question: the manual Inject button runs the same query against the same rows
 # and PUTs the same body to the same agent route. If it ever stops doing so, the
 # arm above loses the reference implementation it is measured against.
+# R8 TOMBSTONE: the auto-inject sibling is deleted. routes/deploy.rs went
+# in R3 and the /nginx/env/ push went with it (0 occurrences repo-wide);
+# secrets.rs keeps the vault CRUD but pushes nothing to any agent. If either
+# returns, the sibling arms above must be restored with it.
 SECRETS_RS=panel/backend/src/routes/secrets.rs
 DEPLOY_RS=panel/backend/src/routes/deploy.rs
-for f in "$SECRETS_RS" "$DEPLOY_RS"; do
-  [ -f "$f" ] || { bad "missing file: $f"; continue; }
-  assert_readable "$f" || continue
-  if [ "$(countre "$f" 'auto_inject = TRUE')" -gt 0 ] && [ "$(countre "$f" '/nginx/env/')" -gt 0 ]; then
-    ok "$(basename "$f") still selects the auto-inject rows and pushes them to the agent"
-  else
-    bad "$(basename "$f") no longer performs the auto-inject it is pinned against"
-  fi
-done
+if [ -f "$DEPLOY_RS" ]; then
+  bad "TOMBSTONE (R8): routes/deploy.rs is back — its auto-inject sibling arms must be restored"
+else
+  ok "TOMBSTONE (R8): routes/deploy.rs is gone — the auto-inject push retired with it"
+fi
+if [ "$(countre "$SECRETS_RS" '/nginx/env/')" -gt 0 ]; then
+  bad "TOMBSTONE (R8): secrets.rs pushes to /nginx/env/ again with no deploy path behind it — re-scope §10"
+else
+  ok "TOMBSTONE (R8): secrets.rs pushes no auto-inject payload to any agent route — the sibling is retired, not silently broken"
+fi
 
 # A skipped secret must be sayable, and the arm has to be keyed on THIS path's
 # own diagnostics: `deploy.rs` is a large file with warnings all over it, so an
@@ -349,10 +370,12 @@ done
 # too — it would have passed for the whole time the feature was dead. The
 # `Auto-inject:` prefix belongs to this block alone; the success line reads
 # `Auto-injected`, so it cannot satisfy this on its own.
-if [ "$(countf "$DEPLOY_RS" '"Auto-inject: ')" -gt 0 ]; then
-  ok "deploy.rs reports the secrets it could not decrypt"
+# R8 TOMBSTONE: the "Auto-inject:" diagnostics belonged to deploy.rs's
+# auto-inject block, deleted with it in R3.
+if [ -f "$DEPLOY_RS" ]; then
+  bad "TOMBSTONE (R8): routes/deploy.rs is back — its decrypt-failure diagnostics must be restored"
 else
-  bad "deploy.rs swallows decrypt failures again — an inert auto-inject looks exactly like an empty vault"
+  ok "TOMBSTONE (R8): deploy.rs is gone — its auto-inject diagnostics retired with it"
 fi
 
 echo

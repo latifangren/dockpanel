@@ -177,10 +177,14 @@ else
   bad "no '-'-prefixed entries remain — every path is now mandatory; confirm that is intended"
 fi
 
-if has_code "$UNIT" -E -e '^ProtectSystem=strict'; then
-  ok "ProtectSystem=strict — an unbound path really is read-only"
+# R8: strict -> yes, deliberately (see agent-sandbox-paths §1 for the
+# commit chain: 6b9c2c74 strict->no, e0273e90 no->yes). `yes` still mounts
+# /usr and /boot read-only; the ReadWritePaths carve-outs below stay
+# load-bearing for the writable trees they name.
+if has_code "$UNIT" -E -e '^ProtectSystem=yes'; then
+  ok "ProtectSystem=yes — the decided post-restore state"
 else
-  bad "ProtectSystem is no longer strict; the sandbox these paths carve out may not exist"
+  bad "ProtectSystem is not yes; the sandbox restore drifted"
 fi
 
 echo
@@ -838,7 +842,7 @@ PINNED=(
   "$AGENT_UNIT_RS|-F|fs::write(UNIT_PATH"
   "$UNIT|-F|EnvironmentFile=-/etc/dockpanel/agent.env"
   "$UNIT|-E|^ReadWritePaths="
-  "$UNIT|-E|^ProtectSystem=strict"
+  "$UNIT|-E|^ProtectSystem=yes"  # R8: see the strict->yes note at the §1 arm
   "$STAGER|-F|scripts/install-agent.sh"
   "$STAGER|-E|process\\.exit\\(1\\)"
   ".gitignore|-F|panel/frontend/public/install-agent.sh"

@@ -80,8 +80,13 @@ BACKUPS_ROUTE=panel/agent/src/routes/backups.rs
 BACKUPS_SVC=panel/agent/src/services/backups.rs
 DEPLOY=panel/agent/src/services/deploy.rs
 
-for f in "$APP_PROCESS" "$STAGING" "$NGINX_ROUTE" "$BACKUPS_SVC" "$DEPLOY"; do
+for f in "$APP_PROCESS" "$NGINX_ROUTE" "$BACKUPS_SVC" "$DEPLOY"; do
   [ -f "$f" ] || { echo "missing source file: $f"; exit 1; }
+done
+# R8: services/staging.rs deleted with the site-staging feature; §2 below
+# is a tombstone (same pattern as the R6 sections 3/5).
+for f in "$STAGING"; do
+  [ -f "$f" ] && { echo "should be deleted in R8: $f"; exit 1; }
 done
 # R6 merge: the migration engine and the site-backup routes are deleted;
 # their bug classes die with them (sections 3 and 5 below are tombstones).
@@ -120,14 +125,12 @@ else
 fi
 
 echo
-echo "── 2. G2/G3: staging.rs::clone_files / sync_files — .git-aware chown ──"
-assert_split_chown "$STAGING" "fn clone_files" "clone_files"
-assert_split_chown "$STAGING" "fn sync_files" "sync_files"
-
-echo
-# R6 (2026-11-02): G4 pinned routes/nginx.rs::clone_site's delegation to
-# staging::clone_files. clone_site was deleted in the R6 nginx split; the
-# .git-aware chown itself is still pinned via G2 above, against staging.
+echo "── 2. G2/G3: DELETED in the R8 staging removal ──"
+# R8 (2026-11-02): services/staging.rs deleted with the site-staging
+# feature — clone_files/sync_files are 0 occurrences repo-wide. Deleted,
+# not weakened: the .git-aware chown itself is still pinned via G1 above,
+# against create_app_service.
+ok "TOMBSTONE (R8): G2/G3 retired with staging.rs — the .git-aware chown lives on in G1"
 
 echo "── 3. G5: DELETED in the R6 merge ──"
 # services/migration.rs was deleted with the migration wizard's agent engine.

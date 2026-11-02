@@ -22,6 +22,7 @@ eq()   { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$3', got '$2'"; }
 G=/usr/bin/grep
 
 APPS=panel/frontend/src/pages/Apps.tsx
+ENVDRAWER=panel/frontend/src/pages/apps/EnvDrawer.tsx  # R8: the env editor moved to its drawer
 AGENT=panel/agent/src/services/docker_apps.rs
 AGENT_ROUTES=panel/agent/src/routes/docker_apps.rs
 API=panel/backend/src/routes/docker_apps.rs
@@ -84,24 +85,24 @@ echo "── C. The editor can compose a key (the actual #111 gap) ────�
 
 # C1: an add-row control exists in the Apps env editor.
 eq "C1 Apps env editor offers Add variable" \
-   "$($G -c 'setEnvEditRows(\[\.\.\.envEditRows, { key: "", value: "" }\])' "$APPS")" "1"
+   "$($G -c 'setEnvEditRows(\[\.\.\.envEditRows, { key: "", value: "" }\])' "$ENVDRAWER")" "1"
 
 # C2: the key is an INPUT, not the read-only div it used to be. Keyed on the
 # operation's syntax rather than a token that also appears in prose (lesson #149).
 eq "C2 the key is editable" \
-   "$($G -c 'n\[i\] = { \.\.\.n\[i\], key: e\.target\.value };' "$APPS")" "1"
+   "$($G -c 'n\[i\] = { \.\.\.n\[i\], key: e\.target\.value };' "$ENVDRAWER")" "1"
 
 # C3: a row can be removed.
 eq "C3 a variable can be removed" \
-   "$($G -c 'setEnvEditRows(envEditRows\.filter((_, j) => j !== i))' "$APPS")" "1"
+   "$($G -c 'setEnvEditRows(envEditRows\.filter((_, j) => j !== i))' "$ENVDRAWER")" "1"
 
 # C4 ABSENCE: the Edit button must not be gated on the container already having
 # variables — that gate is half of why a key could never be added.
-GATED=$($G -c '!envEditing && envVars\.length > 0' "$APPS")
+GATED=$($G -c '!envEditing && envVars\.length > 0' "$ENVDRAWER")
 eq "C4 Edit is not gated on existing variables" "$GATED" "0"
 # POSITIVE CONTROL for C4: the emptiness test still exists for the READ view,
 # so the pattern shape is live and the zero above is a real zero.
-EMPTYVIEW=$($G -c 'envVars\.length === 0' "$APPS")
+EMPTYVIEW=$($G -c 'envVars\.length === 0' "$ENVDRAWER")
 [ "$EMPTYVIEW" -ge 1 ] && ok "C4-control the empty-state branch is still present ($EMPTYVIEW)" \
   || bad "C4-control" "no emptiness test anywhere — C4's zero may be vacuous"
 

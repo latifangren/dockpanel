@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 
@@ -259,17 +259,15 @@ export default function Users() {
                     </div>
                   </td>
                   <td className="px-5 py-4">
-                    {/* `reseller` is deliberately not editable here. This control
-                        writes `users.role` and nothing else — `users.rs` has no
-                        reference to `reseller_profiles` — so choosing it minted an
-                        account that got the Reseller nav group and whose own panel
-                        answered 404, and choosing away from it left an orphan
-                        profile behind. Both directions belong to the Resellers
-                        screen, which owns the profile as well as the role. */}
+                    {/* `reseller` is deliberately not editable here, and no
+                        longer reachable anywhere: the Resellers screen was
+                        deleted with the hosting backend (R2), and the stored
+                        `reseller` role was renamed to `user` (R7). A legacy
+                        row still carrying it renders as a plain badge. */}
                     {user.role === "suspended" ? (
                       <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium bg-danger-500/15 text-danger-400">suspended</span>
                     ) : user.role === "reseller" ? (
-                      <Link to="/resellers" title="Manage this reseller's quotas, branding and servers" className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium bg-rust-500/15 text-rust-400 hover:bg-rust-500/25 transition-colors">reseller</Link>
+                      <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium bg-rust-500/15 text-rust-400">reseller</span>
                     ) : editTarget === user.id ? (
                       <select value={editRole} onChange={(e) => setEditRole(e.target.value)} onBlur={() => { if (editRole !== user.role) handleUpdateRole(user.id, editRole); else setEditTarget(null); }} autoFocus className="text-sm border border-dark-500 rounded px-2 py-1">
                         <option value="admin">admin</option>
@@ -456,7 +454,7 @@ export default function Users() {
                   <option value="client">Client</option>
                   <option value="admin">Admin</option>
                 </select>
-                <p className="text-xs text-dark-400 mt-1">Admin has full access. User has limited access. <strong>Client</strong> can manage only the sites transferred to it and cannot create new ones — transfer a site from its own page. To make someone a <strong>reseller</strong>, create the account here and promote it in <Link to="/resellers" className="text-rust-400 hover:underline">Resellers</Link> — a reseller needs quotas and a profile, not just a role.</p>
+                <p className="text-xs text-dark-400 mt-1">Admin has full access. User has limited access.</p>
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-6">

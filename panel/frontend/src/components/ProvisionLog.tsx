@@ -8,12 +8,11 @@ interface ProvisionStep {
 }
 
 interface Props {
-  siteId?: string;
   sseUrl?: string;
   onComplete?: () => void;
 }
 
-export default function ProvisionLog({ siteId, sseUrl, onComplete }: Props) {
+export default function ProvisionLog({ sseUrl, onComplete }: Props) {
   const [steps, setSteps] = useState<ProvisionStep[]>([]);
   const [done, setDone] = useState(false);
   // The stream ended without ever delivering a step. That is not success, and
@@ -29,7 +28,9 @@ export default function ProvisionLog({ siteId, sseUrl, onComplete }: Props) {
   // made the updater impure and ran it twice under StrictMode.
   const receivedRef = useRef(0);
 
-  const url = sseUrl || (siteId ? `/api/sites/${siteId}/provision-log` : "");
+  // No site fallback: the `/api/sites/{id}/provision-log` stream died with
+  // the hosting backend. Every caller passes an explicit `sseUrl`.
+  const url = sseUrl || "";
 
   useEffect(() => {
     if (!url) return;

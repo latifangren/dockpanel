@@ -103,10 +103,12 @@ fi
 # gates the site-less (system) request. The scope is only as good as these.
 if [ -z "$BE_S" ]; then
   bad "A3 SKIPPED: $BE did not yield source"
-elif has "$BE_S" 'SITE_CALLER_PREDICATE' \
-  && has "$BE_S" 'Site not found' \
+# R8: the site branch is gone — a site_id is REFUSED (400) instead of
+# resolved, so there is no ownership predicate left to bind. The live
+# property is the refusal + the admin gate for the only remaining scope.
+elif has "$BE_S" 'Site log streaming was removed with sites' \
   && has "$BE_S" 'Admin access required for system log streaming'; then
-  ok "A3 the site domain is resolved under the ownership predicate and system streaming still needs admin"
+  ok "A3 a site_id is refused outright and system streaming still needs admin — no site scope can be minted"
 else
   bad "A3 the ownership/admin resolution behind the scope is gone — the signed scope would certify nothing"
 fi

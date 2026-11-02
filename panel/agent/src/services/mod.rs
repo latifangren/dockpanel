@@ -38,7 +38,6 @@ pub mod ssl;
 // the guard entry point is still asserted by the git-clone-ssrf pin.
 #[allow(dead_code)]
 pub mod ssrf_guard;
-pub mod staging;
 pub mod traefik;
 pub mod volume_backup;
 pub mod wordpress;

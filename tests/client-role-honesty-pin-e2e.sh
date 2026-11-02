@@ -149,34 +149,24 @@ if need "$DASH_S" A4; then
   fi
 fi
 
-# A5 — the single host-derived cell inside an otherwise tenant-safe status grid.
-# It is the reason that bar could not simply be shown or hidden as a whole.
+# R8 TOMBSTONE (A5–A9): the status grid that rendered host numbers
+# (Uptime/Updates/Mail Queue/Bandwidth/Docker) to every role is gone from
+# Dashboard.tsx — no such cells remain to gate. The live property is that
+# host-derived reads are fetched and rendered admin-only.
 if need "$DASH_S" A5; then
-  if within "$DASH_S" '\{system && \(' 'Uptime' 200; then
-    ok "A5 the Uptime cell is gated on system"
+  if has "$DASH_S" 'const isAdmin = user\?\.role === "admin"'; then
+    ok "TOMBSTONE (R8): A5–A9 retired with the status grid — host reads are admin-gated instead (see A5b)"
   else
-    bad "A5 the Uptime cell is not gated on system — it deref's system.uptime_secs"
+    bad "TOMBSTONE (R8): Dashboard.tsx no longer derives isAdmin — the gating arm below cannot be trusted"
   fi
 fi
-
-# A6-A9 — the cells that render a NUMBER from state a non-admin never fetches.
-# An unhidden blank is honest; an unhidden zero is a claim about a machine the
-# reader was never allowed to ask about. These four were the false statements.
-# ⚠ s442: A6's gap grew from 177 to 267 chars when Updates became a Link with
-# its own conditional background (matching Alerts/Incidents/Backups' existing
-# shape) — 300 keeps ~30 chars of headroom for that cell while staying far
-# tighter than A10's 700 below, so this still means "the SAME gate", not "gated
-# somewhere in the file".
-for pair in "A6:Updates:up to date" "A7:Mail Queue:messages" "A8:Bandwidth:formatSize" "A9:Docker:running"; do
-  arm=${pair%%:*}; rest=${pair#*:}; label=${rest%%:*}; tail=${rest#*:}
-  if need "$DASH_S" "$arm"; then
-    if within "$DASH_S" '\{isAdmin && \(' "$label" 300 && within "$DASH_S" "$label" "$tail" 400; then
-      ok "$arm the $label cell is admin-gated"
-    else
-      bad "$arm the $label cell renders to a non-admin — a host figure stated as zero"
-    fi
+if need "$DASH_S" A5b; then
+  if [ "$(grep -c 'if (isAdmin)' <<< "$DASH_S")" -ge 5 ] && has "$DASH_S" 'isAdmin && \('; then
+    ok "A5b host-derived fetches and host panels are admin-gated in Dashboard.tsx"
+  else
+    bad "A5b host-derived fetches/panels are no longer admin-gated in Dashboard.tsx"
   fi
-done
+fi
 
 # A10 — the dead-end link. Apps.tsx bounces any non-admin straight back, and the
 # sibling "Add Site" link three lines below was already gated for exactly this
@@ -219,12 +209,16 @@ if need "$API_S" B3; then
   fi
 fi
 
-# B4 — stale_backups counted every tenant's sites on the box.
+# R8 TOMBSTONE (B4): the stale-backup count is gone — dashboard.rs pins
+# `let stale_backups: i64 = 0` with an R7 comment (sites table + backups
+# site_id dropped; no site population to count stale against). The field
+# is kept for response shape and never fires. No tenant predicate can
+# drift because there is no count left to scope.
 if need "$API_S" B4; then
-  if has "$API_S" '\$2::uuid IS NULL OR s\.user_id = \$2'; then
-    ok "B4 the stale-backup count carries a tenant predicate"
+  if has "$API_S" 'let stale_backups: i64 = 0'; then
+    ok "TOMBSTONE (R8): B4 retired — the stale-backup count is a pinned 0 with no site population behind it"
   else
-    bad "B4 the stale-backup count is server-scoped only — it counts other tenants' sites"
+    bad "TOMBSTONE (R8): stale_backups is computed again — B4 must be restored over the new query"
   fi
 fi
 
@@ -257,7 +251,8 @@ if need "$NAV_S" C2; then
   fi
 fi
 if need "$LAY_S" C3; then
-  if has "$LAY_S" 'isNavVisible\(item, user\.role\)'; then
+  # R8: the call gained the lite flag — isNavVisible(item, user.role, branding.lite).
+  if has "$LAY_S" 'isNavVisible\(item, user\.role'; then
     ok "C3 the sidebar reads the shared predicate"
   else
     bad "C3 the sidebar has re-inlined its own copy of the role filter"
@@ -326,25 +321,23 @@ echo "§E  CONTEXT — the server shell is still admin-only and still signed"
 echo "    (these must be GREEN AT BOTH TAGS: this ship makes a client terminal"
 echo "     easier to REACH, and must not have loosened what it reaches)"
 
-# E1 — the gate v2.75.0 exists to enforce. This ship changed its MESSAGE; if it
-# ever changes its CONDITION, that is the root-shell escalation returning.
+# R8: the gate split in two — a site_id is refused outright (site shells
+# died with sites) and the server shell needs admin. Both halves are the
+# v2.75.0 gate now.
 if need "$BT_S" E1; then
-  if has "$BT_S" 'q\.site_id\.is_none\(\) && claims\.role != "admin"'; then
-    ok "E1 a site-less ticket is still refused to a non-admin"
+  if has "$BT_S" 'Site shells were removed with sites' && has "$BT_S" 'The server shell is available to administrators only'; then
+    ok "E1 site shells are refused and the server shell is still refused to a non-admin"
   else
     bad "E1 THE SERVER-SHELL GATE IS GONE — this is the v2.75.0 root-shell escalation"
   fi
 fi
 
-# E2 — and the decision still travels INSIDE the signature, which was the actual
-# v2.75.0 fix: the gate above only ever guarded minting.
+# R8: the scope is the constant SERVER_SHELL_SCOPE now (domain is None —
+# see the site_id refusal in E1), bound into the signed ticket as before.
 if need "$BT_S" E2; then
-  # Spans lines: the binding is rustfmt'd across three. Assert the DECISION
-  # (scope derived from the ownership-resolved domain, falling back to the
-  # server marker) and that it reaches the signed struct.
-  if within "$BT_S" 'let scope = domain' 'SERVER_SHELL_SCOPE' 200 \
+  if within "$BT_S" 'let scope = SERVER_SHELL_SCOPE' 'let ticket = TerminalTicket' 400 \
      && within "$BT_S" 'let ticket = TerminalTicket' 'scope,' 400; then
-    ok "E2 the panel still binds the resolved scope into the signed ticket"
+    ok "E2 the panel still binds the server-shell scope into the signed ticket"
   else
     bad "E2 the scope is no longer bound into the signed ticket"
   fi
@@ -357,13 +350,15 @@ if need "$AT_S" E3; then
   fi
 fi
 
-# E4 — ownership, not role, is what grants a site shell. This is why a client has
-# a terminal at all, and the premise the whole §D section rests on.
+# R8 TOMBSTONE (E4): the site branch died with sites — there is no site
+# shell left for the ownership predicate to authorise. The predicate
+# itself retired with routes/sites.rs (R3/R7). The §D premise (a client
+# terminal) is gone with it; the server shell remains admin-only (E1/E2).
 if need "$BT_S" E4; then
-  if has "$BT_S" 'SITE_CALLER_PREDICATE'; then
-    ok "E4 the site branch is still authorised by the ownership predicate"
+  if has "$BT_S" 'Site shells were removed with sites'; then
+    ok "TOMBSTONE (R8): E4 retired with the site branch — no site shell remains to authorise"
   else
-    bad "E4 the site branch no longer uses the shared ownership predicate"
+    bad "TOMBSTONE (R8): the site-shell refusal is gone — E4 must be restored over whatever replaced it"
   fi
 fi
 

@@ -131,7 +131,7 @@ fn owner_by_lines(path: &str, markers: &[String]) -> Owner {
 /// dropped. Units written before v2.123.0 hardcoded `{domain}/public`; v2.123.0
 /// starts the process at the site root instead (the crash-loop fix in
 /// `app_process`). Recognising only the new form would hand every unit already on
-/// disk to the `Theirs` branch — `owned_service_name` refuses to stop, restart or
+/// disk to the `Theirs` branch — the ownership guard refuses to stop, restart or
 /// delete one of those — so an upgrade would strand exactly the sites the release
 /// exists to repair. The `Description` marker happens to cover the same case, but
 /// this function's whole reason for accepting two markers is that either one alone
@@ -375,7 +375,7 @@ mod tests {
     /// v2.123.0 moved a managed process off `{domain}/public` and onto the site
     /// root. Ownership is keyed on that very line, so BOTH spellings have to be
     /// recognised — and the one that matters on an upgrade is the OLD one: every
-    /// unit already on disk carries it, and `owned_service_name` refuses to stop,
+    /// unit already on disk carries it, and the ownership guard refuses to stop,
     /// restart or delete anything this function calls `Theirs`. Dropping the
     /// superseded marker would strand exactly the sites the release repairs.
     ///

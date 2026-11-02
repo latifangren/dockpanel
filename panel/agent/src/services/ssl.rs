@@ -221,18 +221,6 @@ pub struct ProfileInfo {
     pub description: String,
 }
 
-/// ARI (RFC 9773) suggestion: when the CA wants us to renew and when it wants
-/// us to check back for a refreshed suggestion.
-#[derive(serde::Serialize)]
-pub struct AriSuggestion {
-    /// Start of the suggested renewal window.
-    pub renewal_at: chrono::DateTime<chrono::Utc>,
-    /// End of the suggested renewal window.
-    pub renewal_before: chrono::DateTime<chrono::Utc>,
-    /// When to re-fetch ARI (CA-hinted retry-after).
-    pub recheck_at: chrono::DateTime<chrono::Utc>,
-}
-
 #[derive(serde::Serialize)]
 pub struct CertStatus {
     pub domain: String,
@@ -849,7 +837,7 @@ pub async fn enable_ssl_for_site(
     Ok(canonical)
 }
 
-// ── ACME profile + ARI (RFC 9773) helpers ────────────────────────────────
+// ── ACME profile helpers ───────────────────────────────────────────────────
 
 /// List ACME profiles advertised in the server directory. Empty vec means
 /// the CA doesn't support the profiles extension; callers should fall back
@@ -862,35 +850,6 @@ pub fn list_profiles(account: &Account) -> Vec<ProfileInfo> {
             description: p.description.to_string(),
         })
         .collect()
-}
-
-/// Fetch ACME Renewal Information (RFC 9773) for a certificate on disk.
-/// Returns None when the cert can't be parsed, when the CA doesn't support
-/// ARI, or on transient fetch failures — callers fall back to a static
-/// threshold in that case.
-pub async fn fetch_ari(account: &Account, cert_pem_path: &str) -> Option<AriSuggestion> {
-    let pem_bytes = tokio::fs::read(cert_pem_path).await.ok()?;
-    let cert_der = first_cert_der(&pem_bytes)?;
-    let cert_der_ref = CertificateDer::from(cert_der.as_slice());
-    let ident = CertificateIdentifier::try_from(&cert_der_ref).ok()?;
-
-    match account.renewal_info(&ident).await {
-        Ok((info, retry_after)) => {
-            let start = offset_to_chrono(info.suggested_window.start)?;
-            let end = offset_to_chrono(info.suggested_window.end)?;
-            let recheck = chrono::Utc::now()
-                + chrono::Duration::from_std(retry_after).unwrap_or(chrono::Duration::hours(6));
-            Some(AriSuggestion {
-                renewal_at: start,
-                renewal_before: end,
-                recheck_at: recheck,
-            })
-        }
-        Err(e) => {
-            tracing::debug!("ARI fetch failed ({cert_pem_path}): {e}");
-            None
-        }
-    }
 }
 
 /// Build a `CertificateIdentifier` from a cert PEM. Parses the first

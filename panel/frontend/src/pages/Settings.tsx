@@ -215,7 +215,6 @@ export default function Settings() {
   const [smtpFrom, setSmtpFrom] = useState("");
   const [smtpFromName, setSmtpFromName] = useState("");
   const [smtpEncryption, setSmtpEncryption] = useState("starttls");
-  const [testingEmail, setTestingEmail] = useState(false);
 
   // Update count for tab badge
   const [updateCount, setUpdateCount] = useState(0);
@@ -227,11 +226,6 @@ export default function Settings() {
   const [traefikInstalling, setTraefikInstalling] = useState(false);
   const [showTraefikEmail, setShowTraefikEmail] = useState(false);
   const [traefikEmail, setTraefikEmail] = useState("admin@example.com");
-
-  // PowerDNS
-  const [pdnsApiUrl, setPdnsApiUrl] = useState("");
-  const [pdnsApiKey, setPdnsApiKey] = useState("");
-  const [showPdnsGuide, setShowPdnsGuide] = useState(false);
 
   // Notification channels
   const [notifySlackUrl, setNotifySlackUrl] = useState("");
@@ -316,8 +310,6 @@ export default function Settings() {
       setAutoHealEnabled(data.auto_heal_enabled === "true");
       setAutoHealReclaim(data.auto_heal_docker_reclaim === "true");
       setReverseProxy(data.reverse_proxy || "nginx");
-      setPdnsApiUrl(data.pdns_api_url || "");
-      setPdnsApiKey(data.pdns_api_key || "");
       setOauthCreds(Object.fromEntries(OAUTH_PROVIDERS.map(p => [p.id, {
         id: data[`oauth_${p.id}_client_id`] || "",
         // Arrives as the mask when stored; the backend skips that sentinel on
@@ -527,19 +519,6 @@ export default function Settings() {
     }
   };
 
-  const handleTestEmail = async () => {
-    setTestingEmail(true);
-    setMessage({ text: "", type: "" });
-    try {
-      const result = await api.post<{ message: string }>("/settings/smtp/test", {});
-      setMessage({ text: result.message || "Test email sent!", type: "success" });
-    } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : "Test email failed", type: "error" });
-    } finally {
-      setTestingEmail(false);
-    }
-  };
-
   const SMTP_PRESETS: Record<string, { host: string; port: string; encryption: string }> = {
     custom: { host: "", port: "", encryption: "starttls" },
     mailgun: { host: "smtp.mailgun.org", port: "587", encryption: "starttls" },
@@ -706,9 +685,7 @@ export default function Settings() {
             setSmtpFromName={setSmtpFromName}
             smtpEncryption={smtpEncryption}
             setSmtpEncryption={setSmtpEncryption}
-            testingEmail={testingEmail}
             saveSMTP={saveSMTP}
-            handleTestEmail={handleTestEmail}
             applyPreset={applyPreset}
           />
         )}
@@ -783,21 +760,13 @@ export default function Settings() {
           />
         )}
 
-        {/* Services tab: Service Installers (incl. PowerDNS config), System Health */}
+        {/* Services tab: Service Installers, System Health */}
         {tab === "services" && (
           <ServicesTab
-            saving={saving}
-            setSaving={setSaving}
             health={health}
             healthLoading={healthLoading}
             setHealthLoading={setHealthLoading}
             setMessage={setMessage}
-            pdnsApiUrl={pdnsApiUrl}
-            setPdnsApiUrl={setPdnsApiUrl}
-            pdnsApiKey={pdnsApiKey}
-            setPdnsApiKey={setPdnsApiKey}
-            showPdnsGuide={showPdnsGuide}
-            setShowPdnsGuide={setShowPdnsGuide}
             loadHealth={loadHealth}
             setTab={setTab}
           />

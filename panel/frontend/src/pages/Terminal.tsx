@@ -5,7 +5,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { api, ApiError } from "../api";
-import { UPLOAD_MAX_FILE_BYTES, uploadTooLargeMessage } from "../constants";
 import { useAuth } from "../context/AuthContext";
 
 interface Site {
@@ -179,8 +178,11 @@ export default function Terminal() {
   // A deliberate answer from the panel (feature switched off, or the selected
   // server is a fleet member) rather than something that went wrong.
   const [notice, setNotice] = useState("");
-  const [sites, setSites] = useState<Site[]>([]);
-  const [sitesLoaded, setSitesLoaded] = useState(false);
+  // No site list anymore: site shells died with the hosting backend, so
+  // there are no sites to select. The selector below offers the server
+  // shell only; `selectedSite` can only arrive via a stale `?site=` link,
+  // which the backend now refuses.
+  const sites: Site[] = [];
   const [selectedSite, setSelectedSite] = useState(initialSiteId);
 
   // Snippets
@@ -243,17 +245,6 @@ export default function Terminal() {
   useEffect(() => {
     localStorage.setItem("dp-terminal-theme", themeName);
   }, [themeName]);
-
-  // Load sites
-  useEffect(() => {
-    api
-      .get<Site[]>("/sites")
-      .then(setSites)
-      .catch(() => setError("Failed to load sites"))
-      // Distinguishes "no sites" from "not asked yet" — without it the
-      // owns-nothing notice below fires for a moment on every load.
-      .finally(() => setSitesLoaded(true));
-  }, []);
 
   // Idle timeout reset
   const resetIdleTimer = useCallback(() => {
@@ -487,9 +478,9 @@ export default function Terminal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A non-admin's default session is their own first site, chosen once the list
-  // arrives rather than at mount (it is empty at mount). `/sites` is already
-  // scoped to the caller, so "the first site" is always one they own.
+  // A non-admin's default session used to be their own first site, chosen
+  // once the list arrived. No list arrives anymore (sites are gone), so this
+  // effect is a no-op and the owns-nothing notice below is what fires.
   // Must live BELOW `connect` — a dependency array naming it any earlier is
   // evaluated during render, before the useCallback has initialised.
   useEffect(() => {
@@ -499,12 +490,13 @@ export default function Terminal() {
   }, [isAdmin, selectedSite, sites, connect]);
 
   // ...and if they own none, say so rather than leaving a dead black rectangle.
+  // Site shells are gone, so a non-admin with no `?site=` always lands here.
   useEffect(() => {
-    if (isAdmin || selectedSite || !sitesLoaded || sites.length > 0) return;
+    if (isAdmin || selectedSite || sites.length > 0) return;
     setNotice(
       "This terminal opens a shell inside a site you own. No site is assigned to your account yet — once one is, it will appear in the selector above."
     );
-  }, [isAdmin, selectedSite, sitesLoaded, sites]);
+  }, [isAdmin, selectedSite, sites]);
 
   // Handle resize
   //
@@ -744,53 +736,6 @@ export default function Terminal() {
             >
               Snippets
             </button>
-
-            {/* File upload (site terminals only) */}
-            {selectedSite && (
-              <label className="py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-mono cursor-pointer hover:bg-dark-600 active:bg-dark-500 touch-manipulation text-center">
-                Upload
-                <input
-                  type="file"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file || !selectedSite) return;
-                    if (file.size > UPLOAD_MAX_FILE_BYTES) {
-                      setError(uploadTooLargeMessage(file.name, file.size));
-                      e.target.value = "";
-                      return;
-                    }
-                    const reader = new FileReader();
-                    reader.onload = async () => {
-                      const base64 = (reader.result as string).split(",")[1];
-                      try {
-                        await api.post(`/sites/${selectedSite}/files/upload`, {
-                          path: "",
-                          filename: file.name,
-                          content: base64,
-                        });
-                        setError("");
-                        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                          const safeName = file.name.replace(/[^a-zA-Z0-9._\- ]/g, '_');
-                          wsRef.current.send(
-                            JSON.stringify({
-                              type: "input",
-                              data: `echo "Uploaded: ${safeName}"\n`,
-                            })
-                          );
-                        }
-                        setStatus(`Uploaded: ${file.name}`);
-                        setTimeout(() => setStatus(""), 3000);
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : `Upload failed: ${file.name}`);
-                      }
-                    };
-                    reader.readAsDataURL(file);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-            )}
 
             {/* Copy Output */}
             <button

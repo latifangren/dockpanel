@@ -85,7 +85,9 @@ function SiteLogsContent() {
   const [lineCount, setLineCount] = useState(100);
   const [filter, setFilter] = useState("");
   const [filterInput, setFilterInput] = useState("");
-  const [sites, setSites] = useState<Site[]>([]);
+  // No site list anymore: sites died with the hosting backend, so the site
+  // selector below offers only "System logs" and `selectedSite` stays empty.
+  const sites: Site[] = [];
   const [selectedSite, setSelectedSite] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [streaming, setStreaming] = useState(false);
@@ -123,10 +125,6 @@ function SiteLogsContent() {
   const [truncating, setTruncating] = useState<string | null>(null);
   const [pendingTruncate, setPendingTruncate] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.get<Site[]>("/sites").then(setSites).catch(() => setError("Failed to load sites. Please try again."));
-  }, []);
-
   const scrollToBottom = () => {
     setTimeout(() => {
       if (containerRef.current) {
@@ -152,9 +150,7 @@ function SiteLogsContent() {
   const loadStats = async () => {
     setStatsLoading(true);
     try {
-      const site = sites.find((s) => s.id === selectedSite);
-      const domain = site?.domain ? `?domain=${site.domain}` : "";
-      const data = await api.get<LogStats>(`/logs/stats${domain}`);
+      const data = await api.get<LogStats>("/logs/stats");
       setLogStats(data);
     } catch {
       setLogStats(null);
@@ -265,19 +261,7 @@ function SiteLogsContent() {
     setLoading(true);
     try {
       let path: string;
-      const type = selectedSite
-        ? logType === "nginx_access"
-          ? "access"
-          : logType === "nginx_error"
-            ? "error"
-            : logType
-        : logType;
-
-      if (selectedSite) {
-        path = `/sites/${selectedSite}/logs?type=${type}&lines=${lineCount}`;
-      } else {
-        path = `/logs?type=${logType}&lines=${lineCount}`;
-      }
+      path = `/logs?type=${logType}&lines=${lineCount}`;
       if (filter) {
         path += `&filter=${encodeURIComponent(filter)}`;
       }
@@ -298,13 +282,7 @@ function SiteLogsContent() {
     if (!searchPattern.trim()) return;
     setLoading(true);
     try {
-      let path: string;
-      if (selectedSite) {
-        const type = logType === "nginx_access" ? "access" : logType === "nginx_error" ? "error" : logType;
-        path = `/sites/${selectedSite}/logs/search?type=${type}&pattern=${encodeURIComponent(searchPattern)}&max=${searchMax}`;
-      } else {
-        path = `/logs/search?type=${logType}&pattern=${encodeURIComponent(searchPattern)}&max=${searchMax}`;
-      }
+      const path = `/logs/search?type=${logType}&pattern=${encodeURIComponent(searchPattern)}&max=${searchMax}`;
       const data = await api.get<string[]>(path);
       setLines(data);
       scrollToBottom();
@@ -343,13 +321,7 @@ function SiteLogsContent() {
   // WebSocket streaming with auto-reconnect
   const connectStream = async (isReconnect = false) => {
     try {
-      const siteLogType = selectedSite
-        ? logType === "nginx_access" ? "access" : logType === "nginx_error" ? "error" : logType
-        : logType;
-      let tokenUrl = `/logs/stream/token?type=${siteLogType}`;
-      if (selectedSite) {
-        tokenUrl += `&site_id=${selectedSite}`;
-      }
+      const tokenUrl = `/logs/stream/token?type=${logType}`;
       const resp = await api.get<{ token: string; domain?: string; type: string }>(tokenUrl);
 
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";

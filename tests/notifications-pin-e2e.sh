@@ -166,10 +166,12 @@ echo "── 3. every producer passes a link ──"
 LINKS=$(python3 - "$BACKEND" <<'PY'
 import os, re, sys
 root = sys.argv[1]
-# Allow-listed: the subject of the notification no longer exists, so any link
-# would resolve to the catch-all route and land the operator on the Dashboard
-# without saying why. Recorded here so it stays a decision.
-ALLOW = {("routes/sites.rs", "Site deleted")}
+# R8: the allow-list is EMPTY. Its one entry — ("routes/sites.rs",
+# "Site deleted"), the deleted-site notification whose subject no longer
+# existed — retired with routes/sites.rs (R3). Every surviving producer
+# passes a link (NMISS must be 0 below); a new link-less producer must earn
+# a new reasoned entry here, not silence.
+ALLOW = set()
 missing, total, allowed = [], 0, 0
 for dirpath, _, files in os.walk(root):
     for fn in files:
@@ -240,11 +242,12 @@ else
     bad "N3 $NMISS producer(s) pass no link: $(echo "$LINKS" | /usr/bin/grep '^MISSING' | tr '\n' ' ')"
   fi
   # STALE-ALLOW: an allow-list entry that no longer matches anything is a lie
-  # about the code, and it silences the arm for whatever takes its place.
-  if [ "$ALLOWED" -eq 1 ]; then
-    ok "N3 the one reasoned exception still matches its call site"
+  # about the code. R8: the list is empty by decision (see above), so the
+  # count must be exactly 0 — any match means a stale entry crept back in.
+  if [ "$ALLOWED" -eq 0 ]; then
+    ok "N3 no reasoned exceptions remain — every producer passes a link"
   else
-    bad "N3 the allow-list matched $ALLOWED call sites, expected exactly 1 — it has gone stale"
+    bad "N3 the allow-list matched $ALLOWED call sites, expected exactly 0 — it has gone stale"
   fi
 fi
 

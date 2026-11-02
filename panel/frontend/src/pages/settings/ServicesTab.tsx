@@ -4,7 +4,6 @@
 // under the same names, so the JSX body below is unchanged.
 import { ServiceInstallers } from "./ServiceInstallers";
 import { ImageScanSettings } from "./ImageScanSettings";
-import { WpVulnScanSettings } from "./WpVulnScanSettings";
 import { SbomSettings } from "./SbomSettings";
 import { PrometheusSettings } from "./PrometheusSettings";
 import { AcmeContactSettings } from "./AcmeContactSettings";
@@ -15,58 +14,31 @@ import type { HealthStatus } from "../Settings";
 import type { Dispatch, SetStateAction } from "react";
 
 interface ServicesTabProps {
-  saving: string | null;
-  setSaving: Dispatch<SetStateAction<string | null>>;
   health: HealthStatus | null;
   healthLoading: boolean;
   setHealthLoading: Dispatch<SetStateAction<boolean>>;
   setMessage: Dispatch<SetStateAction<{ text: string; type: string }>>;
-  pdnsApiUrl: string;
-  setPdnsApiUrl: Dispatch<SetStateAction<string>>;
-  pdnsApiKey: string;
-  setPdnsApiKey: Dispatch<SetStateAction<string>>;
-  showPdnsGuide: boolean;
-  setShowPdnsGuide: Dispatch<SetStateAction<boolean>>;
   loadHealth: () => Promise<void>;
   setTab: Dispatch<SetStateAction<string>>;
 }
 
 export function ServicesTab({
-  saving,
-  setSaving,
   health,
   healthLoading,
   setHealthLoading,
   setMessage,
-  pdnsApiUrl,
-  setPdnsApiUrl,
-  pdnsApiKey,
-  setPdnsApiKey,
-  showPdnsGuide,
-  setShowPdnsGuide,
   loadHealth,
   setTab
 }: ServicesTabProps) {
   return (
     <>
-        {/* Service Installers with integrated PowerDNS config */}
+        {/* Service Installers */}
         <ServiceInstallers
-          pdnsApiUrl={pdnsApiUrl}
-          setPdnsApiUrl={setPdnsApiUrl}
-          pdnsApiKey={pdnsApiKey}
-          setPdnsApiKey={setPdnsApiKey}
-          showPdnsGuide={showPdnsGuide}
-          setShowPdnsGuide={setShowPdnsGuide}
-          saving={saving}
-          setSaving={setSaving}
           setMessage={setMessage}
         />
 
         {/* Image Vulnerability Scanning */}
         <ImageScanSettings setMessage={setMessage} />
-
-        {/* WordPress Vulnerability Scanning (direct peer of the above) */}
-        <WpVulnScanSettings setMessage={setMessage} />
 
         {/* SBOM (composition; companion to image scanning) */}
         <SbomSettings setMessage={setMessage} />

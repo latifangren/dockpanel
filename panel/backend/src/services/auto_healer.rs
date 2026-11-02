@@ -702,15 +702,11 @@ async fn reclaim_enabled(pool: &PgPool) -> bool {
     .unwrap_or(false)
 }
 
-/// Auto-renew SSL certs using ACME Renewal Information (RFC 9773) when
-/// available, falling back to a profile-aware static threshold.
+/// Auto-renew SSL certs, falling back to a profile-aware static threshold.
 ///
-/// Two phases per run:
-/// 1. **ARI refresh** — for each SSL site whose suggestion is missing or
-///    stale, fetch `/ssl/{domain}/renewal-info` from the agent and store
-///    the suggested renewal window.
-/// 2. **Renewal** — for sites whose `ssl_renewal_at` has passed (or whose
-///    fallback threshold is hit), call `/ssl/{domain}/renew`.
+/// The planned ARI-refresh phase (fetching a suggested renewal window per
+/// site) was never implemented and its agent endpoint was removed in R8;
+/// renewal calls `/ssl/{domain}/renew` directly.
 ///
 /// The agent reads the prior cert PEM from disk and passes it as the ARI
 /// `replaces` hint, so the CA sees a continuous issuance chain.

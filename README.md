@@ -6,7 +6,7 @@
 
 **DockPanel Lite** adalah dashboard server dan homelab *all-in-one* yang terinspirasi oleh **CasaOS**, dirancang khusus untuk berjalan ringan di **ponsel bekas (seperti Xiaomi Redmi Note 5 / whyred), Single Board Computer (SBC), dan server mini** yang menjalankan **postmarketOS (Alpine Linux)** serta distro Linux lainnya.
 
-Proyek ini merupakan fork dari `ovexro/dockpanel` yang dirombak total: membuang seluruh *bloatware* panel hosting web tradisional (cPanel/CyberPanel, WordPress toolkit, reseller tier, mail server, DNS zone, git deploy) dan memfokuskan antarmuka murni menjadi **Personal Cloud & Docker App Management Dashboard** yang elegan dan hemat RAM.
+Proyek ini merupakan fork dari `ovexro/dockpanel` yang dirombak total: membuang seluruh *bloatware* panel hosting web tradisional (cPanel/CyberPanel, WordPress toolkit, reseller tier, mail server, DNS zone, git deploy) — backend-nya dihapus di R1–R7 (di-push di `4fcec629`), bukan cuma disembunyikan dari UI — dan memfokuskan antarmuka murni menjadi **Personal Cloud & Docker App Management Dashboard** yang elegan dan hemat RAM.
 
 ---
 
@@ -35,7 +35,12 @@ Proyek ini merupakan fork dari `ovexro/dockpanel` yang dirombak total: membuang 
 - Terminal berbasis browser yang terhubung langsung ke sistem host. Agent berjalan dengan sandbox systemd yang dikembalikan (Fase 1); operasi istimewa memakai jalur `systemd-run` yang disediakan agent, bukan dengan mematikan sandbox.
 
 ### 5. Dirancang Hemat Resource
-- Layanan host (PHP-FPM, Postfix, PowerDNS) tidak diinstall dalam mode lite. Jujur dicatat: **kode backend hosting masih ada** di rilis ini (yang dihapus baru UI-nya); penghapusannya direncanakan bertahap (R1–R8, lihat issue #1). Postgres tetap berjalan sebagai container (cap 256 MiB).
+- Layanan host (PHP-FPM, Postfix, PowerDNS) tidak diinstall, dan sejak
+  R4/R6 kode backend hosting-nya (sites, mail, DNS, git deploy, PHP,
+  WordPress) sudah dihapus — R1–R7 + perbaikan CLI di-push di HEAD
+  `4fcec629`; R8 (frontend mati + docs) masih working tree saat README
+  ini ditulis dan belum dirilis. Postgres tetap berjalan sebagai
+  container (cap 256 MiB).
 - Sangat ramah untuk perangkat dengan RAM 3 GB – 4 GB.
 
 ---

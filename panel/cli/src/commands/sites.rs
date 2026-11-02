@@ -1,4 +1,3 @@
-use crate::client;
 use serde_json::json;
 
 pub struct SiteInfo {
@@ -67,10 +66,9 @@ pub fn list_nginx_sites() -> Vec<SiteInfo> {
     sites
 }
 
-pub async fn cmd_sites_list(token: &str, output: &str, filter: Option<&str>) -> Result<(), String> {
-    let info = client::agent_get("/system/info", token).await?;
-    let _ = info;
-
+/// Fully local: reads nginx vhost files on this box. No agent call —
+// an unreachable agent must not hide the sites on disk.
+pub async fn cmd_sites_list(output: &str, filter: Option<&str>) -> Result<(), String> {
     let mut sites = list_nginx_sites();
 
     // Apply filter

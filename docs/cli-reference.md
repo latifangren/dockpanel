@@ -46,77 +46,43 @@ dockpanel status -o json
 
 ### `dockpanel sites`
 
-List all Nginx sites.
+List the nginx vhosts present on this box. This is a **local, read-only
+inventory**, not panel data: it reads `/etc/nginx/sites-enabled/` directly
+and infers each entry's type (`proxy` if the config contains `proxy_pass`,
+`php` if it contains `fastcgi_pass` or `php`, otherwise `static`) and
+whether it carries an `ssl_certificate` line. The panel vhost itself
+(`dockpanel-panel.conf`), `dockpanel.dev.conf` and `default` are skipped.
+There are no `create`, `info` or `delete` subcommands — sites were removed
+from the panel in R3, and this list is all that remains of the command.
 
 ```bash
 dockpanel sites
 ```
 
 ```
-DOMAIN                RUNTIME    SSL    STATUS
-example.com           php        ✓      active
-api.example.com       proxy      ✓      active
-blog.example.com      static     ✓      active
+DOMAIN                TYPE        SSL
+example.com           php         yes
+api.example.com       proxy       yes
+blog.example.com      static      no
+
+3 site(s)
 ```
 
-Filter by domain:
+Filter by domain substring (case-insensitive):
 
 ```bash
 dockpanel sites -f blog
 ```
 
-#### `dockpanel sites create`
-
-Create a new site.
+JSON output uses the keys `domain`, `runtime` and `ssl`:
 
 ```bash
-dockpanel sites create example.com --runtime php --ssl --ssl-email admin@example.com
+dockpanel sites -o json
 ```
 
-| Argument | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DOMAIN` | Yes | | Domain name |
-| `--runtime` | No | `static` | Runtime type: `static`, `php`, or `proxy` |
-| `--proxy-port` | No | | Upstream port (required for `--runtime proxy`) |
-| `--ssl` | No | | Provision Let's Encrypt SSL |
-| `--ssl-email` | No | | Email for Let's Encrypt (required with `--ssl`) |
-
-```
-Site created: example.com
-  Runtime:  php
-  Root:     /var/www/example.com/public
-  SSL:      provisioned (expires 2026-06-18)
-```
-
-#### `dockpanel sites info`
-
-Show site details.
-
-```bash
-dockpanel sites info example.com
-```
-
-```
-SITE DETAILS
-─────────────────────────────────
-Domain:      example.com
-Runtime:     php
-Root:        /var/www/example.com/public
-SSL:         active (expires 2026-06-18)
-Created:     2026-03-15 10:30:00
-```
-
-#### `dockpanel sites delete`
-
-Delete a site and its Nginx configuration.
-
-```bash
-dockpanel sites delete example.com
-```
-
-```
-Site deleted: example.com
-```
+The listing is fully local: it reads `/etc/nginx/sites-enabled/` directly
+and makes no agent call (the former `/system/info` round-trip, whose
+result was discarded, was removed in R8).
 
 ---
 
@@ -325,7 +291,11 @@ dockpanel services -f nginx
 
 ### `dockpanel ssl`
 
-SSL certificate management.
+SSL certificate management. The only subcommand is `status`: there is no
+`provision` or `renew` in the CLI. Certificate provisioning and renewal
+for stacks and the panel itself are panel operations (ACME profiles and
+contact email under `/api/ssl/*`, certificate renewal per stack); the CLI
+only reads the certificate the agent sees for a domain.
 
 #### `dockpanel ssl status`
 
@@ -345,103 +315,43 @@ SSL Certificate: example.com
 The days remaining are coloured: green above 30, amber above 7, red at or below.
 A domain with no certificate prints `No SSL certificate for example.com`.
 
-#### `dockpanel ssl provision`
-
-Provision a Let's Encrypt certificate.
-
-```bash
-dockpanel ssl provision example.com --email admin@example.com --runtime php
-```
-
-| Argument | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DOMAIN` | Yes | | Domain name |
-| `--email` | Yes | | Let's Encrypt email |
-| `--runtime` | No | `static` | Site runtime: `static`, `php`, or `proxy` |
-| `--proxy-port` | No | | Upstream port (for proxy runtime) |
-| `--force` | No | | Issue even if the installed certificate came from elsewhere — it will be **replaced** |
-
-**Ordering over somebody else's certificate is refused.** Provisioning writes
-`fullchain.pem` and `privkey.pem` into `/etc/dockpanel/ssl/<domain>/`, so a
-domain already serving a purchased, Origin CA or corporate PKI certificate would
-have it destroyed rather than refreshed. The agent checks the installed
-certificate's issuer first and refuses by name:
-
-```
-Refusing to issue a Let's Encrypt certificate for example.com: the certificate
-already installed there was issued by DigiCert Inc, not by DockPanel, and
-ordering would overwrite it. Renew it wherever it was issued, or pass --force if
-you intend to replace it.
-```
-
-A certificate whose issuer cannot be read is **not** treated as somebody else's —
-refusing on doubt is how a real certificate lapses. The same guard covers
-`dockpanel sites create --ssl` and `dockpanel apply`, because it lives at the
-point where the file is written rather than at each command.
-
-> There is no `dockpanel ssl renew`. Renewal is the panel's job — the weekly
-> security scan reissues what it owns, including Compose stacks since 2.161.0.
-
 ---
 
 ### `dockpanel backup`
 
-Backup management.
+Backup management for **databases and Docker volumes only**. The site
+backup commands (`create`/`list`/`restore`/`delete` taking a domain) were
+removed with the hosting backend in R3/R6: there are no sites left to back
+up, and the CLI exposes no restore or delete at all — restores of database
+and volume backups are panel operations. The subcommands are:
 
-#### `dockpanel backup create`
-
-```bash
-dockpanel backup create example.com
-```
-
-```
-Creating backup for example.com...
-✓ Backup created
-  File:    example.com-20260320-143022.tar.gz
-  Size:    45.2 MB
-  Content: files only
-
-! This archive contains the site's files but NOT its databases.
-  The CLI talks to the agent directly and cannot resolve a site's databases.
-  Create the backup from the panel (or the panel API) to include them.
-```
-
-CLI backups never include databases — the agent has no access to the panel's database records.
-Create the backup from the panel if you need one that holds the site's content.
-
-#### `dockpanel backup list`
+| Subcommand | Purpose |
+|------------|---------|
+| `backup db-create <CONTAINER> <DB_NAME>` | Dump one database via the agent (`--db-type`, `--user`, `--password`/`--password-stdin`) |
+| `backup db-list <DB_NAME>` | List dumps for a database |
+| `backup vol-create <VOLUME> <CONTAINER>` | Back up one Docker volume |
+| `backup vol-list <CONTAINER>` | List volume backups for a container |
+| `backup verify --type database\|volume <NAME> <FILENAME>` | Verify one backup (`--db-type` for databases) |
+| `backup health` | Local counts of database/volume backup files under `/var/backups/dockpanel` |
 
 ```bash
-dockpanel backup list example.com
+# Database backup (password via stdin; a bare --password is visible via ps/history)
+echo -n "s3cureP@ss" | dockpanel backup db-create dockpanel-db-blog_db blog_db --db-type postgres --password-stdin
+dockpanel backup db-list blog_db
+
+# Volume backup
+dockpanel backup vol-create mydata dockpanel-app-myapp
+dockpanel backup vol-list dockpanel-app-myapp
+
+# Verify + health
+dockpanel backup verify --type database blog_db blog_db-20260320-143022.sql.gz
+dockpanel backup health
 ```
 
-#### `dockpanel backup restore`
-
-```bash
-dockpanel backup restore example.com example.com_2026-03-20_143022.tar.gz
-```
-
-```
-Restoring example.com from example.com_2026-03-20_143022.tar.gz...
-✓ Backup restored
-  Content: files only (this archive holds no database)
-```
-
-Restoring an archive that carries database dumps works from the CLI when a panel API key is
-configured (`Settings → API Keys`, saved to `/etc/dockpanel/backend.token`) — `backup restore`
-prefers that path automatically, restoring files and databases through the same route the panel
-UI's own Restore button uses, then following its progress stream to completion.
-
-Without a configured key, `backup restore` falls back to the older agent-direct path (files
-only, same behavior as before this existed): it **fails** on a DB-bearing archive rather than
-restoring the files and calling that success, and its error message points you at minting a key
-or restoring from the panel instead.
-
-#### `dockpanel backup delete`
-
-```bash
-dockpanel backup delete example.com example.com_2026-03-18_020000.tar.gz
-```
+`backup db-create` prints the dump filename and size. `backup db-list`
+reports files the agent cannot import, with the reason, instead of hiding
+them. `backup verify` prints `Verification PASSED/FAILED` with the
+per-check detail the agent returns.
 
 ---
 
@@ -580,29 +490,16 @@ PID      CPU%    MEM%    COMMAND
 
 ---
 
-### `dockpanel php`
+### `dockpanel php` — removed
 
-PHP version management.
-
-```bash
-dockpanel php
-```
-
-```
-VERSION    STATUS     FPM SOCKET
-8.1        installed  /run/php/php8.1-fpm.sock
-8.3        installed  /run/php/php8.3-fpm.sock
-```
-
-#### `dockpanel php install`
-
-Install a PHP version.
-
-```bash
-dockpanel php install 8.4
-```
-
-Supported versions: `8.1`, `8.2`, `8.3`, `8.4`, `8.5`.
+There is no `dockpanel php` command. PHP version management (and the
+host PHP-FPM / Composer / WAF installers behind it) was removed with the
+hosting backend in R6. PHP appears in the CLI only as read-only inventory
+on the agent side: the agent's `/iac/export` still emits a `php` key
+listing the PHP-FPM versions present on the box, but `dockpanel export`
+filters it (and `sites`) out before printing. Do not install a PHP version
+expecting the panel to serve a site with it — there is no site surface
+left to serve.
 
 ---
 
@@ -647,14 +544,6 @@ Sample output:
 
 ```yaml
 version: "1"
-sites:
-  - domain: example.com
-    runtime: php
-    ssl: true
-  - domain: api.example.com
-    runtime: proxy
-    proxy_port: 3000
-    ssl: true
 databases:
   - name: mysite_db
     engine: mysql
@@ -664,7 +553,24 @@ apps:
     template: ghost
     port: 2368
     domain: blog.example.com
+crons:
+  - id: nightly-backup
+    schedule: "0 2 * * *"
+    command: /opt/scripts/backup.sh
+firewall:
+  enabled: true
+  rules:
+    - to: "80/tcp"
+      action: ALLOW
 ```
+
+`export` prints the agent's `/iac/export` as YAML after filtering out two
+read-only inventory keys, `sites` (the nginx vhosts found in the box's
+site-config directory) and `php` (the PHP-FPM versions present on the
+box). The agent still emits both; the CLI drops them, so neither appears
+in the output above. Neither is a panel resource any more, and `apply`
+warns and ignores both — see below. Do not hand-edit them into an `apply`
+file expecting anything to happen.
 
 ---
 
@@ -684,28 +590,34 @@ dockpanel apply config.yml --email admin@example.com
 |----------|----------|-------------|
 | `FILE` | Yes | Path to YAML config file |
 | `--dry-run` | No | Show changes without applying |
-| `--email` | No | Email for Let's Encrypt SSL provisioning |
+| `--email` | No | Email for Let's Encrypt SSL provisioning on app deploys with a domain |
 
-`apply` only creates resources that are missing — for sites, databases, apps and
-PHP versions it never diffs or updates something that already exists, even if the
-file describes it differently now (e.g. a changed `proxy_port` or `php_version`
-on an existing site is silently ignored). Cron jobs are the one exception: a
-matching `id` already in the crontab is compared and re-synced if its schedule or
-command changed. Firewall rules in an exported file are shown for reference only —
-`apply` never creates, updates, or removes them; manage those with
+`apply` only handles three sections of the file: `databases`, `apps` and
+`crons`. Databases and apps are create-only — something that already exists
+is never diffed or updated, even if the file describes it differently now.
+Cron jobs are the one exception: a matching `id` already in the crontab is
+compared and re-synced if its schedule or command changed (via the agent's
+`/crons/sync`). Firewall rules in an exported file are shown for reference
+only — `apply` never creates, updates, or removes them; manage those with
 `dockpanel security firewall`.
+
+`sites` and `php` sections in a file are **ignored with a warning**: `apply`
+reads only the three sections above and prints a "no longer supported"
+warning for each non-empty `sites`/`php` section it drops, in dry-run as
+well as on a real apply. A file exported from an older panel that still
+lists sites will apply its databases, apps and crons, warn about the site
+entries, and drop them. Do not rely on `apply` to recreate a site or
+install a PHP version — neither operation exists any more.
 
 Dry run output:
 
 ```
 Plan:
-  + site: staging.example.com (static)
-  = site: api.example.com (already exists)
   + database: staging_db (postgres, port 5434)
   + cron: nightly-backup (0 2 * * * /opt/scripts/backup.sh)
   = cron: log-rotate (already exists, unchanged)
 
-3 to create, 2 existing
+2 to create, 1 existing
 ```
 
 ---

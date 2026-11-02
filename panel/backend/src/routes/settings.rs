@@ -35,7 +35,10 @@ pub const ALLOWED_KEYS: &[&str] = &[
     "panel_name", "smtp_host", "smtp_port", "smtp_username", "smtp_password",
     "smtp_from", "smtp_from_name", "smtp_encryption",
     "agent_auto_update_enabled",
-    "pdns_api_url", "pdns_api_key",
+    // R8: `pdns_api_url`/`pdns_api_key` removed — no reader remains (the
+    // PowerDNS installer and DNS-01 provisioning are gone). Stored rows
+    // from older installs stay masked/encrypted via SENSITIVE_KEYS and the
+    // credential-re-encrypt sweep; they are inert and no longer settable.
     "auto_heal_enabled", "auto_heal_docker_reclaim", "status_page_enabled", "enforce_2fa",
     "logo_url", "accent_color",
     "oauth_google_client_id", "oauth_google_client_secret",

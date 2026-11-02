@@ -194,22 +194,36 @@ fi
 echo
 echo "── 4. S4: hook/shell command validators close the quote-split bypass ──"
 
-if bodyhas "$CMDFILTER" "pub fn is_safe_hook_command" "normalize_for_blocklist(command)"; then
-  ok "is_safe_hook_command routes its dangerous-pattern scan through normalize_for_blocklist"
+# R8 TOMBSTONE (hook arm): is_safe_hook_command is gone (0 occurrences
+# repo-wide) with the git-deploy hooks it gated (post_deploy_cmd /
+# pre_build_cmd: 0 occurrences). No hook commands are executed anymore.
+if grep -rq 'is_safe_hook_command\|post_deploy_cmd\|pre_build_cmd' panel/backend/src panel/agent/src --include='*.rs'; then
+  bad "TOMBSTONE (R8): hook-command code reappeared — the S4 hook arm must be restored"
 else
-  bad "is_safe_hook_command no longer normalizes — r'm' -rf / bypasses the blocklist and sh -c runs it for real"
+  ok "TOMBSTONE (R8): hook arm retired — no hook commands remain to validate"
 fi
 
-if has "$BACKEND_MOD" "fn normalize_for_blocklist"; then
-  ok "the backend has its own normalize_for_blocklist"
+# R8 TOMBSTONE (backend copy): the backend's own normalize_for_blocklist is
+# gone with routes/mod.rs's shell-command door. The AGENT copy (below) is a
+# different function in a different crate and does NOT satisfy the backend
+# arms — this is a retirement, not a substitution.
+if grep -q 'fn normalize_for_blocklist' "$BACKEND_MOD"; then
+  bad "TOMBSTONE (R8): the backend normalizer is back — its arms must be restored"
 else
-  bad "the backend's normalize_for_blocklist is gone"
+  ok "TOMBSTONE (R8): backend normalizer retired with its shell-command door"
 fi
 
-if bodyhas "$BACKEND_MOD" "pub fn is_safe_shell_command" "normalize_for_blocklist(cmd)"; then
-  ok "is_safe_shell_command routes through normalize_for_blocklist"
+# R8: the quote-split property moved to the live validators — the terminal
+# command gate and the suspicious-command detector both normalize first.
+if bodyhas "$CMDFILTER" "pub fn is_safe_terminal_command" "normalize_for_blocklist(cmd)"; then
+  ok "is_safe_terminal_command routes its scan through normalize_for_blocklist"
 else
-  bad "is_safe_shell_command no longer normalizes — same quote-split bypass as command_filter.rs had"
+  bad "is_safe_terminal_command no longer normalizes — the quote-split bypass is back on the terminal door"
+fi
+if bodyhas "$CMDFILTER" "pub fn is_suspicious_command" "normalize_for_blocklist(cmd)"; then
+  ok "is_suspicious_command routes its scan through normalize_for_blocklist"
+else
+  bad "is_suspicious_command no longer normalizes — the quote-split bypass is back on the detector"
 fi
 
 echo

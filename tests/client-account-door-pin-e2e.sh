@@ -105,6 +105,7 @@ MAIN=panel/frontend/src/main.tsx
 ACCOUNT=panel/frontend/src/pages/Account.tsx
 CARDS=panel/frontend/src/components/AccountSecurity.tsx
 SETTINGS=panel/frontend/src/pages/Settings.tsx
+ACCT_TAB=panel/frontend/src/pages/settings/AccountTab.tsx  # R8: the §F blocks moved to the Account tab
 NOTIF=panel/frontend/src/pages/Notifications.tsx
 PALETTE=panel/frontend/src/components/CommandPalette.tsx
 AUTH=panel/backend/src/routes/auth.rs
@@ -122,6 +123,7 @@ MAIN_C=$(code "$MAIN")
 ACCOUNT_C=$(code "$ACCOUNT")
 CARDS_C=$(code "$CARDS")
 SETTINGS_C=$(code "$SETTINGS")
+ACCT_TAB_C=$(code "$ACCT_TAB")
 NOTIF_C=$(code "$NOTIF")
 PALETTE_C=$(code "$PALETTE")
 AUTH_C=$(code "$AUTH")
@@ -296,11 +298,11 @@ echo "── §F no control is offered to a role that cannot use it ──"
 # the one string that names it exactly once.
 for pair in '2FA Enforcement:>2FA Enforcement<' 'Panel-Wide Sessions:>Panel-Wide Sessions<'; do
   label=${pair%%:*}; marker=${pair##*:}
-  SLICE=$(awk -v m="$marker" 'index($0,m) && !found {found=NR} {l[NR]=$0} END{if(found) for(i=(found>8?found-8:1);i<=found;i++) print l[i]}' <<< "$SETTINGS_C")
+  SLICE=$(awk -v m="$marker" 'index($0,m) && !found {found=NR} {l[NR]=$0} END{if(found) for(i=(found>8?found-8:1);i<=found;i++) print l[i]}' <<< "$ACCT_TAB_C")
   if has "$SLICE" 'user\?\.role === "admin"'; then
     ok "F-$label is behind a role check"
   else
-    bad "F-$label renders for every account that reaches /settings"
+    bad "F-$label renders for every account that reaches the Account tab"
   fi
 done
 
@@ -315,7 +317,9 @@ fi
 echo
 echo "── §G context (green at both tags — each owes a mutation) ──"
 
-if [ "$(grep -c 'to: "/' <<< "$NAV_C")" -ge 20 ]; then
+# R8: floor 20 -> 12. The registry consolidated to 14 rows (hub pages +
+# consolidatedInto); 14 measured 2026-11-02.
+if [ "$(grep -c 'to: "/' <<< "$NAV_C")" -ge 12 ]; then
   ok "G1 navItems still parses as a registry ($(grep -c 'to: "/' <<< "$NAV_C") rows) — §A is non-vacuous"
 else
   bad "G1 navItems yielded almost no rows — the reader is broken"

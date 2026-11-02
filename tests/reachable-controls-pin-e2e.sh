@@ -46,8 +46,9 @@ ge()  { [ "$2" -ge "$3" ] 2>/dev/null && ok "$1" || bad "$1" "expected at least 
 # real binary explicitly (dockpanel-ops-p2, s357).
 G=/usr/bin/grep
 
-MAILUI=panel/frontend/src/pages/Mail.tsx
-WPUI=panel/frontend/src/pages/WordPressToolkit.tsx
+# R8: Mail.tsx + WordPressToolkit.tsx deleted with the mail/WordPress pages
+# (R8 frontend) — §B/§C tombstoned below, not re-pointed.
+CHANNELS=panel/frontend/src/pages/settings/ChannelsTab.tsx  # R8: the escalation-policy control moved here
 MONITORS=panel/backend/src/routes/monitors.rs
 SETTINGS=panel/frontend/src/pages/Settings.tsx
 TERMUI=panel/frontend/src/pages/Terminal.tsx
@@ -56,13 +57,15 @@ VAULTUI=panel/frontend/src/pages/SecretsManager.tsx
 SECRETS=panel/backend/src/routes/secrets.rs
 DBUI=panel/frontend/src/pages/Databases.tsx
 
-for f in "$MAILUI" "$WPUI" "$MONITORS" "$SETTINGS" "$TERMUI" "$EXTUI" "$VAULTUI" "$SECRETS" "$DBUI"; do
+for f in "$MONITORS" "$SETTINGS" "$CHANNELS" "$TERMUI" "$EXTUI" "$VAULTUI" "$SECRETS" "$DBUI"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
 
 # An arm that measures an empty subject prints green for every absence below, so
 # each subject is asserted before it is measured (lesson #143).
-for pair in "$MAILUI:800" "$WPUI:300" "$SETTINGS:2500" "$TERMUI:800"; do
+# R8: MAILUI/WPUI floors retired with their pages; SETTINGS 2500 -> 700 —
+# the shell is 779 lines now, the settings surface lives in the tab files.
+for pair in "$SETTINGS:700" "$TERMUI:800"; do
   f=${pair%:*}; min=${pair##*:}
   n=$($G -c '' "$f")
   [ "$n" -gt "$min" ] && ok "A0 subject extracted — $f is $n lines" \
@@ -73,38 +76,16 @@ done
 # Section B pinned the DNSxL blacklist handler in routes/mail.rs, deleted in R4. B5/B6 (Mail.tsx) survive.
 
 
-# B5: the card must render that third state rather than painting it as one of the
-# two it already had. THREE independent sites decide it — the status dot, the text
-# colour and the wording — so this counts them rather than asking whether any one
-# survives. A `-ge 1` arm here passed its own mutation test: removing one site left
-# the other two matching (lesson #543 — the unit must be the thing that can go
-# missing).
-eq "B5 all three verdict renderings read the three-state status" \
-   "$($G -c 'status === "clean"' "$MAILUI")" "3"
-
-# B6: the per-zone detail must no longer be hidden by the verdict it explains.
-ge "B6 an unreachable zone is marked in the detail list" \
-   "$($G -c 'no answer' "$MAILUI")" "1"
+# R8 TOMBSTONE (§B): B5/B6 pinned the Mail.tsx blacklist-verdict card.
+# Mail.tsx is deleted with the mail page (R8 frontend); the DNSxL section
+# itself was deleted in R4. No mail verdict card remains.
+ok "TOMBSTONE (R8): §B retired with Mail.tsx — no mail verdict card remains"
 
 echo "── C. A per-item result is read, not replaced by the request ─────────"
-
-# C1: the bulk banner must not be built from the size of the selection.
-eq "C1 the bulk banner does not count the selection" \
-   "$($G -c 'Updated ${selected.size} site(s)' "$WPUI")" "0"
-
-eq "C1-control the bulk banner still exists for the case that earns it" \
-   "$($G -c 'site(s) successfully' "$WPUI")" "1"
-
-# C2: it counts the entries the handler marked failed.
-ge "C2 the bulk banner reads the per-site verdict" \
-   "$($G -c 'filter((r) => !r.ok)' "$WPUI")" "1"
-
-# C3: hardening must not announce success without reading the per-fix verdict.
-eq "C3 hardening does not announce a blanket success" \
-   "$($G -c 'Hardening applied successfully' "$WPUI")" "0"
-
-ge "C4 hardening reads the per-fix verdict" \
-   "$($G -c 'filter((r) => !r.applied)' "$WPUI")" "1"
+# R8 TOMBSTONE (§C): C1–C4 pinned the WordPressToolkit bulk/hardening
+# banners. WordPressToolkit.tsx is deleted with the WordPress pages (R8
+# frontend). No bulk banner remains.
+ok "TOMBSTONE (R8): §C retired with WordPressToolkit.tsx — no bulk/hardening banner remains"
 
 echo "── D. Every control this release connected still has a caller ────────"
 
@@ -118,7 +99,7 @@ echo "── D. Every control this release connected still has a caller ──�
 # while printing 30 marks — a suite that misstates its own size, which is the
 # published-assertion bookkeeping this repo pins in docs/testing.md.
 D_ROWS=(
-  "escalation policy attach|$SETTINGS|alert-rules/\${alertRuleId}/escalation-policy"
+  "escalation policy attach|$CHANNELS|alert-rules/\${alertRuleId}/escalation-policy"
   "terminal share list|$TERMUI|\"/terminal/shares\""
   "terminal share revoke|$TERMUI|terminal/share/\${s.share_id}"
   "extension secret rotation|$EXTUI|/rotate-secret"
@@ -143,8 +124,11 @@ ge "D2-control the same method finds a long-standing caller" \
 # D3: linking a vault to a site is an authorization decision, because the deploy
 # injector matches vaults to sites on the link ALONE. The write side must verify
 # the caller may reach that site.
-ge "D3 the vault site link is ownership-checked on the write side" \
-   "$($G -c 'assert_site_reachable' "$SECRETS")" "3"
+# R8 TOMBSTONE (D3): assert_site_reachable died with the sites table (R7) —
+# its only remaining occurrence in secrets.rs is the R7 comment saying so.
+# The vault->site link feature retired with sites; no write side remains
+# to ownership-check.
+ok "TOMBSTONE (R8): D3 retired — the vault site link died with sites; assert_site_reachable survives only as a deletion note"
 
 echo "── E. A delete that answers 'deleted' actually deleted something ──────"
 
@@ -218,8 +202,10 @@ LITS=$(printf '%s\n%s\n%s\n' "$LIT_LAYOUT" "$LIT_PALETTE" "$LIT_DASH" \
        | sed -E 's/\?.*$//' | $G -v '^$' | sort -u)
 LITS_N=$(printf '%s\n' "$LITS" | $G -c . || true)
 
-ge "G0 the nav registry parses as a registry" "$NAV_N" "20"
-ge "G0b all three readers were extracted" "$LITS_N" "25"
+# R8: floors 20/25 -> 12/12. The registry consolidated to 14 rows
+# (hub pages + consolidatedInto); 14 measured 2026-11-02 in navItems.ts.
+ge "G0 the nav registry parses as a registry" "$NAV_N" "12"
+ge "G0b all three readers were extracted" "$LITS_N" "12"
 
 OFFENDERS=""
 for l in $LITS; do
@@ -266,7 +252,9 @@ SPA=panel/frontend/src/pages
 armed=$("$G" -rlE 'const \[(pending|svcPending)[A-Za-z]*, set[A-Za-z]+\] = useState' "$SPA" | sort)
 acount=$(printf '%s\n' "$armed" | "$G" -c . || true)
 
-if [ "$acount" -lt 15 ]; then
+# R8: floor 15 -> 8. Ten armed pages remain (10 measured 2026-11-02) — the
+# rest died with their pages in R8 (Cdn/Sites/SiteDetail/WordPress/...).
+if [ "$acount" -lt 8 ]; then
   bad "§H-derivation the armed-confirmation population is non-empty" \
       "found $acount pages — the state-setter grep stopped matching"
 else

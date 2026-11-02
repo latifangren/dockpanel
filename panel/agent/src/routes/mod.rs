@@ -19,7 +19,6 @@ pub mod security;
 pub mod server_utils;
 pub mod service_installer;
 pub mod services;
-pub mod staging;
 pub mod ssl;
 pub mod ssl_registry;
 pub mod traefik;

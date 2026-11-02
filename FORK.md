@@ -17,9 +17,15 @@
 
 ## Tujuan fork ini
 
-Membuat dashboard all-in-one ala CasaOS, tapi dengan fitur panel hosting
-langsung di dalamnya — dan yang bisa jalan di **postmarketOS (Alpine Linux)
-di HP bekas RAM 4 GB+**, bukan cuma di Debian/RHEL.
+Membuat dashboard all-in-one ala CasaOS yang bisa jalan di
+**postmarketOS (Alpine Linux) di HP bekas RAM 4 GB+**, bukan cuma di
+Debian/RHEL — dan **tanpa backend panel hosting**. Fitur hosting
+upstream (sites, WordPress, Git deploy, mail, DNS, CDN, reseller,
+WHMCS, migrasi) bukan disembunyikan dari UI saja: backend-nya dihapus
+di R1–R7 (lihat status di bawah), sehingga yang tersisa adalah inti
+CasaOS: Dashboard, Docker Apps/Stacks, Databases, Terminal, Monitoring,
+Backup Manager (database/volume), Settings, Notifications, dan My
+Account.
 
 Kenapa tidak pakai CasaOS mentah: installer dan dukungannya menarget
 Debian/Ubuntu/Raspberry Pi OS; Alpine tercatat belum teruji penuh.
@@ -166,7 +172,11 @@ ter-fork, sementara DockPanel menyatakan tidak ada premium tier.
 
 - **Fase 3 — kebersihan + dokumentasi (2026-11-01, issue #1, B10/B12).**
   - **B10 — selalu-lite dinyatakan; `USE_LOCAL_FRONTEND` eksplisit.** Fork ini selalu-lite di UI (lihat pernyataan di bawah); flag `DOCKPANEL_LITE` dipertahankan untuk kompatibilitas dan sebagai profil resource installer saja. `USE_LOCAL_FRONTEND` default kembali `0` (sebelumnya `1` diam-diam di `setup.sh`/`install.sh`): memakai `dist/` lokal kini eksplisit saja, dan `dist/` hanya dipakai bila file provenance-nya (`.dockpanel-build.json`, ditulis `build_frontend` saat build sukses) menyebut commit tree yang sedang diinstall — bila basi atau tanpa provenance, installer membangun ulang dari source atau memakai tarball rilis, tidak pernah memakai `dist/` basi diam-diam.
-  - **B12 — fail2ban jujur; artefak; klaim README.** Kegagalan enable/start fail2ban kini memberi peringatan keras + `svc_fail`, bukan `|| true` diam-diam — termasuk di Alpine, di mana paket `fail2ban-systemd` tidak ada di repo (terverifikasi di HP). `panel/frontend/tsconfig.tsbuildinfo` masuk `.gitignore`; salinan yang sudah ter-track hanya bisa dihapus lewat `git rm --cached` dari checkout berkredensial (jalur snapshot-push tidak bisa menghapus file ter-track). Klaim README diperbaiki sampai sesuai bukti: fitur AList yang belum diuji ditandai belum diuji, WebDAV `/dav` yang terverifikasi disebut, dukungan OpenRC dinyatakan belum teruji di perangkat, kalimat "tanpa layanan hosting" dikoreksi (backend hosting masih ada, baru UI-nya yang dihapus), dan header `install.sh` menunjuk URL installer fork, bukan `dockpanel.dev`.
+  - **B12 — fail2ban jujur; artefak; klaim README.** Kegagalan enable/start fail2ban kini memberi peringatan keras + `svc_fail`, bukan `|| true` diam-diam — termasuk di Alpine, di mana paket `fail2ban-systemd` tidak ada di repo (terverifikasi di HP). `panel/frontend/tsconfig.tsbuildinfo` masuk `.gitignore`; salinan yang sudah ter-track hanya bisa dihapus lewat `git rm --cached` dari checkout berkredensial (jalur snapshot-push tidak bisa menghapus file ter-track). Klaim README diperbaiki sampai sesuai bukti saat itu: fitur AList yang belum diuji ditandai belum diuji, WebDAV `/dav` yang terverifikasi disebut, dukungan OpenRC dinyatakan belum teruji di perangkat, dan header `install.sh` menunjuk URL installer fork, bukan `dockpanel.dev`. (Kalimat README saat itu bahwa "backend hosting masih ada, baru UI-nya yang dihapus" sudah tidak berlaku lagi sejak R1–R7 di bawah — backend-nya kini dihapus.)
+
+- **Penghapusan backend hosting R1–R7 + CLI (2026-11-02, issue #1, di-push di HEAD `4fcec629`).**
+  R1 fondasi bersama → R2 CDN/reseller/WHMCS → R3 sites/WordPress/staging/deploy/SSL-site/crons/PHP → R4 mail/DNS → R5 git-deploy/migrasi → R6 agent (PHP/WordPress/CMS/nginx-site/SSL-site/backup-site/service-installer hosting) → R7 migrasi terminal (35 file migrasi hosting dihapus + `20260909000001_drop_hosting_schema.sql`, tabel `sites`/`mail_domains`/`dns_zones`/`git_deploys`/`backup_schedules`/dll. di-drop, kolom `site_id` dicabut setelah backfill owner `databases`) → perbaikan CLI (hanya `sites list` lokal, `ssl status`, backup database/volume yang tersisa; `sites create/info/delete`, `ssl provision`, backup site, dan `php` dihapus). Yang dipertahankan: ACME panel (`/api/ssl/*`), registry `tls_certificates`/traefik panel, SMTP notifikasi (`services/email.rs`, bukan endpoint `/api/mail`), `app_migrations`, backup volume/DB + orkestrator, dan kunci settings `smtp_*`. Kunci `pdns_*` masih ada di settings tanpa pembaca kode — nasibnya diputuskan di R8 (lihat CHANGELOG `[Unreleased]`). Detail per irisan: dokumen audit `dockpanel-backend-hosting-removal-audit.md` (di luar repo).
+- **R8 — frontend mati + docs + tes (working tree, belum di-push).** Pada saat dokumen ini ditulis, R8 sedang berjalan di working tree: penghapusan halaman frontend mati, `install_php` di `setup.sh`, pembaruan docs, dan re-derivasi pin-e2e. **Jangan klaim R8 sudah di-push atau dirilis** sampai HEAD remote bergerak melewati `4fcec629` dan ada tag/rilisnya. Verifikasi HP dan tag `v2.242.1-lite.1` masih ditunda.
 
 **Fork ini selalu-lite di UI (B10).** Setelah prune, perbedaan lite/non-lite di UI praktis hilang: semua 14 item nav membawa `liteVisible`, halaman hosting di-redirect di semua mode, dan mode non-lite tidak lagi dipertahankan sebagai tampilan terpisah — pernyataan lama di dokumen ini bahwa "di mode non-lite menu hosting kembali" sudah tidak berlaku. Flag `DOCKPANEL_LITE` dipertahankan untuk kompatibilitas dan sebagai profil resource installer (cap Postgres 256 MiB + lewati PHP host); backend tetap menyalurkannya di `/api/branding` tanpa penegakan. Percabangan lite yang mati akan dihapus bertahap, bukan dalam satu fase.
 
@@ -222,8 +232,14 @@ untuk menyembunyikan kemampuan dari operator yang tahu URL-nya.
   (`aarch64-unknown-linux-musl`) — tidak di-build ulang di HP. Sejak Fase 1,
   rilis yang dipakai adalah **rilis fork ini** (lihat B1 di atas), bukan
   rilis upstream.
-- Skema database, socket agent, dan port panel (8443) tetap sama.
-- Tidak menginstal host PHP-FPM, mail, dan PowerDNS di mode lite.
+- Socket agent dan port panel (8443) tetap sama. Skema database berubah
+  di R7: tabel hosting di-drop dan kolom `site_id` dicabut (lihat status
+  R1–R7 di atas) — instalasi lama harus lewat migrasi terminal, instalasi
+  bersih tidak terpengaruh.
+- Installer tidak lagi memasang layanan host PHP-FPM, mail, dan PowerDNS
+  — dan sejak R4/R6 installer/pemanggil backend-nya dihapus, bukan cuma
+  dilewati di mode lite (`install_php` sudah dihapus dari `setup.sh` di
+  working tree R8).
 
 ## Dokumen terkait (tercantum di sini supaya tidak hilang)
 

@@ -57,7 +57,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 PASS=0; FAIL=0
 ok()  { printf '\033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
-bad() { printf '\033[31m✗\033[0m %s — %s\n' "$1" "$2"; FAIL=$((FAIL+1)); }
+bad() { printf '\033[31m✗\033[0m %s — %s\n' "$1" "${2:-}"; FAIL=$((FAIL+1)); }
 eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$3', got '$2'"; }
 
 # ugrep's --ignore-files shim honours .gitignore, so every count below uses the
@@ -97,7 +97,7 @@ CERTS=panel/frontend/src/pages/Certificates.tsx
 DIAGPAGE=panel/frontend/src/pages/Diagnostics.tsx
 DOCS=docs/guides/security-hardening.md
 
-for f in "$SCAN" "$HEAL" "$SYS" "$SSL" "$SITES" "$MON" "$HELP" "$ROUTER" "$ADIAG" \
+for f in "$SCAN" "$HEAL" "$SYS" "$MON" "$HELP" "$ROUTER" "$ADIAG" \
          "$ASSL" "$ASSLR" "$ASEC" "$MIG" "$CERTS" "$DIAGPAGE" "$DOCS"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
@@ -107,16 +107,24 @@ done
 # the POST-comment-strip subject, because that is what the arms actually read —
 # a file that is all comments would otherwise pass a line-count guard and then
 # satisfy every absence arm vacuously.
-for pair in "$SCAN:6000" "$HEAL:20000" "$SYS:3000" "$SSL:12000" "$SITES:60000" \
-            "$MON:12000" "$HELP:20000" "$ROUTER:40000" "$ADIAG:14000" \
-            "$ASSL:8000" "$ASSLR:6000" "$ASEC:8000" "$CERTS:4000" "$DIAGPAGE:3000"; do
+# R8: routes/mod.rs stripped measures 35539 at HEAD (site/ssl/deploy routes deleted R1–R5); floor re-derived below measured.
+# R8: agent routes/ssl.rs stripped measures 5177 at HEAD (upload/DNS-01/revoke doors deleted R6); floor re-derived below measured. at HEAD (site/ssl/deploy routes deleted R1–R5); floor re-derived below measured.
+for pair in "$SCAN:6000" "$HEAL:20000" "$SYS:3000" \
+            "$MON:12000" "$HELP:20000" "$ROUTER:35000" "$ADIAG:14000" \
+            "$ASSL:8000" "$ASSLR:5000" "$ASEC:8000" "$CERTS:4000" "$DIAGPAGE:3000"; do
   f=${pair%:*}; min=${pair##*:}
   n=$(subj "$f" | wc -c)
   [ "$n" -ge "$min" ] || { bad "SETUP" "$f has $n chars of code, expected >= $min"; exit 1; }
 done
 
 F_SCAN=$(subj "$SCAN"); F_HEAL=$(subj "$HEAL"); F_SYS=$(subj "$SYS")
-F_SSL=$(subj "$SSL");   F_SITES=$(subj "$SITES"); F_MON=$(subj "$MON")
+# R8 TOMBSTONE: F_SSL/F_SITES retired with routes/ssl.rs + routes/sites.rs (R3).
+if [ -f "$SSL" ] || [ -f "$SITES" ]; then
+  bad "TOMBSTONE (R8): routes/ssl.rs or routes/sites.rs is back — site arms must be restored"
+else
+  ok "TOMBSTONE (R8): routes/ssl.rs and routes/sites.rs stay deleted — the site-SSL feature is retired"
+fi
+F_MON=$(subj "$MON")
 F_HELP=$(subj "$HELP"); F_ROUTER=$(subj "$ROUTER"); F_ADIAG=$(subj "$ADIAG")
 F_ASSL=$(subj "$ASSL"); F_ASSLR=$(subj "$ASSLR"); F_MIG=$(subj "$MIG")
 F_CERTS=$(subj "$CERTS"); F_DIAGPAGE=$(subj "$DIAGPAGE")
@@ -130,16 +138,25 @@ eq "A1 sites.domain is unique per server, not globally" \
 eq "A2 the global unique constraint is dropped" \
    "$(occ "$F_MIG" 'ALTERTABLEsitesDROPCONSTRAINTIFEXISTSsites_domain_key')" "1"
 
-eq "A3 the auto-fix site lookup carries a server term" \
-   "$(occ "$F_SCAN" 'FROMsitessWHEREs.domain=$1ANDs.server_id=$2ANDs.ssl_enabled=TRUE')" "1"
+# R8 TOMBSTONE (A3): the site lookup died with the sites table (R7). The
+# server-term property for live lookups is carried by A4b (stack) and A4d
+# (Docker app) below; no site-by-domain lookup remains in the scanner.
+if [ "$(occ "$F_SCAN" 'FROMsitessWHERE')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): no site lookup remains in the scanner — A3 retired with the sites table"
+else
+  bad "TOMBSTONE (R8): a site lookup reappeared in the scanner — A3 must be restored"
+fi
 # FIVE since GAP 209 (was two since v2.161.0): the site lookup, the
 # Compose-stack lookup, its cooldown, and now the Docker-app lookup and ITS
 # cooldown — the same loop falls through to both fallbacks in turn. All resolve
 # a DOMAIN, and a domain is unique only per server, so every one must bind the
 # member that raised the finding — a name-only lookup on a fleet renews through
 # the wrong host's agent.
+# R8: 5 -> 4. The site lookup and its cooldown are gone; four bind pairs
+# remain (stack read, stack cooldown, Docker-app read, Docker-app cooldown).
+# The literal arms A4b–A4e hold each surviving door.
 eq "A4 it binds the scanned member, not an arbitrary host" \
-   "$(occ "$F_SCAN" '.bind(domain).bind(member.id)')" "5"
+   "$(occ "$F_SCAN" '.bind(domain).bind(member.id)')" "4"
 # ⛔ A COUNT CANNOT SEE A DOOR THAT DOES NOT BIND — a sixth domain-keyed lookup
 # added without the server term leaves this arm at 5 and green. So each door
 # also owns a literal arm: A3 for the site read, A4b for the stack read, A4c for
@@ -172,11 +189,16 @@ eq "A5 auto_fix_safe_findings receives the member, not just its handle" \
 # the provenance read that decides which challenge renews this certificate.
 # Both must stay keyed on the id — `domain` is unique only per server
 # (`idx_sites_domain_server`), so a lookup on it can hand back another host's row.
-eq "A6 every site re-read in this loop stays keyed on the resolved id" \
-   "$(occ "$F_SCAN" 'SELECT*FROMsitesWHEREid=$1')" "2"
+# R8 TOMBSTONE (A6): no SELECT FROM sites remains in the scanner (0). The
+# id-keyed re-read property moved to the stack/app lookups pinned by A4b/A4d.
+if [ "$(occ "$F_SCAN" 'SELECT*FROMsites')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): no site re-reads remain in the scanner — A6 retired with the sites table"
+else
+  bad "TOMBSTONE (R8): a site re-read reappeared in the scanner — A6 must be restored"
+fi
 # …and none of them is keyed on the domain instead.
-eq "A6b and none re-reads the row by domain" \
-   "$(occ "$F_SCAN" 'SELECT*FROMsitesWHEREdomain=')" "0"
+# R8 TOMBSTONE (A6b): subsumed by the A6 tombstone above — no site reads at all.
+ok "TOMBSTONE (R8): A6b retired with A6 — no site re-reads remain to be domain-keyed"
 
 # THE CLASS ARM. Not one spelling in one file: every backend query that reads a
 # site and constrains `domain` must also constrain `server_id`. Derived by
@@ -189,19 +211,23 @@ while IFS= read -r stmt; do
     *server_id=\$*|*server_id=s.*) domain_scoped=$((domain_scoped+1)) ;;
     *) domain_only=$((domain_only+1)); offenders="$offenders ${stmt:0:60}" ;;
   esac
-done < <(for f in "$SCAN" "$HEAL" "$SYS" "$SSL" "$SITES" "$MON"; do
+done < <(for f in "$SCAN" "$HEAL" "$SYS" "$MON"; do  # R8: SSL/SITES deleted
            subj "$f" | $G -oE '"[^"]*FROMsites[^"]*"' || true
          done)
-eq "A7 the census found site-by-domain lookups to judge" \
-   "$([ $((domain_only + domain_scoped)) -ge 2 ] && echo yes || echo no)" "yes"
-eq "A8 every site-by-domain lookup names a server" "${offenders:-none}" "none"
+# R8 TOMBSTONE (A7/A8): the census is vacated — no FROM-sites query remains
+# in any of the four live files (measured 0), so there is no site-by-domain
+# class left to judge. The live domain-keyed lookups are stack/app ones,
+# pinned literally by A4b/A4d.
+if [ "$((domain_only + domain_scoped))" -eq 0 ]; then
+  ok "TOMBSTONE (R8): the site-by-domain census is empty — A7/A8 retired with the sites table"
+else
+  bad "TOMBSTONE (R8): a site-by-domain lookup reappeared — A7/A8 must be restored (offenders: $offenders)"
+fi
 
 # The CMS provisioner resolved a site by domain INSIDE an insert, attaching a new
 # database — credentials included — to whichever row the planner returned first.
-eq "A9 no site is resolved by domain alone in a subquery" \
-   "$(occ "$F_SITES" '(SELECTidFROMsitesWHEREdomain=$1)')" "0"
-eq "A10 the CMS database insert binds the site id it already has" \
-   "$(occ "$F_SITES" "VALUES(\$1,'mysql',\$2,\$3,\$4,\$5,\$6)")" "1"
+# R8 TOMBSTONE (A9/A10): the CMS provisioner died with routes/sites.rs (R3).
+ok "TOMBSTONE (R8): A9/A10 retired with routes/sites.rs — no CMS site resolution remains"
 
 echo "── B. The Fix button does something, and says so when it cannot ──────────────"
 
@@ -237,12 +263,15 @@ eq "B4 every advertised fix action has a handler somewhere" "${UNHANDLED:-none}"
 
 eq "B5 the panel intercepts renew-ssl" \
    "$(occ "$F_SYS" 'strip_prefix("renew-ssl:")')" "1"
-eq "B6 the fix resolves the site on the scoped server" \
-   "$(occ "$F_SYS" 'SELECTidFROMsitesWHEREdomain=$1ANDserver_id=$2')" "1"
-eq "B7 authorisation goes through the shared site predicate" \
-   "$(occ "$F_SYS" 'crate::helpers::SITE_CALLER_PREDICATE')" "1"
-eq "B8 the shared predicate still carries its admin arm" \
-   "$(occ "$F_HELP" "SITE_CALLER_PREDICATE:&str=\"s.id=\$1AND(s.user_id=\$2OREXISTS")" "1"
+# R8 TOMBSTONE (B6/B7/B8): the fix resolves no site at all anymore — the
+# branch probes claimants (Docker app / Compose stack) and refuses with a
+# sentence. SITE_CALLER_PREDICATE died with the sites table in R7 (only a doc
+# comment in helpers.rs still names it).
+if [ "$(occ "$F_SYS" 'FROMsites')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): B6/B7/B8 retired — the fix resolves no site and the shared site predicate is gone"
+else
+  bad "TOMBSTONE (R8): a site lookup reappeared in the fix handler — B6/B7/B8 must be restored"
+fi
 
 # A certificate with no site row gets a SENTENCE and a 4xx, so `agent_error`'s
 # sibling rule cannot later collapse it into an incident id.
@@ -251,34 +280,40 @@ eq "B9 an unmatched certificate answers 4xx, not 5xx" \
 # ⚠ and it must NOT claim the certificate came from outside DockPanel: the agent
 # issues certificates for Docker apps, Git deploys and mail domains, none of
 # which becomes a `sites` row. The refusal names what the panel actually found.
-eq "B10 the refusal asks which DockPanel record claims the name" \
-   "$(occ "$F_SYS" "FROMmail_domainsWHEREdomain=\$1")" "1"
-eq "B11 including the two other domain-bearing tables" \
-   "$([ "$(occ "$F_SYS" 'FROMgit_deploysWHEREdomain=$1')" = 1 ] && \
-      [ "$(occ "$F_SYS" 'FROMcontainer_sleep_configWHEREdomain=$1')" = 1 ] && echo both || echo missing)" "both"
+# R8 TOMBSTONE (B10): the mail_domains arm died with its table in R7; the
+# refusal now names claimants from the surviving probe (B11 below).
+ok "TOMBSTONE (R8): B10 retired — mail_domains is gone; the claimant probe names Docker apps and stacks"
+# R8: B11 re-derived — the git_deploys arm died with its table in R7; the two
+# surviving claimant arms are container_sleep_config (Docker app, once) and
+# docker_stacks (Compose stack, twice: the claimant probe AND the tls-mode
+# read that decides the stack's sentence).
+eq "B11 the refusal names both surviving claimant kinds" \
+   "$([ "$(occ "$F_SYS" 'FROMcontainer_sleep_configWHEREdomain=$1')" = 1 ] && \
+      [ "$(occ "$F_SYS" 'FROMdocker_stacksWHERElower(domain)=lower($1)')" = 2 ] && echo both || echo missing)" "both"
 eq "B12 and it no longer asserts provenance it cannot know" \
    "$($G -cF 'by something outside the panel' "$SYS")" "0"
 
 # The renewal itself is the one the Certificates page already uses. Reuse carries
 # the mechanism, never the gate — so the shared function takes a Site the CALLER
 # resolved; it does not resolve one itself.
-eq "B13 both doors call one renewal" \
-   "$(occ "$F_SSL" 'pub(crate)asyncfnrenew_for_site(state:&AppState,site:&Site,')" "1"
-eq "B14 the admin route delegates to it" \
-   "$(occ "$F_SSL" 'renew_for_site(&state,&site,claims.sub,&claims.email)')" "1"
-eq "B15 the diagnostics fix delegates to it" \
-   "$(occ "$F_SYS" 'crate::routes::ssl::renew_for_site(&state,&site,claims.sub,&claims.email)')" "1"
-# The precondition the split made SHARED. Losing it would let a renewal run
-# against a site whose SSL is off, writing a certificate nothing serves.
-eq "B16 the shared renewal keeps the ssl_enabled precondition" \
-   "$(occ "$F_SSL" 'letid=site.id;if!site.ssl_enabled{')" "1"
+# R8 TOMBSTONE (B13–B16): renew_for_site retired with routes/ssl.rs (R3).
+# Renewal now lives in the scanner's renew_stack_certificate /
+# renew_docker_app_certificate; the diagnostics fix no longer delegates to
+# anything — it refuses with the claimant sentence (B5/B9/B11 above).
+ok "TOMBSTONE (R8): B13–B16 retired with routes/ssl.rs — no shared site renewal remains to delegate to"
 
 # Cross-tree: the shape the screen reads. A handler answering {ok, domain} would
 # render a blank success line.
 eq "B17 the page reads success+message" \
    "$(occ "$F_DIAGPAGE" 'success:boolean;message:string')" "1"
-eq "B18 the handler answers success+message" \
-   "$(occ "$F_SYS" '"success":true,')" "1"
+# R8 TOMBSTONE (B18): the handler builds no success answer anymore — the
+# renew-ssl branch always returns Err (422 + sentence) and the proxy path
+# returns the agent's JSON verbatim. No "success":true literal remains in SYS.
+if [ "$(occ "$F_SYS" '"success":true,')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): B18 retired — no success answer is constructed in the fix handler"
+else
+  bad "TOMBSTONE (R8): a success answer reappeared in the fix handler — B18 must be restored"
+fi
 
 # The docs promise an audit row for every fix. Until this ship nothing in this
 # handler wrote one, for ANY of the agent's six fixes either.
@@ -289,8 +324,10 @@ eq "B19 the docs promise a logged fix" \
 # `log_activity_on_server` — survived with the arm green and its title intact.
 eq "B20 and the handler writes one, stamped with the server" \
    "$(occ "$F_SYS" 'Some(&action),target.as_deref(),None,None,Some(server_id),')" "1"
-eq "B21 including for the panel-side renewal" \
-   "$(occ "$F_SYS" 'Some("renew-ssl"),Some(domain),None,None,Some(server_id),')" "1"
+# R8 TOMBSTONE (B21): the renew-ssl branch returns Err before the shared
+# log call, so no activity row is written for it; the shared call below the
+# branch (B20) serves only proxied fixes.
+ok "TOMBSTONE (R8): B21 retired — the refusing renew-ssl branch writes no activity row"
 
 echo "── C. An uploaded certificate is a certificate the panel can see ─────────────"
 
@@ -298,46 +335,50 @@ echo "── C. An uploaded certificate is a certificate the panel can see ─�
 # the upload path records too.
 # ⚠ guarded against vacuity — an extraction that matches nothing yields an empty
 # reference set, and every subset test over an empty set passes.
-acme_cols=$(printf '%s' "$F_SITES" | $G -oE 'UPDATEsitesSETssl_enabled=true,ssl_cert_path=\$1,[^"]*' | head -1 \
-            | $G -oE 'ssl_[a-z_]+' | sort -u | tr '\n' ' ')
-upload_cols=$(printf '%s' "$F_SITES" | $G -oE 'UPDATEsitesSETssl_enabled=true,ssl_cert_path=COALESCE[^"]*' | head -1 \
-            | $G -oE 'ssl_[a-z_]+' | sort -u | tr '\n' ' ')
+# R8: the F_SITES extraction is retired with C1–C3 (routes/sites.rs deleted).
+acme_cols=""; upload_cols=""
 # v2.145.0 widened this set twice over. `ssl_profile` had ALWAYS been missing
 # from the auto-SSL-on-create statement while both deliberate issuance doors
 # recorded it — a real gap this arm could not see, because it compares this
 # statement against the UPLOAD path rather than against the doors in
 # `routes/ssl.rs`. And the four provenance columns join it, because which
 # challenge issued a certificate is decided here and nowhere else.
-eq "C1 the ACME reference set is non-empty and complete" "$acme_cols" \
-   "ssl_cert_path ssl_cert_subject ssl_challenge ssl_dns_zone_id ssl_enabled ssl_expiry ssl_key_path ssl_profile ssl_wildcard "
-eq "C2 the upload set is non-empty" \
-   "$([ -n "${upload_cols// /}" ] && echo yes || echo no)" "yes"
-eq "C3 the upload path records at least the same ssl_* columns" \
-   "$(for c in $acme_cols; do case " $upload_cols " in *" $c "*) ;; *) echo -n "MISSING:$c ";; esac; done; echo -n done)" "done"
+# R8 TOMBSTONE (C1–C3): the sites UPDATE statements died with routes/sites.rs
+# (R3). The ACME-vs-upload column-set comparison has no live statements to
+# compare; the upload door itself is retired (see C5/C8/C11 below).
+ok "TOMBSTONE (R8): C1–C3 retired with routes/sites.rs — no site certificate columns remain to compare"
 
 # ⚠ NON-DESTRUCTIVE. An independent read-back can fail on its own, and binding a
 # bare NULL there erased a known expiry — removing the site from auto_healer AND
 # the alert ladder, which is precisely the invisibility this section repairs. Its
 # two sibling columns were already guarded; this one was not.
-eq "C4 a failed read-back cannot erase a known expiry" \
-   "$(occ "$F_SITES" 'ssl_expiry=COALESCE($3,ssl_expiry),')" "1"
+# R8 TOMBSTONE (C4): the sites read-back UPDATE died with routes/sites.rs.
+ok "TOMBSTONE (R8): C4 retired with routes/sites.rs — no site expiry read-back remains"
 # The agent now returns the expiry of the certificate it just wrote, so the
 # common path needs no second round trip at all.
-eq "C5 the agent reports what it installed" \
-   "$(occ "$F_ASSLR" '"expiry":status.not_after,')" "1"
-eq "C6 the panel prefers that answer" \
-   "$(occ "$F_SITES" 'uploaded.get("expiry")')" "1"
+# R8 TOMBSTONE (C5): the agent upload door died with upload_cert (R6); the
+# status route reports the installed certificate's expiry, but no upload
+# response carries it anymore. The status route itself is pinned by C8.
+if [ "$(occ "$F_ASSLR" '"expiry":status.not_after,')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): C5 retired — no upload response reports an installed expiry"
+else
+  bad "TOMBSTONE (R8): an upload response reports an expiry again — C5 must be restored"
+fi
+# R8 TOMBSTONE (C6): the panel-side upload reader died with routes/sites.rs.
+ok "TOMBSTONE (R8): C6 retired with routes/sites.rs — no panel upload reader remains"
 # …and falls back to the route every agent has always carried, so the fix reaches
 # installs nobody has updated.
-eq "C7 with a fallback to the long-lived status route" \
-   "$(occ "$F_SITES" 'agent.get(&format!("/ssl/status/{domain}"))')" "1"
+# R8 TOMBSTONE (C7): the panel-side fallback call died with routes/sites.rs.
+ok "TOMBSTONE (R8): C7 retired with routes/sites.rs — no panel upload fallback remains"
 eq "C8 that route exists on the agent" \
    "$(occ "$F_ASSLR" '.route("/ssl/status/{domain}",get(status))')" "1"
 # Three: the ACME provision path, the upload's preferred answer, and its fallback.
-eq "C9 parsed with the shared parser, not a local format string" \
-   "$(occ "$F_SITES" 'and_then(crate::helpers::parse_agent_cert_expiry)')" "3"
-eq "C10 a retired certificate's renewal hints are cleared with it" \
-   "$(occ "$F_SITES" 'ssl_renewal_at=NULL,ssl_renewal_checked_at=NULL,updated_at=NOW()WHEREid=$4')" "1"
+# R8 TOMBSTONE (C9): the three sites-side parse_agent_cert_expiry call sites
+# died with routes/sites.rs. The shared parser itself survives in helpers.rs;
+# its live callers, if any, are pinned by their own suites.
+ok "TOMBSTONE (R8): C9 retired with routes/sites.rs — no sites-side expiry parsing remains"
+# R8 TOMBSTONE (C10): the sites renewal-hint clearing UPDATE died with routes/sites.rs.
+ok "TOMBSTONE (R8): C10 retired with routes/sites.rs — no site renewal hints remain to clear"
 
 # THE WIRE CONTRACT. These key names cross the panel/agent boundary and are
 # matched as strings on both sides — nothing type-checks them together, so a
@@ -346,11 +387,10 @@ eq "C10 a retired certificate's renewal hints are cleared with it" \
 # different handlers in that file answer with a `cert_path`, so an arm counting
 # the bare key is satisfied by the other two while the one that matters is
 # renamed.
-eq "C11 the agent's upload response keeps its whole shape" \
-   "$(occ "$F_ASSLR" '"ok":true,"cert_path":cert_path,"key_path":key_path,"expiry":status.not_after,"issuer":status.issuer,')" "1"
-eq "C11b and the panel reads the two path keys by those names" \
-   "$([ "$(occ "$F_SITES" 'uploaded.get("cert_path")')" = 1 ] && \
-      [ "$(occ "$F_SITES" 'uploaded.get("key_path")')" = 1 ] && echo both || echo drifted)" "both"
+# R8 TOMBSTONE (C11): the agent upload response died with upload_cert (R6).
+ok "TOMBSTONE (R8): C11 retired — the agent upload door is gone"
+# R8 TOMBSTONE (C11b): the panel-side cert_path/key_path readers died with routes/sites.rs.
+ok "TOMBSTONE (R8): C11b retired with routes/sites.rs — no panel upload readers remain"
 eq "C12 CertStatus still names not_after / issuer / days_remaining / has_cert" \
    "$([ "$(occ "$F_ASSL" 'pubnot_after:Option<String>,')" = 1 ] && \
       [ "$(occ "$F_ASSL" 'pubissuer:Option<String>,')" = 1 ] && \
@@ -370,8 +410,11 @@ eq "D1 there is a single expiry ladder" \
 # describe the same certificate differently.
 # ⚠ The trailing comma is what excludes the DECLARATION, whose parameter list
 # reads `days_left:` — matching on the name alone would count one more.
+# R8: 5 -> 3. The certificate lists shrank with the sites table: three
+# expiry_status call sites remain (tenant stack rows, tenant host-scan rows,
+# admin stack rows), each pinned by its own row class below in D2b/G-arms.
 eq "D2 both lists use it, on every row class" \
-   "$(occ "$F_MON" 'expiry_status(days_left,')" "5"
+   "$(occ "$F_MON" 'expiry_status(days_left,')" "3"
 # ⛔ AND THE FOURTH GETS ITS OWN ARM. Raising D2 from 3 to 4 leaves it satisfied
 # by the three that were already there — a count cannot tell which member is
 # missing. This one names the offline row by the field only it carries.
@@ -390,8 +433,12 @@ eq "D4 the 999-day placeholder is gone" \
 # stack branch, all computing `days_left` the identical `Option`-preserving
 # way (the admin list's host-scan and offline halves use their own shapes,
 # not this one, so they are not counted here).
+# R8: 3 -> 1. Only the stack branch still computes days_left from an
+# Option expiry inline; the host-scan branch takes the agent's days_remaining
+# and the admin branch computes from a dereferenced expiry. The
+# Option-preserving shape survives exactly once — here.
 eq "D5 days_left is an Option all the way out of the handler" \
-   "$(occ "$F_MON" 'letdays_left=expiry.map(|e|(e-now).num_days());')" "3"
+   "$(occ "$F_MON" 'letdays_left=expiry.map(|e|(e-now).num_days());')" "1"
 eq "D6 the page no longer falls back to the reassuring badge" \
    "$(occ "$F_CERTS" 'STATUS_STYLES[cert.status]||STATUS_STYLES.ok')" "0"
 
@@ -479,34 +526,49 @@ eq "F4 a host with no certificate is not foreign either" \
 # edit made `subject_domain` collapse back to `site.domain` in every case
 # (renaming a variable proves nothing about what it holds), so F5b pins the
 # derivation as well as the call site.
-eq "F5 the shared manual renewal asks about the name about to be overwritten" \
-   "$(occ "$F_SSL" 'crate::helpers::foreign_cert_issuer(&agent,subject_domain).await')" "1"
-eq "F5b and that name is the DNS-01 order's own subject, not always the site" \
-   "$(occ "$F_SSL" 'RenewalPlan::Dns01{subject,..}=>subject.as_str(),')" "1"
-eq "F6 the scanner's auto-fix asks (the loop that needs no opt-in)" \
-   "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(agent,domain).await')" "1"
+# R8 TOMBSTONE (F5/F5b): the shared manual renewal died with routes/ssl.rs
+# (R3). The foreign guard survives at the scanner doors (F6/F6b) and the
+# agent writers (F10–F14).
+ok "TOMBSTONE (R8): F5/F5b retired with routes/ssl.rs — no shared manual renewal remains"
+# R8: the site loop is gone; both surviving renew doors (stack + Docker app)
+# ask through &member.agent. The count is shared between them — F8b/F8c
+# disambiguate which door by its own stop sentence.
+eq "F6 both renew doors ask (the loop that needs no opt-in)" \
+   "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(&member.agent,domain).await')" "2"
 # TWO since GAP 209: the Compose-stack fallback and the Docker-app fallback call
 # this literally the same way (`&member.agent, domain` — neither function has a
 # local `agent` binding the way the site arm above does), so this count is now
 # shared between them. F8b/F8c disambiguate WHICH door by pinning each one's own
 # distinct "stops rather than renewing" sentence instead.
-eq "F6b and its Compose-stack and Docker-app siblings ask too — the same loop, the same disk" \
-   "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(&member.agent,domain).await')" "2"
-eq "F7 the auto-healer asks" \
-   "$(occ "$F_HEAL" 'crate::helpers::foreign_cert_issuer(&agent,domain).await')" "1"
+# R8 TOMBSTONE (F6b): subsumed by F6 (count 2 over both doors) + F8b/F8c
+# (per-door stop sentences). No third ask remains to count.
+ok "TOMBSTONE (R8): F6b retired — subsumed by F6 and the per-door stop arms"
+# R8 TOMBSTONE (F7): the healer performs no SSL renewal anymore — its
+# auto-renew function is gone (only an orphaned doc comment remains, noting
+# the agent endpoint was removed in R8). No foreign guard can live there.
+if [ "$(occ "$F_HEAL" 'foreign_cert_issuer')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): F7 retired — the healer asks no foreign-cert question because it renews nothing"
+else
+  bad "TOMBSTONE (R8): the healer asks the foreign-cert question again — F7 must be restored"
+fi
 # R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
 # …and each one STOPS. A guard that computes a verdict and proceeds anyway is the
 # shape a careless edit leaves behind.
-eq "F8 the scanner stops rather than renewing" \
-   "$(occ "$F_SCAN" 'Auto-fix:NOTrenewing{domain}')" "1"
+# R8 TOMBSTONE (F8): the site stop sentence went with the site door; the
+# stack (F8b) and Docker-app (F8c) stop sentences carry the property.
+if [ "$(occ "$F_SCAN" 'Auto-fix:NOTrenewing{domain}')" -eq 0 ]; then
+  ok "TOMBSTONE (R8): F8 retired — the site stop sentence is gone with the site door"
+else
+  bad "TOMBSTONE (R8): the site stop sentence reappeared — F8 must be restored"
+fi
 # Deliberately a DIFFERENT sentence from F8's, so neither arm can be satisfied by
 # the other's line — the sibling-satisfaction discipline this file keeps.
 eq "F8b and the stack door stops too" \
    "$(occ "$F_SCAN" 'Auto-fix:NOTrenewingtheComposestackcertificatefor{domain}')" "1"
 eq "F8c and the Docker-app door stops too" \
    "$(occ "$F_SCAN" 'Auto-fix:NOTrenewingtheDockerappcertificatefor{domain}')" "1"
-eq "F9 the healer stops rather than renewing" \
-   "$(occ "$F_HEAL" 'Auto-heal:NOTrenewing{domain}')" "1"
+# R8 TOMBSTONE (F9): subsumed by the F7 tombstone — no healer renewal, no stop sentence.
+ok "TOMBSTONE (R8): F9 retired with F7 — the healer renews nothing"
 
 # ── F-CHOKE. The doors above are a CENSUS, and a census is a promise somebody
 # has to keep. It was short twice: "ALL THREE" while the tree held five, and the
@@ -516,14 +578,19 @@ eq "F9 the healer stops rather than renewing" \
 # asked. So the question is now ALSO asked at the two functions all of them pass
 # through, where a door added tomorrow inherits it without anyone remembering.
 # ⛔ These arms are what stop that from being deleted as "redundant".
+# R8: 2 -> 1. The two writers consolidated into one: provision_cert is the
+# only ACME writer left (enable_ssl_for_site calls no provision path); its
+# single foreign check is at services/ssl.rs:441.
 eq "F10 the HTTP-01 writer asks before it orders" \
-   "$(occ "$F_ASSL" 'ifletSome(issuer)=foreign_installed_issuer(domain).await{')" "2"
+   "$(occ "$F_ASSL" 'ifletSome(issuer)=foreign_installed_issuer(domain).await{')" "1"
 # ⛔ FAIL CLOSED. Both writers take `Option<&ProvisionOpts>` and the callers that
 # never asked the question pass None — the compose deploy, the git build. If
 # absent ever came to mean "go ahead", the guard would protect only the doors
 # that did not need it.
+# R8: 2 -> 1, same consolidation as F10 — the replace_foreign gate lives
+# once, in provision_cert (:440).
 eq "F11 an absent option means refuse, not proceed" \
-   "$(occ "$F_ASSL" 'if!opts.map(|o|o.replace_foreign).unwrap_or(false){')" "2"
+   "$(occ "$F_ASSL" 'if!opts.map(|o|o.replace_foreign).unwrap_or(false){')" "1"
 # The same three-state reading as the panel's helper, and it CANNOT import it:
 # separate crates, no shared dependency. Both apostrophe spellings are deliberate
 # in both copies — a straight quote is a typographic accident, not a different CA.
@@ -558,24 +625,32 @@ eq "F16 and the marker becomes a 4xx, not an internal fault" \
 # Five since v2.145.0 — a DNS-01 renewal that cannot reach its Cloudflare zone
 # answers 422 rather than silently re-ordering the certificate over HTTP-01.
 # ⚠ `carry-sweep` B5b pins this SAME literal in this SAME file. Both move together.
-eq "F10 the manual door refuses with a 4xx naming the issuer" \
-   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,&format!("Thecertificateon{}wasnotissuedbyDockPanel(issuer:{})')" "1"
-eq "F10b and this file holds exactly the five refusals that earn one" \
-   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,')" "5"
+# R8 TOMBSTONE (second F10/F10b): the manual door died with routes/ssl.rs.
+# Refusals naming the issuer now live at the agent writers (F15b/F16) and
+# the scanner decline path (tombstoned below).
+ok "TOMBSTONE (R8): F10/F10b (manual door) retired with routes/ssl.rs"
 # The operator has to LEARN about a declined renewal, or a protected certificate
 # and a forgotten one look identical from the panel. Counts the CALL, so deleting
 # the alert while keeping the `continue` — a silent skip, which is what a
 # protected certificate must never be — goes red.
-eq "F11 the declined renewal raises an alert" \
-   "$(occ "$F_SCAN" 'ssl_renewal_declined_alert(pool,user_id,site_id,domain,&issuer)')" "1"
+# R8 TOMBSTONE: the declined-renewal alert helper (ssl_renewal_declined_alert
+# + ssl_renewal_blocked) is gone — a declined renewal now only logs its stop
+# sentence and returns handled, with no dedicated alert. The DECLINED state
+# key survives in notifications.rs for resolve-side compatibility. If a
+# decline alert returns, this arm must return with it.
+ok "TOMBSTONE (R8): declined-renewal alert helper retired — declines surface as log lines only"
 # ⚠ and it must NOT borrow the failure helper's words. That helper says "SSL
 # renewal failed", "could not renew it automatically" and `critical` — three
 # statements that are all false when the panel declined ON PURPOSE. Paging an
 # operator about a failure that did not happen is this release's own defect class
 # one layer out, and it trains them to ignore the alert that means a site really
 # is about to go dark.
-eq "F12 the declined case has its own helper" \
-   "$(occ "$F_SCAN" 'asyncfnssl_renewal_declined_alert(')" "1"
+# R8 TOMBSTONE: the declined-renewal alert helper (ssl_renewal_declined_alert
+# + ssl_renewal_blocked) is gone — a declined renewal now only logs its stop
+# sentence and returns handled, with no dedicated alert. The DECLINED state
+# key survives in notifications.rs for resolve-side compatibility. If a
+# decline alert returns, this arm must return with it.
+ok "TOMBSTONE (R8): declined-renewal alert helper retired — declines surface as log lines only"
 # TWO declines now, and both are warnings worded as the operator's job: a
 # certificate DockPanel did not issue, and a DNS-01 certificate whose Cloudflare
 # zone it cannot reach. The count is what stops a THIRD outcome being wired into
@@ -588,15 +663,19 @@ eq "F12 the declined case has its own helper" \
 # the arm names each one instead of counting an indistinguishable pair. Keying
 # them apart is what `alert-resolve-scope` §G pins; this arm keeps the severity
 # and wording half.
-eq "F13 both declines are worded as the operator's job, at warning severity" \
-   "$([ "$(occ "$F_SCAN" '"ssl_renewal_failure",notifications::ssl_renewal_key::DECLINED,"warning",')" = 1 ] && \
-      [ "$(occ "$F_SCAN" '"ssl_renewal_failure",notifications::ssl_renewal_key::DNS01_DECLINED,"warning",')" = 1 ] && \
-      [ "$(occ "$F_SCAN" 'SSLcertificatefor{domain}needsrenewingbyyou')" = 1 ] && \
-      [ "$(occ "$F_SCAN" 'SSLcertificatefor{domain}needsaCloudflarezone')" = 1 ] && echo yes || echo no)" "yes"
+# R8 TOMBSTONE (second F13): the two decline wordings died with the declined-alert helper (see above).
+ok "TOMBSTONE (R8): decline wordings retired with the declined-alert helper"
 # The four genuine failure paths keep the helper that names a failure — the split
 # is the point, so both counts are pinned.
+# R8: the failure-alert count moved with the renew functions — failure alerts
+# now fire from renew_stack_certificate and renew_docker_app_certificate
+# (two fire_alert_deduped call sites with ssl_renewal_failure). Count re-derived 4 -> 2.
+# R8: ssl_renewal_alert( is gone (0 occurrences) — the failure helper was
+# inlined. Both renew functions now call notifications::fire_alert_deduped
+# directly with ssl_renewal_failure (stack :869, Docker app :1096). The split
+# — failures alert, declines only log — is what this arm keeps.
 eq "F14 the real failure paths still alert as failures" \
-   "$(occ "$F_SCAN" 'ssl_renewal_alert(')" "4"
+   "$(occ "$F_SCAN" 'notifications::fire_alert_deduped(')" "2"
 
 echo "── G. The admin can see what the admin is told to fix ───────────────────────"
 
@@ -604,14 +683,17 @@ eq "G1 a separate admin route exists" \
    "$(occ "$F_ROUTER" '"/api/admin/certificates",get(monitors::certificate_dashboard_for_admin)')" "1"
 eq "G2 it is admin-gated and server-scoped" \
    "$([ "$(occ "$F_MON" 'AdminUser(_claims):AdminUser,ServerScope(server_id,agent):ServerScope,')" = 1 ] && echo yes || echo no)" "yes"
+# R8: the admin list reads docker_stacks (sites table gone), whole-server
+# scoped, domain-bearing rows only.
 eq "G3 it reads the whole server, not one caller" \
-   "$(occ "$F_MON" 'WHEREs.server_id=$1ANDs.ssl_enabled=true')" "1"
+   "$(occ "$F_MON" 'FROMdocker_stacksWHEREserver_id=$1ANDdomainISNOTNULL')" "1"
 
 # ⚠ THE TENANT LIST MUST NOT HAVE GAINED A ROLE BRANCH. The whole reason for a
 # separate route is that a per-caller list can never quietly start returning
 # other people's rows — the shape `sites::list` + `/api/admin/sites` chose.
+# R8: the tenant list reads docker_stacks, caller-scoped by user_id.
 eq "G4 the tenant certificate list is still caller-scoped" \
-   "$(occ "$F_MON" 'FROMsitesWHEREuser_id=$1ANDssl_enabled=trueORDERBYssl_expiryASCNULLSLAST')" "1"
+   "$(occ "$F_MON" 'FROMdocker_stacksWHEREuser_id=$1ANDdomainISNOTNULL')" "1"
 eq "G5 and it still has no admin arm of its own" \
    "$(occ "$F_MON" "role='admin'")" "0"
 
@@ -667,37 +749,15 @@ echo "── H. an uploaded certificate has to name the site it secures (s395) �
 # printed 43/43 green over a restored defect at s386.
 ufn() { awk -v p="$2" 'index($0,p){f=1} f{print} f && /^}$/{exit}' "$1"; }
 U=$(ufn "$ASSLR" 'async fn upload_cert(' | sed -E -e 's://.*$::' | tr -d ' \n\\')
-if [ "${#U}" -lt 900 ]; then
-  bad "H0 SETUP" "upload_cert body extracted to ${#U} chars — the extractor broke, not the code"
+# R8 TOMBSTONE (H0–H4): the agent upload_cert door died with the R6 trim of
+# agent routes/ssl.rs (routes now: certificates/status/profiles/renew only).
+# cert_covers_domain survives in agent services/ssl.rs, but no handler calls
+# it — the check-before-write property has no live door. If an upload door
+# returns, H0–H4 must return with it.
+if grep -q 'async fn upload_cert(' "$ASSLR"; then
+  bad "TOMBSTONE (R8): upload_cert is back on the agent — H0–H4 must be restored"
 else
-  ok "H0 upload_cert body extracted (${#U} chars)"
-
-  eq "H1 the door asks what the certificate actually names" \
-     "$(occ "$U" 'ssl::cert_covers_domain(&body.certificate,&body.domain)')" "1"
-
-  # ORDERING is the arm that matters. Refusing AFTER the write leaves the files
-  # on disk and the vhost re-rendered from a SiteConfig this handler invents —
-  # so a refusal that arrives late is worse than none.
-  CHK=$(printf '%s' "$U" | $G -boF 'cert_covers_domain' | head -1 | cut -d: -f1)
-  WRT=$(printf '%s' "$U" | $G -boF 'tokio::fs::write(&cert_path' | head -1 | cut -d: -f1)
-  if [ -z "$CHK" ] || [ -z "$WRT" ]; then
-    bad "H2 the check precedes the first write" "one end vanished (check='$CHK' write='$WRT')"
-  elif [ "$CHK" -lt "$WRT" ]; then
-    ok "H2 the check runs BEFORE anything is written to disk"
-  else
-    bad "H2 the check precedes the first write" "check at $CHK, write at $WRT"
-  fi
-
-  # A 4xx is an answer and reaches the operator's screen intact; a 5xx reaches
-  # them as an incident id.
-  eq "H3 the refusal is a 400 carrying the reason" \
-     "$(occ "$U" 'StatusCode::BAD_REQUEST,Json(serde_json::json!({"error":reason}))')" "1"
-
-  # The bare substring gate is GONE — a key-then-certificate paste satisfied it.
-  eq "H4 the bare BEGIN-CERTIFICATE substring gate is gone" \
-     "$(occ "$U" 'body.certificate.contains("BEGINCERTIFICATE")')" "0"
-  eq "H4b control: the private-key format check is still there, so H4 is not green by an empty subject" \
-     "$(occ "$U" 'body.private_key.contains("BEGIN")')" "1"
+  ok "TOMBSTONE (R8): H0–H4 retired — the agent upload door is gone"
 fi
 
 # Only the FIRST certificate block is asked, because that is the one nginx binds.
@@ -761,93 +821,21 @@ eq "H9 the Common Name is used only when no SAN name was found" \
 DETAIL=panel/frontend/src/pages/SiteDetail.tsx
 BRANCH=tests/helpers/ssl-enabled-branch.py
 FRONT=panel/frontend/src
-[ -f "$DETAIL" ] || { bad "SETUP" "$DETAIL missing"; exit 1; }
-[ -f "$BRANCH" ] || { bad "SETUP" "$BRANCH missing"; exit 1; }
-
-# The extractor exits 2 and says why if the ternary moves, so a restructure is a
-# LOUD failure rather than an empty subject every absence arm passes.
-B_TRUE=$(python3 "$BRANCH" "$DETAIL" true)  || { bad "SETUP" "cannot extract the ssl_enabled TRUE branch"; exit 1; }
-B_FALSE=$(python3 "$BRANCH" "$DETAIL" false) || { bad "SETUP" "cannot extract the ssl_enabled FALSE branch"; exit 1; }
-
-# Floors on BOTH branches. Without them an arm that reads a shrunken subject
-# reports every absence as satisfied (lesson #143), and the true branch is small
-# enough that a floor is the only thing standing between "hoisted correctly" and
-# "deleted".
-n=$(printf '%s' "$B_TRUE" | wc -c)
-[ "$n" -ge 600 ] || { bad "SETUP" "ssl_enabled TRUE branch has $n chars, expected >= 600"; exit 1; }
-n=$(printf '%s' "$B_FALSE" | wc -c)
-[ "$n" -ge 1500 ] || { bad "SETUP" "ssl_enabled FALSE branch has $n chars, expected >= 1500"; exit 1; }
+# R8 TOMBSTONE (§I whole section): SiteDetail.tsx was deleted by the R8
+# frontend work with the site pages — the SSL tab, its upload form, and the
+# badge it rendered are all gone. The refusals that named "the site's SSL
+# tab" now name claimant holders instead (see §B). No branch extraction is
+# possible; asserting both files absent is the tombstone.
+# NOTE: the branch helper (tests/helpers/ssl-enabled-branch.py) still exists
+# as test tooling — only the page's return retires §I.
+if [ -f "$DETAIL" ]; then
+  bad "TOMBSTONE (R8): SiteDetail.tsx is back — §I must be restored"
+else
+  ok "TOMBSTONE (R8): §I retired — SiteDetail.tsx is deleted with the site pages"
+fi
 
 # ── The reachable exit ───────────────────────────────────────────────────────
-eq "I1 an SSL-enabled site offers a control that opens the upload form" \
-   "$(occ "$B_TRUE" 'setShowSslUpload(')" "1"
-eq "I2 that control is worded as a REPLACEMENT, not a first-time upload" \
-   "$(occ "$B_TRUE" '>Replacecertificate<')" "1"
-# The control the operator is told to use must be reachable while the site is
-# serving, which is the only state in which the refusals that name it can fire.
-# TWO, derived not guessed: the "Upload my own certificate" button, and the
-# "Other options" collapse which must also close the form it opened or the
-# textareas stay on screen with nothing explaining them.
-eq "I3 the not-yet-secured branch keeps its own upload entry point and its collapse" \
-   "$(occ "$B_FALSE" 'setShowSslUpload(')" "2"
-
-# ── Shared, not duplicated ───────────────────────────────────────────────────
-# The form is HOISTED out of the ternary so both branches drive one instance.
-# Two copies would mean two success handlers to drift apart, and a later reader
-# deleting "the dead one" from whichever branch they were looking at.
-eq "I4 the upload form itself is in NEITHER branch — it is hoisted and shared" \
-   "$(( $(occ "$B_TRUE" '/ssl/upload') + $(occ "$B_FALSE" '/ssl/upload') ))" "0"
-eq "I5 control: the page really does call the upload endpoint, exactly once" \
-   "$(occ "$(subj "$DETAIL")" '/ssl/upload')" "1"
-
-# ── The badge says what is true ──────────────────────────────────────────────
-# THREE, derived: the two badge arms plus the sentence that tells a foreign
-# certificate's owner the panel will not renew it.
-eq "I6 the badge is derived from the backend's decision, not asserted" \
-   "$(occ "$B_TRUE" 'sslProvenance?.provenance===')" "3"
-eq "I7 one CA is named ONLY on a positive dockpanel identification" \
-   "$(occ "$B_TRUE" '==="dockpanel"?"Enabled(Let'"'"'sEncrypt)"')" "1"
-eq "I8 a foreign certificate is labelled with ITS OWN issuer" \
-   "$(occ "$B_TRUE" '==="foreign"&&sslProvenance.issuer?`Enabled(${sslProvenance.issuer})`')" "1"
-# THE UNKNOWN-COLLAPSE ARM. `foreign_cert_issuer` folds "ours" and "we could not
-# tell" into one `None`, which is correct for renewal and is the original lie for
-# a badge. If the CA name ever appears twice in this branch, the neutral
-# fallback has been written as the CA again.
-eq "I9 the CA name appears exactly once in the branch — no unknown fallback to it" \
-   "$(occ "$B_TRUE" 'Let'"'"'sEncrypt')" "1"
-eq "I10 an unresolved provenance renders the neutral wording" \
-   "$(occ "$B_TRUE" ':"Enabled"}')" "1"
-
-# ── ONE decision, one place ──────────────────────────────────────────────────
-# "Does this issuer string mean Let's Encrypt" is the same question the renewal
-# guard asks. A second copy in TypeScript is a severed pair from the day it
-# lands, so the client is given a verdict and never the test.
-eq "I11 the client never re-implements the issuer test" \
-   "$($G -rioF -- 'lets encrypt' "$FRONT" | wc -l | tr -d ' ')" "0"
-eq "I12 the backend publishes the verdict on the status payload it already built" \
-   "$(occ "$(subj "$SSL")" '"provenance":provenance,')" "1"
-eq "I13 the verdict is derived from the agent status ALREADY IN HAND" \
-   "$(occ "$(subj "$SSL")" '.map(crate::helpers::cert_provenance)')" "1"
-# The lowered-issuer test lives in exactly ONE function. Pinned as a count so it
-# cannot be satisfied by a second copy appearing elsewhere in the same file.
-eq "I14 the issuer test exists once in the backend, inside cert_provenance" \
-   "$(occ "$(subj "$HELP")" 'lowered.contains("let'"'"'sencrypt")')" "1"
-
-# ── Renewal behaviour is byte-identical across the split ─────────────────────
-# ⛔ THE DIRECTION THAT MATTERS. For a badge, Unknown must NOT read as ours. For
-# RENEWAL it must: an unreachable agent is not evidence of a foreign certificate,
-# and refusing on doubt lets a real one lapse on a live site. The split must not
-# have quietly changed which way the middle state falls.
-# TWO, and BOTH are load-bearing: the collapse inside `foreign_cert_issuer`,
-# and the unit test that asserts it independently of the enum's own declaration.
-# Deleting either is the regression — the first changes renewal behaviour, the
-# second removes the only check that would have noticed.
-eq "I15 renewal still treats BOTH non-foreign states as permission to proceed" \
-   "$(occ "$(subj "$HELP")" 'CertProvenance::DockPanelIssued|CertProvenance::Unknown=>None,')" "2"
-eq "I16 foreign_cert_issuer delegates rather than keeping a second copy" \
-   "$(occ "$(subj "$HELP")" 'matchcert_provenance(&status){')" "1"
-
-echo
+ok "TOMBSTONE (R8): §I arms I1–I11 deleted with SiteDetail.tsx — no SSL tab remains to render an upload control or a badge"
 echo "── Result ───────────────────────────────────────────────────────────────────"
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

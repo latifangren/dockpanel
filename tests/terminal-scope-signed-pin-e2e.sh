@@ -96,9 +96,12 @@ else
   # Flatten: the derivation spans several lines and the invariant is the whole
   # expression `scope = domain … unwrap_or_else(… SERVER_SHELL_SCOPE)`.
   MINT_FLAT=$(tr '\n' ' ' <<< "$MINT" | tr -s ' ')
+  # R8: site shells died with sites — domain is None and the scope is the
+  # constant server marker. No caller-supplied value can reach it: the
+  # site_id is refused above (see A3) and the scope is a constant.
   if [ -n "$MINT" ] \
-    && has "$MINT_FLAT" 'let scope = domain \.clone\(\) \.unwrap_or_else\(\|\| SERVER_SHELL_SCOPE'; then
-    ok "A2 the scope is set from the ownership-resolved domain, server marker as the only fallback"
+    && has "$MINT_FLAT" 'let scope = SERVER_SHELL_SCOPE\.to_string\(\)'; then
+    ok "A2 the scope is the constant server marker — no caller-supplied value can reach it"
   else
     bad "A2 the ticket scope is not derived from the resolved domain — an attacker-supplied value could reach it"
   fi
@@ -108,8 +111,11 @@ fi
 # as the resolution behind it). SITE_CALLER_PREDICATE must still bind the domain.
 if [ -z "$BE_S" ]; then
   bad "A3 SKIPPED: $BE did not yield source"
-elif has "$BE_S" 'SITE_CALLER_PREDICATE' && has "$BE_S" 'not owned by you'; then
-  ok "A3 the site domain is still resolved under the ownership predicate before it becomes the scope"
+# R8: the site branch is gone — a site_id is REFUSED (400) instead of
+# resolved under the ownership predicate, and the server shell needs
+# admin. No site scope can be minted at all.
+elif has "$BE_S" 'Site shells were removed with sites' && has "$BE_S" 'The server shell is available to administrators only'; then
+  ok "A3 a site_id is refused outright and the server shell still needs admin — no site scope can be minted"
 else
   bad "A3 the ownership resolution behind the scope is gone — the signed scope would certify nothing"
 fi

@@ -436,7 +436,7 @@ pub async fn install(packages: &[&str]) -> Result<(), String> {
 /// Install only those of `packages` that have a candidate here, and report
 /// which were skipped.
 ///
-/// This is the shape `install_php` already used on apt (core first, then only
+/// This is the shape the former host-PHP installer used on apt (core first, then only
 /// the extensions apt can actually supply). Promoting it into the module means
 /// the RHEL side inherits the protection instead of re-learning #73 the
 /// expensive way.

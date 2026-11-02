@@ -1,12 +1,10 @@
-use crate::safe_cmd::safe_command;
 use axum::{
-    extract::{Path, Json as AxumJson},
+    extract::Json as AxumJson,
     http::StatusCode,
-    routing::{post, delete},
+    routing::post,
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use serde::Deserialize;
 
 use super::AppState;
 use crate::services::command_filter;
@@ -41,20 +39,11 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Serialize)]
-pub struct CronResult {
-    pub success: bool,
-    pub output: Option<String>,
-    pub exit_code: Option<i32>,
-}
-
 const CRONTAB_MARKER: &str = "# dockpanel:";
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/crons/sync", post(sync_crons))
-        .route("/crons/run", post(run_cron))
-        .route("/crons/remove/{id}", delete(remove_cron))
 }
 
 /// POST /crons/sync — Write this site's crons to the system crontab.
@@ -164,68 +153,6 @@ async fn sync_crons(
     // in the UI but which is not in the crontab is the shape that never runs
     // and never says why.
     Ok(Json(serde_json::json!({ "synced": synced, "skipped": skipped })))
-}
-
-/// POST /crons/run — Execute a cron command immediately and return output.
-async fn run_cron(
-    AxumJson(body): AxumJson<CronRequest>,
-) -> Result<Json<CronResult>, ApiErr> {
-    if body.command.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "Command cannot be empty"));
-    }
-    if !command_filter::is_safe_cron_command(&body.command) {
-        return Err(err(StatusCode::BAD_REQUEST, "Command contains disallowed characters or patterns"));
-    }
-
-    let output = tokio::time::timeout(
-        Duration::from_secs(30),
-        safe_command("bash")
-            .arg("-c")
-            .arg(&body.command)
-            .output(),
-    )
-    .await
-    .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Command timed out after 30s"))?
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to execute: {e}")))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = if stderr.is_empty() {
-        stdout
-    } else {
-        format!("{stdout}\n--- stderr ---\n{stderr}")
-    };
-
-    // Truncate output to 10KB
-    let truncated = if combined.len() > 10240 {
-        format!("{}...(truncated)", &combined[..10240])
-    } else {
-        combined
-    };
-
-    Ok(Json(CronResult {
-        success: output.status.success(),
-        output: Some(truncated),
-        exit_code: output.status.code(),
-    }))
-}
-
-/// DELETE /crons/remove/{id} — Remove a specific cron by ID from crontab.
-async fn remove_cron(
-    Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiErr> {
-    let existing = read_crontab()
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
-    let lines: Vec<&str> = existing
-        .lines()
-        .filter(|line| marker_id(line) != Some(id.as_str()))
-        .collect();
-
-    write_crontab(&lines.join("\n")).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
-
-    Ok(Json(serde_json::json!({ "removed": id })))
 }
 
 /// The dockpanel cron id a crontab line carries, if any.

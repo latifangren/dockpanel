@@ -136,10 +136,16 @@ else
 fi
 
 # Positive control: the pre-existing background-service wiring is untouched.
-if has "$MAIN_C" 'spawn_supervised\("backup_scheduler", &shutdown_tx,' && has "$MAIN_C" 'spawn_supervised\("cleanup", &shutdown_tx,'; then
-  ok "A5 (control) spawn_supervised still wires background services to shutdown_tx by reference"
+# R8: the two exemplar services this control named (backup_scheduler, the
+# cleanup task) are both deleted — backup_scheduler with the hosting schema
+# in R7. The control is re-derived as a census: every spawn_supervised call
+# site in main.rs must pass &shutdown_tx (10 sites at HEAD, none exempt).
+SPAWN_N=$(grep -c 'spawn_supervised("' <<< "$MAIN_C" || true)
+SPAWN_WIRED_N=$(grep -c 'spawn_supervised("[a-z_]*", &shutdown_tx,' <<< "$MAIN_C" || true)
+if [ "$SPAWN_N" -ge 1 ] && [ "$SPAWN_N" = "$SPAWN_WIRED_N" ]; then
+  ok "A5 (control) all $SPAWN_N spawn_supervised sites wire shutdown_tx by reference"
 else
-  bad "A5 (control) spawn_supervised's shutdown_tx wiring was altered"
+  bad "A5 (control) spawn_supervised wiring drifted — $SPAWN_WIRED_N of $SPAWN_N sites pass &shutdown_tx"
 fi
 
 # ── A6/A7: the CRITICAL fix-of-the-fix — where the broadcast actually fires ─
@@ -253,10 +259,12 @@ else
   bad "D1 notifications.rs::stream is missing the shutdown race"
 fi
 
-if has "$SITES_C" '\.take_until\(crate::helpers::shutdown_signal_fut\(&state\)\)'; then
-  ok "D2 sites.rs::provision_log takes_until shutdown"
+# R8 TOMBSTONE (D2): sites.rs::provision_log died with routes/sites.rs (R3).
+# The crate-wide control D7 below already pins the surviving set (3 files).
+if [ -f "$SITES" ]; then
+  bad "TOMBSTONE (R8): routes/sites.rs is back — D2 must be restored"
 else
-  bad "D2 sites.rs::provision_log is missing the shutdown race"
+  ok "TOMBSTONE (R8): D2 retired with routes/sites.rs — no provision_log stream remains"
 fi
 
 if has "$DOCKER_APPS_C" '\.take_until\(crate::helpers::shutdown_signal_fut\(&state\)\)'; then

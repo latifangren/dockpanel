@@ -7,15 +7,6 @@ import { useBranding } from "../context/BrandingContext";
 import { isNavVisible, navFlagsFor } from "../data/navItems";
 import { formatSize, formatRate, formatUptime, timeAgo } from "../utils/format";
 
-interface SiteDetail {
-  id: string;
-  domain?: string;
-  status: string;
-  // A site the operator disabled is serving a maintenance response, not the
-  // site. Counting it as active is the same mistake the vhost writers made.
-  enabled?: boolean;
-}
-
 interface ActivityItem {
   action: string;
   target_name?: string;
@@ -358,7 +349,10 @@ export default function Dashboard() {
   const isAdmin = user?.role === "admin";
 
   const [system, setSystem] = useState<SystemInfo | null>(null);
-  const [sites, setSites] = useState<SiteSummary>({ total: 0, active: 0 });
+  // Sites were removed with the hosting backend: there is no list to count
+  // anymore, so the summary stays zero and the quick-action gates below fall
+  // back to the app count alone.
+  const sites: SiteSummary = { total: 0, active: 0 };
   const [processes, setProcesses] = useState<Process[]>([]);
   const [network, setNetwork] = useState<NetworkIface[]>([]);
   const [error, setError] = useState("");
@@ -445,15 +439,6 @@ export default function Dashboard() {
 
   // Fetch endpoints NOT covered by WebSocket (slow-changing data)
   const fetchSlowData = useCallback(() => {
-    api
-      .get<SiteDetail[]>("/sites")
-      .then((list) => {
-        setSites({
-          total: list.length,
-          active: list.filter((s) => s.status === "active" && s.enabled !== false).length,
-        });
-      })
-      .catch(() => setError("Failed to load sites. Please try again."));
     api
       .get<Intelligence>("/dashboard/intelligence")
       .then(setIntel)

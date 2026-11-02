@@ -21,9 +21,7 @@ interface EmailTabProps {
   setSmtpFromName: Dispatch<SetStateAction<string>>;
   smtpEncryption: string;
   setSmtpEncryption: Dispatch<SetStateAction<string>>;
-  testingEmail: boolean;
   saveSMTP: () => Promise<void>;
-  handleTestEmail: () => Promise<void>;
   applyPreset: (provider: string) => void;
 }
 
@@ -44,9 +42,7 @@ export function EmailTab({
   setSmtpFromName,
   smtpEncryption,
   setSmtpEncryption,
-  testingEmail,
   saveSMTP,
-  handleTestEmail,
   applyPreset
 }: EmailTabProps) {
   return (
@@ -162,13 +158,6 @@ export function EmailTab({
               </div>
             </div>
             <div className="flex justify-end gap-2">
-              <button
-                onClick={handleTestEmail}
-                disabled={testingEmail || !smtpHost}
-                className="px-4 py-2 text-sm font-medium text-dark-100 bg-dark-700 rounded-lg hover:bg-dark-600 disabled:opacity-50"
-              >
-                {testingEmail ? "Sending..." : "Send Test Email"}
-              </button>
               <button
                 onClick={saveSMTP}
                 disabled={saving === "smtp"}

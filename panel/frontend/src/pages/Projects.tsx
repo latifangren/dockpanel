@@ -14,9 +14,9 @@ import { api } from "../api";
 // - There is deliberately NO backend /projects API, table, or route behind
 //   this page. Grouping is stored in this browser's localStorage only and
 //   enforces nothing server-side: it is a workspace view, and the copy on
-//   this page says so. Sites, apps, databases and git deploys below are the
-//   real resources fetched from the real APIs; only the grouping itself is
-//   local.
+//   this page says so. Apps and databases below are the real resources
+//   fetched from the real APIs; only the grouping itself is local. (Sites
+//   and git deploys were removed with the hosting backend.)
 
 export interface ProjectEntity {
   id: string;
@@ -29,13 +29,6 @@ export interface ProjectEntity {
   database_ids: string[];
   git_deploy_ids: string[];
   created_at: string;
-}
-
-interface SiteResource {
-  id: string;
-  domain: string;
-  runtime?: string;
-  status?: string;
 }
 
 interface AppResource {
@@ -53,15 +46,6 @@ interface DbResource {
   engine: string;
   db_user: string;
   port?: number | null;
-}
-
-interface GitResource {
-  id: string;
-  name: string;
-  repo_url: string;
-  branch: string;
-  status: string;
-  domain: string | null;
 }
 
 const STORAGE_KEY = "dp_projects_registry_v1";
@@ -84,10 +68,8 @@ export default function Projects() {
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [envFilter, setEnvFilter] = useState<string>("all");
-  const [sites, setSites] = useState<SiteResource[]>([]);
   const [apps, setApps] = useState<AppResource[]>([]);
   const [databases, setDatabases] = useState<DbResource[]>([]);
-  const [gitDeploys, setGitDeploys] = useState<GitResource[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -110,16 +92,12 @@ export default function Projects() {
 
   useEffect(() => {
     Promise.all([
-      api.get<SiteResource[]>("/sites").catch(() => []),
       api.get<AppResource[]>("/apps").catch(() => []),
       api.get<DbResource[]>("/databases").catch(() => []),
-      api.get<GitResource[]>("/git-deploys").catch(() => []),
     ])
-      .then(([s, a, d, g]) => {
-        setSites(Array.isArray(s) ? s : []);
+      .then(([a, d]) => {
         setApps(Array.isArray(a) ? a : []);
         setDatabases(Array.isArray(d) ? d : []);
-        setGitDeploys(Array.isArray(g) ? g : []);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -206,10 +184,8 @@ export default function Projects() {
     setDrawerOpen(false);
   };
 
-  const projectSites = activeProject ? sites.filter((s) => activeProject.site_ids.includes(s.id)) : [];
   const projectApps = activeProject ? apps.filter((a) => activeProject.app_ids.includes(a.container_id)) : [];
   const projectDbs = activeProject ? databases.filter((d) => activeProject.database_ids.includes(d.id)) : [];
-  const projectGits = activeProject ? gitDeploys.filter((g) => activeProject.git_deploy_ids.includes(g.id)) : [];
 
   const inputCls =
     "w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-900 text-dark-100 focus:outline-none focus:border-dark-400";
@@ -221,7 +197,7 @@ export default function Projects() {
           <p className="text-xs font-medium text-dark-400 uppercase tracking-widest">Logical Workspace Grouping</p>
           <h1 className="text-2xl font-bold text-dark-50 mt-1">Projects &amp; Environments</h1>
           <p className="text-sm text-dark-300 mt-1 max-w-2xl">
-            Group websites, Docker containers, databases, and Git deploys into workspaces.
+            Group Docker containers and databases into workspaces.
             Grouping is stored in this browser only (localStorage) — it is a local
             workspace view, not a server-side boundary: it changes no permissions
             and moves no resources.
@@ -260,7 +236,7 @@ export default function Projects() {
         <div className="py-16 text-center bg-dark-800/50 border border-dark-600 rounded-lg">
           <p className="text-dark-200 font-medium">No projects yet</p>
           <p className="text-dark-400 text-sm mt-1 max-w-md mx-auto">
-            Create a project and assign the sites, containers, databases, and Git deploys
+            Create a project and assign the containers and databases
             that belong together. The grouping lives in this browser only.
           </p>
           <button
@@ -337,10 +313,8 @@ export default function Projects() {
                 </div>
                 {(
                   [
-                    ["Websites", projectSites.map((s) => ({ key: s.id, title: s.domain, sub: s.status || s.runtime || "", to: `/sites/${s.id}` }))],
                     ["Containers", projectApps.map((a) => ({ key: a.container_id, title: a.name, sub: `${a.status || ""} ${a.domain || ""}`.trim(), to: "/apps" }))],
                     ["Databases", projectDbs.map((d) => ({ key: d.id, title: d.name, sub: `${d.engine} · ${d.db_user}`, to: "/databases" }))],
-                    ["Git Deploys", projectGits.map((g) => ({ key: g.id, title: g.name, sub: `${g.repo_url} (${g.branch})`, to: "/git-deploys" }))],
                   ] as const
                 ).map(([title, items]) => (
                   <div key={title} className="bg-dark-800/50 border border-dark-600 rounded-lg p-4">
@@ -403,10 +377,8 @@ export default function Projects() {
               </div>
               {(
                 [
-                  ["Websites", sites.map((s) => ({ id: s.id, label: s.domain })), pickedSites, setPickedSites],
                   ["Containers", apps.map((a) => ({ id: a.container_id, label: a.name })), pickedApps, setPickedApps],
                   ["Databases", databases.map((d) => ({ id: d.id, label: d.name })), pickedDbs, setPickedDbs],
-                  ["Git Deploys", gitDeploys.map((g) => ({ id: g.id, label: g.name })), pickedGits, setPickedGits],
                 ] as const
               ).map(([title, options, picked, setter]) => (
                 <div key={title}>

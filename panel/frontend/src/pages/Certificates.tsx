@@ -46,9 +46,9 @@ export const STATUS_STYLES: Record<string, { bg: string; text: string; label: st
 export default function Certificates() {
   // The LIST is open on purpose — it is `AuthUser` and filtered to the caller's
   // own sites, so a site owner seeing their own certificates here is the
-  // intended behaviour and must not be gated. Renewing and deleting are not:
-  // both are administrator-only, so an owner was shown a row whose only two
-  // controls were the two things they would be refused.
+  // intended behaviour and must not be gated. Renewing (stack rows only) is
+  // not: it is administrator-only, so an owner was shown a row whose only
+  // control was the one thing they would be refused.
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const [certs, setCerts] = useState<Certificate[]>([]);
@@ -63,8 +63,6 @@ export default function Certificates() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState({ text: "", type: "" });
   const [renewingId, setRenewingId] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadCerts = () => {
     api.get<{ certificates: Certificate[]; host_scan?: boolean }>(
@@ -93,17 +91,13 @@ export default function Certificates() {
   //    spin together on one click.
   const rowId = (cert: Certificate) => cert.site_id ?? cert.stack_id ?? cert.domain;
 
+  // Stack rows only: the site-shaped renew/delete routes died with the
+  // hosting backend, so a site row has no Renew or Delete control here.
   const handleRenew = async (cert: Certificate) => {
     setRenewingId(rowId(cert));
     setMessage({ text: "", type: "" });
     try {
-      // A stack has no `sites` row, so the site-shaped route could never address
-      // one — which is why this page used to say it could do nothing at all.
-      await api.post(
-        cert.stack_id != null
-          ? `/stacks/${cert.stack_id}/renew-ssl`
-          : `/ssl/${cert.site_id}/renew`,
-      );
+      await api.post(`/stacks/${cert.stack_id}/renew-ssl`);
       setMessage({ text: `Certificate renewed for ${cert.domain}`, type: "success" });
       loadCerts();
     } catch (e) {
@@ -113,25 +107,6 @@ export default function Certificates() {
       });
     } finally {
       setRenewingId(null);
-    }
-  };
-
-  const handleDelete = async (cert: Certificate) => {
-    setDeletingId(cert.site_id);
-    setMessage({ text: "", type: "" });
-    try {
-      await api.delete(`/ssl/${cert.site_id}`);
-      setDeleteTarget(null);
-      setMessage({ text: `Certificate deleted for ${cert.domain}`, type: "success" });
-      loadCerts();
-    } catch (e) {
-      setMessage({
-        text: e instanceof Error ? e.message : "Failed to delete certificate",
-        type: "error",
-      });
-      setDeleteTarget(null);
-    } finally {
-      setDeletingId(null);
     }
   };
 
@@ -206,7 +181,7 @@ export default function Certificates() {
           <svg className="w-12 h-12 text-dark-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
           </svg>
-          <p className="text-dark-200 text-sm">No SSL certificates. Enable SSL on your sites to see them here.</p>
+          <p className="text-dark-200 text-sm">No SSL certificates tracked.</p>
         </div>
       ) : (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
@@ -313,45 +288,7 @@ export default function Certificates() {
                           {renewingId === rowId(cert) && <span className="w-3 h-3 border-2 border-dark-400/30 border-t-dark-200 rounded-full animate-spin" />}
                           {renewingId === rowId(cert) ? "Renewing..." : "Renew"}
                         </button>
-                      ) : deleteTarget === cert.site_id ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => handleDelete(cert)}
-                            disabled={deletingId === cert.site_id}
-                            className="px-2 py-1 bg-danger-500 text-white rounded text-xs disabled:opacity-50 flex items-center gap-1"
-                          >
-                            {deletingId === cert.site_id && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                            Confirm
-                          </button>
-                          <button
-                            onClick={() => setDeleteTarget(null)}
-                            className="px-2 py-1 bg-dark-600 text-dark-200 rounded text-xs"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => handleRenew(cert)}
-                            disabled={renewingId === rowId(cert)}
-                            className="px-2 py-1 text-xs text-dark-300 hover:text-dark-50 bg-dark-700 rounded hover:bg-dark-600 transition-colors disabled:opacity-50 flex items-center gap-1"
-                            title="Renew certificate"
-                          >
-                            {renewingId === rowId(cert) && <span className="w-3 h-3 border-2 border-dark-400/30 border-t-dark-200 rounded-full animate-spin" />}
-                            {renewingId === rowId(cert) ? "Renewing..." : "Renew"}
-                          </button>
-                          <button
-                            onClick={() => setDeleteTarget(cert.site_id)}
-                            className="text-dark-300 hover:text-danger-500 transition-colors p-1"
-                            title="Delete certificate"
-                          >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                            </svg>
-                          </button>
-                        </div>
-                      )}
+                      ) : null}
                     </td>
                     )}
                   </tr>

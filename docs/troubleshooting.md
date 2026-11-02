@@ -39,14 +39,8 @@ tail -50 /var/log/nginx/access.log
 tail -50 /var/log/nginx/example.com.access.log
 tail -50 /var/log/nginx/example.com.error.log
 
-# PHP-FPM
-journalctl -u php8.3-fpm -n 50 --no-pager
-
 # Fail2Ban
 tail -50 /var/log/fail2ban.log
-
-# Mail (Postfix)
-tail -50 /var/log/mail.log
 ```
 
 ## Common Issues
@@ -100,69 +94,13 @@ outgoing notifications and runbooks — it simply is not what gates the cookie.
 
 ---
 
-### Site shows 404 Not Found
+### SSL provisioning fails (stack / panel certificate)
 
-**Cause**: Either the document root is empty, or the DNS is not pointing to the server.
-
-**Fix**:
-
-1. Check the document root exists and has files:
-   ```bash
-   ls -la /var/www/example.com/public/
-   ```
-
-2. If the directory is empty, DockPanel should have created a default `index.html`. Re-create the site from the panel.
-
-3. Check DNS is pointing to this server:
-   ```bash
-   dig example.com +short
-   ```
-   The result should be your server's public IP.
-
-4. Check the Nginx config exists and is valid:
-   ```bash
-   ls /etc/nginx/sites-enabled/example.com
-   nginx -t
-   ```
-
----
-
-### PHP site shows 502 Bad Gateway
-
-**Cause**: PHP-FPM is not installed or not running.
-
-**Fix**:
-
-```bash
-# Check if PHP-FPM is installed
-php -v
-
-# Check the service
-systemctl status php8.3-fpm
-
-# Install PHP if missing (via CLI)
-dockpanel php install 8.3
-
-# Or install from the panel: Settings > Service Installers > PHP-FPM
-
-# Restart PHP-FPM
-systemctl restart php8.3-fpm
-```
-
-Verify the Nginx config references the correct PHP-FPM socket:
-
-```bash
-grep fastcgi_pass /etc/nginx/sites-available/example.com
-# Should show: unix:/run/php/php8.3-fpm.sock
-```
-
----
-
-### SSL provisioning fails
-
-**Cause**: Let's Encrypt cannot verify domain ownership.
-
-Before working through this list, check the SSL card on the site itself. DockPanel evaluates the DNS prerequisite before it will attempt issuance, and says which of these it is — see [What DockPanel checks for you](guides/prerequisites.md). If the button is disabled, the reason is on screen.
+**Cause**: Let's Encrypt cannot verify domain ownership for the domain a
+stack claims, or for the panel itself. There is no site SSL card any more
+— sites were removed in R3 — and no `dockpanel ssl provision` command;
+provisioning is driven from the panel (ACME profiles/contact email, and
+the stack's own certificate controls).
 
 **Fix**:
 
@@ -194,10 +132,9 @@ Before working through this list, check the SSL card on the site itself. DockPan
 
 4. **Check for rate limits**: Let's Encrypt allows 5 duplicate certificates per domain per week. If you hit the limit, wait 7 days or use a different subdomain.
 
-5. Retry:
-   ```bash
-   dockpanel ssl provision example.com --email you@example.com --runtime static
-   ```
+5. Retry from the panel's ACME / stack certificate controls, and check the
+   DNS preflight result (`GET /api/preflight/dns`) for the reason the
+   prerequisite check gives.
 
 ---
 
@@ -315,9 +252,6 @@ systemctl restart dockpanel-api
 
 # Restart Nginx
 systemctl restart nginx
-
-# Restart PHP-FPM
-systemctl restart php8.3-fpm
 
 # Restart Docker
 systemctl restart docker

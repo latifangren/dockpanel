@@ -56,19 +56,22 @@ ABACKUP=panel/agent/src/services/database_backup.rs
 AROUTES=panel/agent/src/routes/database_backup.rs
 ADBROUTE=panel/agent/src/routes/database.rs
 PAGE=panel/frontend/src/pages/Databases.tsx
+IMPORT=panel/frontend/src/pages/databases/ImportDatabase.tsx  # R8: the import UI moved out of Databases.tsx
 CLI=panel/cli/src/commands/backup.rs
 CSS=panel/frontend/src/index.css
 SPA=panel/frontend/src
 
 for f in "$DBS" "$ROUTER" "$ORCH" "$AGENTSVC" "$MAIN" "$ABACKUP" "$AROUTES" \
-         "$ADBROUTE" "$PAGE" "$CLI" "$CSS"; do
+         "$ADBROUTE" "$PAGE" "$IMPORT" "$CLI" "$CSS"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
 [ -d "$SPA" ] || { bad "SETUP" "$SPA missing"; exit 1; }
 
 # An arm that measures an empty subject prints green for every absence below, so
 # each subject is asserted before it is measured (lesson #143).
-for pair in "$DBS:1000" "$ROUTER:1000" "$ABACKUP:600" "$PAGE:1000" "$CSS:100"; do
+# R8: PAGE floor 1000 -> 700. Databases.tsx is 759 lines (pre-existing
+# shrink; the file is unmodified in R8) — the floor guards vacuity, not size.
+for pair in "$DBS:1000" "$ROUTER:1000" "$ABACKUP:600" "$PAGE:700" "$CSS:100"; do
   f=${pair%:*}; min=${pair##*:}
   n=$(wc -l < "$f")
   [ "$n" -ge "$min" ] || { bad "SETUP" "$f has $n lines, expected >= $min"; exit 1; }
@@ -84,9 +87,9 @@ eq "A2 the import door is registered" \
 # A door nothing reaches is not a door. Keyed on the SPA's call, not on a button
 # label, because labels get reworded and a reworded label is not a regression.
 eq "A3 the SPA asks for the listing" \
-   "$(flat "$PAGE" | $G -c '/databases/\${database.id}/dumps')" "1"
+   "$(flat "$IMPORT" | $G -c '/databases/\${database.id}/dumps')" "1"
 eq "A4 the SPA posts the import" \
-   "$(flat "$PAGE" | $G -c '/databases/\${database.id}/import')" "1"
+   "$(flat "$IMPORT" | $G -c '/databases/\${database.id}/import')" "1"
 
 echo "── B. It reuses the hardened path instead of opening a new one ───────────────"
 
@@ -241,7 +244,7 @@ eq "D3 the timeout answers 504, not a generic failure" \
 # The SPA must not paint it red either — "still running" and "did not happen" are
 # different facts and the operator acts differently on each. 524 is Cloudflare's cut at
 # 100s, which arrives as an HTML body api.ts cannot read, so it needs naming explicitly.
-if flat "$PAGE" | $G -q 'e.status===504||e.status===524'; then
+if flat "$IMPORT" | $G -q 'e.status===504||e.status===524'; then
   ok "D4 the SPA tells 'still running' apart from 'failed', including behind Cloudflare"
 else
   bad "D4 the SPA tells 'still running' apart from 'failed', including behind Cloudflare" \
@@ -303,7 +306,7 @@ eq "E4c the agent's fallback does not claim .enc is importable" \
 
 # Both surfaces that render the listing. A reason produced and not displayed is
 # the same defect one layer up.
-if flat "$PAGE" | $G -q '{d.unsupported||d.import_blocked}'; then
+if flat "$IMPORT" | $G -q '{d.unsupported||d.import_blocked}'; then
   ok "E5 the SPA renders BOTH verdicts — not a backup, and cannot go in this database"
 else
   bad "E5 the SPA renders BOTH verdicts" "a reason is produced and the page drops it"
@@ -312,7 +315,7 @@ fi
 # ⛔ The empty state is a positive claim about a directory. Rendering it after a FAILED
 # read fabricates that claim from a read that never happened — the exact ambiguity the
 # component was written to remove, reintroduced one level up.
-if flat "$PAGE" | $G -q '{!loading&&!error&&importable.length===0'; then
+if flat "$IMPORT" | $G -q '{!loading&&!error&&importable.length===0'; then
   ok "E5b the empty state stays silent when the listing could not be read"
 else
   bad "E5b the empty state stays silent when the listing could not be read" \

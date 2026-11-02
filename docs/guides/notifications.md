@@ -21,12 +21,16 @@ Notifications screen is built from. The categories the panel raises today:
 | `monitor` | An uptime monitor goes down, comes back up, or misses a heartbeat |
 | `security` | A login from an address not seen before, a canary file being touched, an emergency lockdown, a password reset, a completed security scan |
 | `incident` | An incident is created or resolved |
-| `backup` | Sites go 48 hours or more without a backup |
 | `auto_heal` | The auto-healer restarts a service, exhausts its retries, or reclaims disk |
 | `system` | A container is put to sleep for being idle |
 
 Every category above is raised by the panel itself. Nothing needs configuring
 for the feed to work.
+
+There is no `backup`, `deploy`, `site` or `ssl` category: those producers
+were removed with the hosting backend (R3/R5/R7 — the hourly stale-site-backup
+check died with the `sites` table), and a failing backup policy surfaces as
+an `alert` notification instead.
 
 ## Reading notifications
 
@@ -36,10 +40,11 @@ exact count. Clicking it opens the **Notifications** screen.
 On that screen:
 
 - **A notification's title is a link** when the panel knows where the event
-  happened — a failed deploy opens the site, a firing alert opens the Alerts
-  tab, a canary trip opens the security audit log. Following the link marks the
-  notification read. Notifications with nowhere sensible to go — a *site
-  deleted*, whose subject no longer exists — render as plain text.
+  happened — a firing alert opens the Alerts tab, a monitor event opens
+  Monitoring, an auto-heal event opens Incidents, a security event opens the
+  security audit log or My Account. Following the link marks the
+  notification read. Notifications with nowhere sensible to go render as
+  plain text.
 - **Filter** by unread, or by any category the feed actually contains. The
   filter row is built from your own notifications, so a category appears there
   the first time it is raised.

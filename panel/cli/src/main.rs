@@ -317,7 +317,7 @@ async fn main() {
 
     let result = match cli.command {
         Commands::Status => commands::status::cmd_status(&token, &output).await,
-        Commands::Sites { filter } => commands::sites::cmd_sites_list(&token, &output, filter.as_deref()).await,
+        Commands::Sites { filter } => commands::sites::cmd_sites_list(&output, filter.as_deref()).await,
         Commands::Db { filter, command } => match command {
             None => commands::db::cmd_db_list(&token, &output, filter.as_deref()).await,
             Some(DbCmd::Create {

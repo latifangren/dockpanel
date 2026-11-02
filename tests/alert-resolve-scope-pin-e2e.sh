@@ -486,10 +486,13 @@ DEDUP_ALL=$(printf '%s\n%s\n' "$DEDUP_H" "$DEDUP_S" | grep -c .)
 # Assert the enumeration BEFORE trusting it (#143, and §C1's own precedent): an
 # empty call list makes every arm below vacuously green, which is precisely how
 # this defect survived two suites that both mention `fire_alert_deduped`.
-if [ "$DEDUP_ALL" -ge 8 ]; then
+# R8: floor 8 -> 2. The healer raises no renewal alerts anymore (it renews
+# nothing); the scanner's two renew functions are the only
+# fire_alert_deduped call sites left for ssl_renewal_failure.
+if [ "$DEDUP_ALL" -ge 2 ]; then
   ok "G1 enumeration is sound — $DEDUP_ALL fire_alert_deduped call sites found"
 else
-  bad "G1 enumeration is sound — only $DEDUP_ALL fire_alert_deduped call sites found (expected >= 8)"
+  bad "G1 enumeration is sound — only $DEDUP_ALL fire_alert_deduped call sites found (expected >= 2)"
 fi
 
 # G2 is C2 for the other keyed function. A dedup guard scoped by a key that every
@@ -506,32 +509,41 @@ fi
 # G3: the conditions are distinct SUBJECTS. Counting the keys rather than
 # asserting a fixed list means a sixth condition must pick a key of its own
 # instead of borrowing one, and the count moves when it does.
+# R8: the five site conditions are gone with sites.rs. The two surviving
+# renewal subjects are the composite domain keys — one per renew function.
 KEYS=$(printf '%s\n%s\n' "$DEDUP_H" "$DEDUP_S" \
-       | grep -oE '"ssl_renewal_failure", [A-Za-z0-9_:]+' \
-       | sed -E 's/.*:://' | sort -u)
+       | grep -oE '(stack|docker_app)_renewal_state_key\(domain\)' | sort -u)
 NKEYS=$(grep -c . <<< "$KEYS")
-if [ "$NKEYS" -eq 5 ]; then
-  ok "G3 the five renewal conditions are five dedup subjects: $(paste -sd' ' <<< "$KEYS")"
+if [ "$NKEYS" -eq 2 ]; then
+  ok "G3 the two renewal subjects are two dedup subjects: $(paste -sd' ' <<< "$KEYS")"
 else
-  bad "G3 the five renewal conditions are five dedup subjects — found $NKEYS: $(paste -sd' ' <<< "$KEYS")"
+  bad "G3 the two renewal subjects are two dedup subjects — found $NKEYS: $(paste -sd' ' <<< "$KEYS")"
 fi
 
-# G4 — the still-member direction, and the one a per-call-site "fix" would fail.
-# Each condition raised by BOTH loops must carry the SAME key in both, or the
-# six-hourly scan stacks a duplicate on top of the healer's alert for one cert.
-SHARED_OK=1
-for k in FAILED DNS01_DECLINED DNS01_DOWNGRADED; do
-  inh=$(grep -cE "ssl_renewal_key::$k\b" <<< "$DEDUP_H")
-  ins=$(grep -cE "ssl_renewal_key::$k\b" <<< "$DEDUP_S")
-  if [ "$inh" -lt 1 ] || [ "$ins" -lt 1 ]; then
-    SHARED_OK=0
-    printf '        %s: healer=%s scanner=%s\n' "$k" "$inh" "$ins"
+# G4 — the still-member direction, re-derived (R8). The healer raises no
+# renewal alerts, so no condition is raised by both loops anymore. The
+# shared-key property moved INSIDE each renew function: the fire and the
+# resolve must use the same shared key function, or the alert fires and
+# never clears. Counted per function body (whole-file counts would catch
+# the unit test that names the stack key fn).
+if S_G4=$(subj "$SCANNER"); then
+  SHARED_OK=1
+  for pair in "renew_stack_certificate:stack_renewal_state_key" "renew_docker_app_certificate:docker_app_renewal_state_key"; do
+    fn=${pair%%:*}; kf=${pair#*:}
+    BODY_G4=$(fnbody "$S_G4" "$fn")
+    USES_G4=$(grep -oF "${kf}(domain)" <<< "$BODY_G4" | wc -l | tr -d ' ')
+    if [ "$USES_G4" != "2" ]; then
+      SHARED_OK=0
+      printf '        %s: %s uses=%s (expected 2: fire + resolve)\n' "$fn" "$kf" "$USES_G4"
+    fi
+  done
+  if [ "$SHARED_OK" -eq 1 ]; then
+    ok "G4 each renew function's fire and resolve share one key function, so one certificate is still one alert"
+  else
+    bad "G4 each renew function's fire and resolve share one key function — a hand-spelled key on either side refloods or never clears"
   fi
-done
-if [ "$SHARED_OK" -eq 1 ]; then
-  ok "G4 every condition both loops raise shares one key, so one certificate is still one alert"
 else
-  bad "G4 every condition both loops raise shares one key — a loop-scoped key would reflood"
+  bad "G4 $SCANNER is readable"
 fi
 
 # G5: one home for the keys. An inline literal at a call site is how a sixth
@@ -558,56 +570,68 @@ echo
 echo "== §H  a successful renewal clears the alerts that said none happened, and only those =="
 
 if N=$(subj "$NOTIF"); then
-  RES=$(fnbody "$N" resolve_ssl_renewal_failure)
-  # FLOOR the body before trusting any absence arm below it. An empty extraction
-  # would make H3 and H4 pass over nothing at all (#461).
-  RESLINES=$(grep -c . <<< "$RES")
-  if [ "$RESLINES" -ge 8 ]; then
-    ok "H1 resolve_ssl_renewal_failure body extracted — $RESLINES lines"
-
-    # It must decide through the TESTED predicate over the WHOLE key list, not a
-    # hand-written subset. A literal list here would compile, behave identically
-    # today, and silently stop tracking `renewal_success_clears` — whose unit
-    # tests are the only thing that says which keys belong.
-    if grep -qE 'ssl_renewal_key::ALL' <<< "$RES" \
-    && grep -qE 'renewal_success_clears' <<< "$RES"; then
-      ok "H2 the resolver filters the whole key list through renewal_success_clears"
+  # R8: resolve_ssl_renewal_failure is GONE (0 occurrences in notifications.rs
+  # — only doc comments name it). Its job moved into the two renew functions,
+  # which call resolve_alert directly with their shared composite key. H1–H4
+  # are re-derived over those two bodies; H5/H6 (predicate + key module)
+  # stay live below on $N.
+  if S_H=$(subj "$SCANNER"); then
+    STACK_H=$(fnbody "$S_H" renew_stack_certificate)
+    DOCK_H=$(fnbody "$S_H" renew_docker_app_certificate)
+    SL_H=$(grep -c . <<< "$STACK_H"); DL_H=$(grep -c . <<< "$DOCK_H")
+    if [ "$SL_H" -ge 40 ] && [ "$DL_H" -ge 40 ]; then
+      ok "H1 both renew functions extracted — stack $SL_H lines, docker-app $DL_H lines"
     else
-      bad "H2 the resolver filters the whole key list through renewal_success_clears — a hand-written subset drifts from the tested predicate"
+      bad "H1 both renew functions extracted — stack $SL_H lines, docker-app $DL_H lines (expected >= 40 each) — the resolver bodies moved"
     fi
-
-    # ⚠ THE SCOPING ARM. `resolve_alert` picks its arm on `server_id.is_some()`
-    # FIRST, so a server id here builds `WHERE server_id = $2` and misses every
-    # row the SCANNER raised — that loop fires with `None` while the healer's
-    # FAILED fires with `Some(server_id)`. The same logical alert exists in two
-    # shapes and only the site arm matches both.
-    RESCALL=$(calls "$NOTIF" resolve_alert | grep -F 'ssl_renewal_failure' || true)
-    if [ -n "$RESCALL" ] && grep -qE '\( *pool, *user_id, *None, *Some\(site_id\)' <<< "$RESCALL"; then
-      ok "H3 the resolve is scoped by site with server_id None, so it matches rows from BOTH loops"
-    else
-      bad "H3 the resolve is scoped by site with server_id None — a server id misses every scanner-raised row (got: ${RESCALL:-no call found})"
-    fi
-
-    # The three standing conditions must not be reachable from this body. Naming
-    # any of them here is the regression: DNS01_DOWNGRADED is RAISED on the same
-    # success path, so resolving it lets the re-fire land inside its own dedup
-    # window and disappear.
-    STANDING=0
-    for k in DNS01_DOWNGRADED DECLINED MAIL_HOST_CONFLICT; do
-      # DNS01_DECLINED contains DECLINED, so match the qualified path exactly.
-      if grep -qE "ssl_renewal_key::${k}\b" <<< "$RES"; then
-        STANDING=$((STANDING+1))
-        printf '     names %s\n' "$k"
+    # H2: each body resolves through resolve_alert with its OWN shared key
+    # function (exactly one resolve call, key fn used twice: fire + resolve).
+    H2_OK=1
+    for pair in "renew_stack_certificate:stack_renewal_state_key:$STACK_H" "renew_docker_app_certificate:docker_app_renewal_state_key:$DOCK_H"; do
+      fn=${pair%%:*}; rest=${pair#*:}; kf=${rest%%:*}; BODY_H=${rest#*:}
+      NRES_H=$(grep -c 'resolve_alert(' <<< "$BODY_H")
+      KUSE_H=$(grep -oF "${kf}(domain)" <<< "$BODY_H" | wc -l | tr -d ' ')
+      if [ "$NRES_H" != "1" ] || [ "$KUSE_H" != "2" ]; then
+        H2_OK=0; printf '        %s: resolve calls=%s key uses=%s (expected 1 and 2)\n' "$fn" "$NRES_H" "$KUSE_H"
       fi
     done
-    if [ "$STANDING" -eq 0 ]; then
-      ok "H4 the resolver names none of the three standing conditions"
+    if [ "$H2_OK" -eq 1 ]; then
+      ok "H2 each renew function resolves exactly once through its shared key function"
     else
-      bad "H4 the resolver names none of the three standing conditions — $STANDING named, and a success does not disprove them"
+      bad "H2 each renew function resolves exactly once through its shared key function — a hand-spelled key on either side is a fire that never clears"
+    fi
+    # H3: the resolve is scoped to the SAME member the fire names — both
+    # pass Some(member.id), so resolve_alert's first arm matches exactly
+    # the four columns the fire wrote (see the comment above each call).
+    H3_OK=1
+    for BODY_H in "$STACK_H" "$DOCK_H"; do
+      RESW_H=$(grep -A6 'resolve_alert(' <<< "$BODY_H")
+      FIREW_H=$(grep -A6 'fire_alert_deduped(' <<< "$BODY_H")
+      grep -q 'Some(member.id)' <<< "$RESW_H" || H3_OK=0
+      grep -q 'Some(member.id)' <<< "$FIREW_H" || H3_OK=0
+    done
+    if [ "$H3_OK" -eq 1 ]; then
+      ok "H3 each resolve is scoped to the same member the fire names (Some(member.id) on both sides)"
+    else
+      bad "H3 each resolve is scoped to the same member the fire names — a mismatched scope misses the row it should clear"
+    fi
+    # H4: the three standing conditions are named NOWHERE on either resolve
+    # path — a success must not clear DNS01_DOWNGRADED, DECLINED or
+    # MAIL_HOST_CONFLICT. The composite keys do not use the key module.
+    STANDING_H=0
+    for BODY_H in "$STACK_H" "$DOCK_H"; do
+      RESW_H=$(grep -A6 'resolve_alert(' <<< "$BODY_H")
+      grep -qE 'ssl_renewal_key::(DNS01_DOWNGRADED|DECLINED|MAIL_HOST_CONFLICT)' <<< "$RESW_H" && STANDING_H=$((STANDING_H+1))
+    done
+    if [ "$STANDING_H" -eq 0 ]; then
+      ok "H4 neither resolve path names any of the three standing conditions"
+    else
+      bad "H4 neither resolve path names any of the three standing conditions — $STANDING_H named, and a success does not disprove them"
     fi
   else
-    for a in H1 H2 H3 H4; do bad "$a resolve_ssl_renewal_failure body is too small to test ($RESLINES lines) — the resolver is missing or was renamed"; done
+    for a in H1 H2 H3 H4; do bad "$a $SCANNER is readable"; done
   fi
+
 
   # The predicate itself must keep its conservative fall-through. A `_ => true`
   # would resolve every key added later without anybody deciding to.
@@ -663,18 +687,28 @@ fi
 # Both renewal-SUCCESS paths must call it. A guard on one loop only is the drift
 # shape this project keeps finding: the scanner is the ONLY automatic renewal on
 # a stock install, and the healer is the one that ticks every two minutes.
-for pair in "HEALER:$HEALER" "SCANNER:$SCANNER"; do
-  label=${pair%%:*}; file=${pair#*:}
-  if F=$(subj "$file"); then
-    if grep -qE 'resolve_ssl_renewal_failure' <<< "$F"; then
-      ok "H7 the $label renewal-success path clears the renewal alerts"
-    else
-      bad "H7 the $label renewal-success path clears the renewal alerts — this loop renews and never resolves"
-    fi
+# R8: the healer renews nothing (its only resolve_alert clears "disk"
+# alerts) and the scanner is the only automatic renewal. The scanner arm is
+# re-derived over the two renew bodies (H1–H4/H8 above); the healer arm is
+# a tombstone.
+if [ -f "$HEALER" ] && ! grep -q 'renew_stack_certificate\|renew_docker_app_certificate' "$HEALER"; then
+  ok "TOMBSTONE (R8): H7 healer arm retired — the healer performs no renewal and clears no renewal alert"
+else
+  bad "TOMBSTONE (R8): the healer gained a renewal path — H7 must be restored over it"
+fi
+if S_H7=$(subj "$SCANNER"); then
+  NRES_H7=0
+  for fn in renew_stack_certificate renew_docker_app_certificate; do
+    grep -q 'resolve_alert(' <<< "$(fnbody "$S_H7" "$fn")" && NRES_H7=$((NRES_H7+1))
+  done
+  if [ "$NRES_H7" -eq 2 ]; then
+    ok "H7 the scanner renewal-success paths clear the renewal alerts (both renew functions resolve)"
   else
-    bad "H7 $file is readable"
+    bad "H7 the scanner renewal-success paths clear the renewal alerts — only $NRES_H7 of 2 renew functions resolve"
   fi
-done
+else
+  bad "H7 $SCANNER is readable"
+fi
 
 # ⭐ H8 — THE STACK RENEWAL'S FIRE AND RESOLVE, WHICH H7 STRUCTURALLY CANNOT SEE.
 #

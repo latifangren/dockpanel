@@ -96,15 +96,28 @@ SITES=panel/backend/src/routes/sites.rs
 DEPLOY=panel/backend/src/routes/deploy.rs
 STACKS=panel/backend/src/routes/stacks.rs
 
-for f in "$AGENT_FILES_SVC" "$AGENT_FILES_RT" "$HELPERS" "$SITES" "$DEPLOY" "$STACKS"; do
+for f in "$AGENT_FILES_SVC" "$AGENT_FILES_RT" "$HELPERS" "$STACKS"; do
   [ -f "$f" ] || { echo "  FATAL: $f missing — wrong tree?"; exit 1; }
+done
+
+# R8 TOMBSTONE: routes/sites.rs (R3) and routes/deploy.rs (R3) are deleted
+# with the site/deploy features. Their handlers no longer exist to misdispatch;
+# the live row-names-host subjects are the agent files, helpers, and stacks.
+for f in "$SITES" "$DEPLOY"; do
+  if [ -f "$f" ]; then
+    bad "TOMBSTONE (R8): $f is back — its handlers must resolve the host from the row again (see §C)"
+  else
+    ok "TOMBSTONE (R8): $f is gone — no site/deploy handler left to misdispatch"
+  fi
 done
 
 SVC=$(code "$AGENT_FILES_SVC")
 RT=$(code "$AGENT_FILES_RT")
 HLP=$(code "$HELPERS")
-SIT=$(code "$SITES")
-DEP=$(code "$DEPLOY")
+# R8: SIT/DEP subjects are deleted (tombstoned above); keep the names empty
+# so no arm below can read prose out of a missing file.
+SIT=""
+DEP=""
 STK=$(code "$STACKS")
 
 # ── §A the webroot is not a deletable child ──────────────────────────────────
@@ -296,29 +309,36 @@ fi
 echo
 echo "§D  context (green at both tags — proves the harness measures something)"
 
-WEBHOOK=$(fnbody "$DEP" "webhook")
-if [ -z "$WEBHOOK" ]; then
-  bad "D1 could not extract the webhook body — the arm measured nothing"
-elif has "$WEBHOOK" 'for_server'; then
-  ok "D1 the webhook deploy path still resolves per-server (the fix this suite generalises)"
+# R8 TOMBSTONE: the webhook deploy path is deleted with routes/deploy.rs
+# (tombstoned above). Its per-server resolution is retired with it; the live
+# row-driven resolver is agent_for_site_server (C1–C3).
+if [ -f "$DEPLOY" ]; then
+  bad "TOMBSTONE (R8): routes/deploy.rs is back — its webhook must resolve per-server again"
 else
-  bad "D1 the webhook deploy path lost its per-server resolution"
+  ok "TOMBSTONE (R8): the webhook deploy path is gone with routes/deploy.rs"
 fi
 
-if has "$HLP" 'SITE_CALLER_PREDICATE'; then
-  ok "D2 the shared ownership predicate is still the one place that decides WHICH SITE"
+# R8 TOMBSTONE: SITE_CALLER_PREDICATE died with the `sites` table (R7;
+# hosting_helpers.rs says so in its own header comment, and the name now
+# occurs only in comments). The one place deciding WHICH SITE is now the
+# row-driven resolver agent_for_site_server, pinned live by C1–C3.
+HLP_STRIPPED="$HLP"
+if has "$HLP_STRIPPED" 'SITE_CALLER_PREDICATE'; then
+  bad "TOMBSTONE (R8): SITE_CALLER_PREDICATE is back in code — it must be the one place deciding WHICH SITE again"
 else
-  bad "D2 the shared ownership predicate is gone — ownership decided somewhere new"
+  ok "TOMBSTONE (R8): SITE_CALLER_PREDICATE is gone from code (comments only) — the site predicate retired with the sites table"
 fi
 
 # The predicate must NOT gain a server term. Filtering by server would hide a
 # client's own remote site behind an empty result instead of an error, which is
 # the wrong fix and the one the original author explicitly warned against.
-PRED=$(grep -A 4 'SITE_CALLER_PREDICATE' "$HELPERS" | grep -v '^\s*///')
-if grep -qE 's\.server_id *=' <<< "$PRED"; then
-  bad "D3 the ownership predicate now filters by server — that HIDES a client's own remote site rather than routing to it"
+# R8 TOMBSTONE: with the predicate deleted, there is no ownership
+# predicate left that could gain a server term and hide a remote site.
+# Assert the definition stays absent from the stripped helpers module.
+if grep -qE 'SITE_CALLER_PREDICATE' <<< "$(code "$HELPERS")"; then
+  bad "TOMBSTONE (R8): SITE_CALLER_PREDICATE is back in helpers.rs code — D2/D3 must be restored"
 else
-  ok "D3 the ownership predicate still does not filter by server"
+  ok "TOMBSTONE (R8): no ownership predicate in helpers.rs code to filter by server — the hiding failure mode retired with it"
 fi
 
 echo
@@ -513,7 +533,12 @@ CE_VN=$(printf '%s\n' "$CE_V" | grep -c . || true)
 # not at it: this arm exists to catch an extractor that COLLAPSED, and a floor
 # pinned to the exact count would go red every time a handler is legitimately added
 # or removed.
-if [ "${CE_N:-0}" -lt 25 ]; then
+# R8: measured 5, not 31 — the site/deploy/mail/git-deploy handlers that made
+# up the old population were deleted in R1–R5, and only the stack/Docker-app
+# handlers that carry a row-derived domain remain. Floor re-derived below the
+# measured 5 with headroom (3), keeping the collapse guard: an extractor that
+# finds 0–2 handlers is broken; 5 is the true population.
+if [ "${CE_N:-0}" -lt 3 ]; then
   bad "E2 censused only ${CE_N:-0} handlers that read a host-bearing row and dispatch — the extractor is broken, not the tree"
 else
   ok "E2 censused $CE_N such handlers across every route module"

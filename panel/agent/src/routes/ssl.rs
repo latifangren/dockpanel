@@ -268,37 +268,6 @@ struct ProfilesQuery {
     email: String,
 }
 
-#[derive(Deserialize)]
-struct AriQuery {
-    email: String,
-}
-
-/// GET /ssl/{domain}/renewal-info — Fetch the ARI suggestion for a cert.
-/// Always returns JSON. `suggestion: null` means the CA doesn't advertise
-/// ARI or the cert couldn't be located on disk.
-async fn renewal_info(
-    Path(domain): Path<String>,
-    axum::extract::Query(q): axum::extract::Query<AriQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if !is_valid_domain(&domain) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid domain format" })),
-        ));
-    }
-
-    let account = ssl::load_or_create_account(&q.email).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-    })?;
-
-    let cert_path = format!("/etc/dockpanel/ssl/{domain}/fullchain.pem");
-    let suggestion = ssl::fetch_ari(&account, &cert_path).await;
-    Ok(Json(serde_json::json!({ "suggestion": suggestion })))
-}
-
 pub fn router() -> Router<AppState> {
     Router::new()
         // Registered BEFORE the `{domain}` routes it shares a prefix with, and
@@ -309,7 +278,6 @@ pub fn router() -> Router<AppState> {
         .route("/ssl/certificates", get(list_certificates))
         .route("/ssl/status/{domain}", get(status))
         .route("/ssl/profiles", get(profiles))
-        .route("/ssl/{domain}/renewal-info", get(renewal_info))
         .route("/ssl/{domain}/renew", post(renew))
 }
 

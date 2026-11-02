@@ -157,8 +157,9 @@ pub async fn intelligence(
 
     // 6. Backup freshness — formerly the count of active sites with no backup
     //    in the last 7 days, read from the sites table (via backups.site_id).
-    //    With the sites table no longer read there is no site population to
-    //    count stale against, so this is 0: no stale-site warning is claimed.
+    //    R7 dropped the sites table and the backups.site_id column, so there
+    //    is no site population to count stale against: this is 0 and no
+    //    stale-site warning is claimed.
     //    The `stale_backups` field, the score penalty, and the recommendation
     //    below are kept so the response shape is unchanged; with this value
     //    they never fire.

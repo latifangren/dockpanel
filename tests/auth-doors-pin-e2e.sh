@@ -647,7 +647,7 @@ fi
 LINEDRIFT=""
 for f in "$AUTH_RS" "$OAUTH_RS" "$PASSKEYS_RS" "$SEC_RS" "$SET_RS" "$WS_RS" \
          "$HELPERS" "$HEALER" "$SET_TSX" "$AGENT_SEC" "$TERM_SRC"; do
-  a=$(wc -l < "$f"); b=$(code_lines "$f" | wc -l)
+  a=$(awk 'END{print NR}' "$f"); b=$(code_lines "$f" | wc -l)  # R8: wc -l undercounts a file with no trailing newline (auto_healer.rs ends in `}`); NR is the true height
   [ "$a" != "$b" ] && LINEDRIFT="$LINEDRIFT $f($a≠$b)"
 done
 if [ -z "$LINEDRIFT" ]; then

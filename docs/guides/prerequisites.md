@@ -216,26 +216,6 @@ The quiet tier. These are the explanations under the fields themselves; where a 
 
 This is the panel's first account and a full administrator: it can reach every site, database and container on this server. There is no password-reset email configured yet, so store it somewhere you trust before continuing. You can add two-factor authentication straight afterwards from Settings.
 
-### Create a site
-
-**Domain** — Your site's public domain name (e.g. example.com). It needs to point at this server before HTTPS can be issued — DockPanel checks that for you below.
-
-You can create the site before the domain resolves; only the certificate needs DNS. If you are moving a live site, create it here first, confirm it serves correctly, and change the DNS record last — that way the switchover has no gap.
-
-Checked by `dns.points_here`.
-
-**Runtime**
-
-Static serves files as they are. PHP runs them through PHP-FPM. Node and Python get a managed systemd process with nginx in front. Reverse Proxy is the one to pick when something else already listens on a port — a Docker app, or a service you run yourself — and DockPanel then owns only the front end and the certificate.
-
-**Admin Password** — Leave blank and DockPanel generates one, then stores it in this site's Secrets vault — it is not shown again anywhere else.
-
-Open the site, then Secrets, to read it back. Earlier versions generated this password, used it and discarded it, which left you unable to log in to the site you had just created.
-
-**Proxy Port** — The local port your application listens on.
-
-The port as seen from the server itself, not a public one. nginx connects to it on 127.0.0.1; nothing needs to be opened in the firewall.
-
 ### Deploy a Docker app
 
 **Container Name** — Names the container on this server. Must be unique — DockPanel suggests a free one if it isn't.
@@ -263,12 +243,4 @@ Checked by `apps.resource_headroom`.
 A backup on the disk it protects covers a bad deploy or a dropped table, and nothing worse. Destinations are S3-compatible storage or any SFTP server. SFTP destinations that authenticate by PASSWORD need sshpass on the server the backup runs from: fresh installs and servers added through the agent installer get it automatically, but a panel upgraded in place does not, because update.sh upgrades binaries and installs no packages. When it is missing, Test Connection now says so in those words and Settings can install it onto that server for you — you are no longer asked to run a package manager by hand. Key-authenticated SFTP and every S3 destination are unaffected.
 
 Checked by `backups.destination_configured`.
-
-### Mail domain → DNS
-
-**Required DNS Records**
-
-These are the records DockPanel publishes for you when it manages the zone, and the ones to create by hand when it doesn't. Verify DNS checks that each points at this server rather than merely that something exists — a domain whose MX belongs to another provider is reported as such, not as a pass.
-
-Checked by `mail.dns_published`.
 

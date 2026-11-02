@@ -91,12 +91,15 @@ echo "D. A backup never overstates what it contains"
 # What survives both eras is the invariant this section really pins — the docs
 # and the UI state what an archive actually holds, never more. The mechanics of
 # the new path are pinned in tests/site-backup-databases-pin-e2e.sh.
-has  "the Backups page still distinguishes an archive with no database" \
-     'Files only' "$BACKUPS_UI"
-has  "…and names the consequence rather than hinting at it" \
-     'will not bring back posts, pages, users or settings' "$BACKUPS_UI"
-has  "…and the empty state describes what a backup now protects" \
-     "files and database content" "$BACKUPS_UI"
+# R8 follow-up TOMBSTONE: the three UI arms above this note pinned Backups.tsx
+# ("Files only", the consequence wording, the empty state). The page is deleted
+# with the site-backup feature, so the invariant now lives only in the guide
+# arms below. If the page returns, these arms must return with it.
+if [ -f "$BACKUPS_UI" ]; then
+  bad "TOMBSTONE (R8 follow-up): Backups.tsx is back — §D's UI arms must be restored"
+else
+  ok "TOMBSTONE (R8 follow-up): Backups.tsx is gone — §D's UI arms retired with the page; the guide arms below still pin the invariant"
+fi
 # The guide was the worst offender: it stated the database WAS included when it
 # was not, twice, and printed a sample restore transcript with a "Restoring
 # database..." step that no code performed. Those exact fabrications must stay
@@ -110,10 +113,13 @@ hasnt "…nor prints a restore step that never runs" \
      'Restoring database\.\.\.' "$BACKUPS_DOC"
 hasnt "…nor claims site backups carry the site's own database" \
      "Site backups include the site's own database" "$BACKUPS_DOC"
-has  "…and now states what IS included, because it finally is" \
-     'and a dump of every database attached to' "$BACKUPS_DOC"
-has  "…while calling out that older archives are not" \
-     'contain files only' "$BACKUPS_DOC"
+# R8: the guide was rewritten (site backups declared gone) — the invariant
+# survives in new words: the guide names the surviving scope (databases +
+# Docker volumes) and calls out old site archives as unrestorable.
+has  "…and now states what survives, because site backups are gone" \
+     'databases and Docker volumes' "$BACKUPS_DOC"
+has  "…while calling out that older archives cannot be restored" \
+     'A tarball made by an older install' "$BACKUPS_DOC"
 
 echo
 printf 'passed %d, failed %d\n' "$PASS" "$FAIL"

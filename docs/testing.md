@@ -314,10 +314,11 @@ This section is the reason the rest of the page is worth reading.
   The fixes were proven with a locally-built agent deployed onto the two boxes,
   which were then destroyed. A fresh install from the published release
   re-running the whole mail journey is the missing confirmation.
-- **The CLI cannot include or restore databases.** It authenticates to the agent,
-  which cannot see the panel's database records. v2.34.0 made it say so and
-  refuse, rather than restore the files and report success. Giving the CLI its
-  own panel API client is the real fix.
+- **The CLI cannot restore database or volume backups.** It can create
+  them (`backup db-create`, `backup vol-create`) and verify them, but
+  restore and delete are panel operations. The CLI authenticates to the
+  agent, which cannot see the panel's database records; giving the CLI
+  its own panel API client is the real fix.
 - **Multi-service app templates do not exist to test.** A single-container
   template definition cannot express Supabase, Mastodon or PeerTube. That is a
   build item, not a coverage gap.
@@ -404,11 +405,27 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. One-hundred-thirty-seven suites, **4544 assertions**, all green at the current commit:
+survivable.
+
+> **Status of the table below (R8, 2026-11-02).** The table is the
+> pre-removal census: it still names suites whose subjects were deleted
+> with the hosting backend (R1–R7 deleted the mail, DNS, git-deploy,
+> migration, CDN, reseller and site-backup pins, among others, and
+> re-derived the survivors), and its totals no longer describe the tree.
+> Do not read it as current. The last measured sweep of the surviving
+> tree is the R7 baseline: **64 green / 60 red over 124 pin suites**
+> (`sibling-parity`, which fails early on its missing subject, excluded
+> by design; 125 pin files on disk including it), with zero regressions
+> against the sweep taken before R7. The final R8 sweep, and the
+> re-derivation of this table from it, belong to the coordinator — no new
+> totals are claimed here, and the rows below are left exactly as they
+> were so that re-derivation starts from a known state rather than from
+> numbers edited by hand.
+
+One-hundred-thirty-seven suites, **4544 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
-| `sftp-accounts-pin-e2e.sh` | 57 |
 | `bandwidth-quota-pin-e2e.sh` | 31 |
 | `ai-diagnosis-pin-e2e.sh` | 29 |
 | `resource-mutation-audit-log-pin-e2e.sh` | 47 |
@@ -417,7 +434,6 @@ survivable. One-hundred-thirty-seven suites, **4544 assertions**, all green at t
 | `db-import-pin-e2e.sh` | 53 |
 | `mail-smtp-dkim-pin-e2e.sh` | 25 |
 | `mail-auth-autosleep-pin-e2e.sh` | 28 |
-| `site-backup-databases-pin-e2e.sh` | 52 |
 | `git-deploy-sandbox-pin-e2e.sh` | 42 |
 | `git-deploy-volumes-pin-e2e.sh` | 28 |
 | `ssl-correctness-pin-e2e.sh` | 97 |
@@ -456,9 +472,7 @@ survivable. One-hundred-thirty-seven suites, **4544 assertions**, all green at t
 | `container-identity-pin-e2e.sh` | 45 |
 | `unattended-host-scope-pin-e2e.sh` | 118 |
 | `status-page-gate-pin-e2e.sh` | 52 |
-| `site-transfer-visibility-pin-e2e.sh` | 21 |
 | `suspend-restore-pin-e2e.sh` | 18 |
-| `site-disabled-stays-offline-pin-e2e.sh` | 19 |
 | `terminal-scope-signed-pin-e2e.sh` | 15 |
 | `logs-scope-signed-pin-e2e.sh` | 10 |
 | `client-role-honesty-pin-e2e.sh` | 28 |

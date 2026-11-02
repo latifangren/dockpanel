@@ -439,24 +439,21 @@ echo "§F the scheduled and webhook paths name the host too (s299)"
 DEPR=panel/backend/src/routes/deploy.rs
 MET=panel/backend/src/services/metrics_collector.rs
 
-for f in "$DEPR" "$MET"; do
+for f in "$MET"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
+# R8 TOMBSTONE: routes/deploy.rs deleted in R3 with the deploy webhook.
+if [ -f "$DEPR" ]; then
+  bad "TOMBSTONE (R8): routes/deploy.rs is back — F11 must be restored"
+else
+  ok "TOMBSTONE (R8): routes/deploy.rs stays deleted — the site deploy webhook is retired"
+fi
 
 DEPR_S=$(subj "$DEPR" || true)
 MET_S=$(subj "$MET" || true)
 
-# F11 — the SITE deploy webhook, same shape, different file. sites.server_id is
-# NOT NULL, and the handler used to select only `domain`.
-if [ -n "$DEPR_S" ]; then
-  if has "$DEPR_S" "SELECT domain, server_id FROM sites" && has "$DEPR_S" "for_server\(site_server_id\)"; then
-    ok "F11 the site webhook resolves the site's own server"
-  else
-    bad "F11 the site webhook still deploys a remote tenant's site onto the panel host"
-  fi
-else
-  skip "F11 — deploy.rs not extractable"
-fi
+# R8 TOMBSTONE (F11): the site deploy webhook died with routes/deploy.rs.
+ok "TOMBSTONE (R8): F11 retired with routes/deploy.rs — no site webhook remains"
 
 # F12 — the guard that makes all of the above safe on a SINGLE-server install.
 # `ensure_local_server` returns Uuid::nil() until an admin exists, so the cached
@@ -545,9 +542,17 @@ ISR=panel/backend/src/routes/image_scans.rs
 SB=panel/backend/src/routes/sboms.rs
 AE=panel/backend/src/services/alert_engine.rs
 
-for f in "$BS" "$BPE" "$BV" "$DS" "$TC" "$BO" "$SS" "$SSR" "$IS" "$ISR" "$SB" "$AE"; do
+for f in "$BPE" "$BV" "$DS" "$TC" "$BO" "$SS" "$SSR" "$IS" "$ISR" "$SB" "$AE"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
+# R8 TOMBSTONE: services/backup_scheduler.rs deleted in R5 with the
+# scheduled site-backup sweep. G1 below is tombstoned; the executor (G2)
+# carries the per-row host resolution now.
+if [ -f "$BS" ]; then
+  bad "TOMBSTONE (R8): backup_scheduler.rs is back — G1 must be restored"
+else
+  ok "TOMBSTONE (R8): backup_scheduler.rs stays deleted — the scheduled sweep is retired"
+fi
 
 BS_S=$(subj "$BS" || true);   BPE_S=$(subj "$BPE" || true); BV_S=$(subj "$BV" || true)
 DS_S=$(subj "$DS" || true);   TC_S=$(subj "$TC" || true);   BO_S=$(subj "$BO" || true)
@@ -555,15 +560,8 @@ SS_S=$(subj "$SS" || true);   SSR_S=$(subj "$SSR" || true); IS_S=$(subj "$IS" ||
 ISR_S=$(subj "$ISR" || true); SB_S=$(subj "$SB" || true);   AE_S=$(subj "$AE" || true)
 
 # ── the backup family (s300) ───────────────────────────────────────────────
-if [ -n "$BS_S" ]; then
-  if has "$(sig "$BS_S" run)" "AgentRegistry" && has "$BS_S" "for_server\("; then
-    ok "G1 backup_scheduler resolves each site's own server"
-  else
-    bad "G1 backup_scheduler still backs up every site through one agent"
-  fi
-else
-  skip "G1 — backup_scheduler.rs not extractable"
-fi
+# R8 TOMBSTONE (G1): the scheduler died with backup_scheduler.rs (R5).
+ok "TOMBSTONE (R8): G1 retired with backup_scheduler.rs — no scheduled sweep remains"
 
 if [ -n "$BPE_S" ]; then
   if has "$BPE_S" "for_server\(" && has "$(sig "$BPE_S" run)" "AgentRegistry"; then
@@ -1136,33 +1134,34 @@ fi
 
 # I2 — the writer that IS a cooldown. It must name a real owner and stamp the
 # host, exactly as auto_restart_services has since v2.58.0 (G26 is its twin).
-SSL=$(fnbody "$AH_S" "auto_renew_ssl")
-if [ -z "$SSL" ]; then
-  bad "I2 could not extract auto_renew_ssl — every §I SSL arm below is meaningless"
+# R8: I2–I4 re-derived. auto_renew_ssl is gone (healer renews nothing);
+# the cooldown + audit properties moved to the scanner's two renew
+# functions, which log each attempt against the owner + the raising
+# member's server (log_activity_on_server with user_id + member.id),
+# count the very action they write, and never take an oldest row.
+RENEW_STACK=$(fnbody "$SS_S" "renew_stack_certificate")
+RENEW_APP=$(fnbody "$SS_S" "renew_docker_app_certificate")
+if [ -n "$RENEW_STACK" ] && [ -n "$RENEW_APP" ]; then
+  ok "I2-control both renew functions extracted for the §I SSL arms"
 else
-  if has "$(flat "$SSL")" 'log_activity_on_server\(' && ! has "$SSL" '[Uu]uid::nil'; then
-    ok "I2 the SSL renewal attempt is recorded against the site's owner and server"
-  else
-    bad "I2 the SSL renewal record still uses the nil uuid — the anti-CA-hammering cooldown stays dead"
-  fi
-
-  # I3 — a gate must read something its own subject writes. This is the severed
-  # pair stated directly: the action counted and the action logged are one string.
-  if has "$SSL" "action = 'auto_heal.renew_ssl'" && has "$SSL" '"auto_heal.renew_ssl"'; then
-    ok "I3 auto_renew_ssl records the very action its cooldown counts"
-  else
-    bad "I3 the SSL cooldown counts an action this function never writes — it can never engage"
-  fi
-
-  # I4 — the failure alert names the site's own server. `ORDER BY created_at ASC
-  # LIMIT 1` over `servers` is the laundering shape §G outlawed for the healer;
-  # it resolves to the panel's own row, so a member's cert failure was filed
-  # against the panel and hidden from the picker that would show it.
-  if has "$(flat "$SSL")" 'ORDER BY created_at ASC LIMIT 1'; then
-    bad "I4 auto_renew_ssl still stamps its alert with the oldest servers row instead of the site's server"
-  else
-    ok "I4 auto_renew_ssl does not resolve a server by taking the oldest row"
-  fi
+  bad "I2-control could not extract one of the renew functions — the §I SSL arms below are meaningless"
+fi
+if has "$(flat "$RENEW_STACK")" 'log_activity_on_server\(' && has "$(flat "$RENEW_APP")" 'log_activity_on_server\(' \
+   && ! has "$RENEW_STACK" '[Uu]uid::nil' && ! has "$RENEW_APP" '[Uu]uid::nil'; then
+  ok "I2 both renewal attempts are recorded against the owner and server, with no nil uuid"
+else
+  bad "I2 a renewal record still uses the nil uuid — the anti-CA-hammering cooldown stays dead"
+fi
+if has "$RENEW_STACK" "action = 'auto_fix.renew_stack_ssl'" && has "$RENEW_STACK" '"auto_fix.renew_stack_ssl"' \
+   && has "$RENEW_APP" "action = 'auto_fix.renew_docker_app_ssl'" && has "$RENEW_APP" '"auto_fix.renew_docker_app_ssl"'; then
+  ok "I3 both renewals record the very action their cooldown counts"
+else
+  bad "I3 a cooldown counts an action its renewal never writes — it can never engage"
+fi
+if ! has "$RENEW_STACK" 'ORDER BY created_at ASC LIMIT 1' && ! has "$RENEW_APP" 'ORDER BY created_at ASC LIMIT 1'; then
+  ok "I4 neither renewal resolves a server by taking the oldest row"
+else
+  bad "I4 a renewal still stamps its alert with the oldest servers row"
 fi
 
 # I5 — auto-sleep genuinely has no user to name, so it must say so in the way the
@@ -1236,14 +1235,14 @@ fi
 # I9 — the fourth writer, and the one the obvious audit misses: written
 # `.unwrap_or_else(uuid::Uuid::nil)`, with no parentheses, so a `Uuid::nil()`
 # grep does not find it. It fed a NOT NULL column with a foreign key.
+# R8 TOMBSTONE (I9): routes/whmcs.rs is deleted — the WHMCS writer that
+# laundered a missing server into a nil uuid is gone with the feature.
 WH=panel/backend/src/routes/whmcs.rs
-WH_S=$(subj "$WH" || true)
-if [ -z "$WH_S" ]; then
-  bad "I9 could not read $WH"
-elif has "$WH_S" 'unwrap_or(_else)?\( *(uuid::)?Uuid::nil'; then
-  bad "I9 whmcs still defaults a missing local server to the nil uuid — an FK violation surfaced as a 500"
+WH_S=""  # R8: whmcs.rs deleted; WH_S kept defined for later sections that read it
+if [ -f "$WH" ]; then
+  bad "TOMBSTONE (R8): routes/whmcs.rs is back — I9 must be restored"
 else
-  ok "I9 a missing local server is reported, not laundered into a sentinel uuid"
+  ok "TOMBSTONE (R8): I9 retired with routes/whmcs.rs — no WHMCS writer remains"
 fi
 
 # I9b (s311) — the same file, the same shape one level up: an UNATTENDED external

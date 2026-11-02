@@ -58,8 +58,8 @@ async fn upload(
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     // Validate filepath. The prefix check alone is a LEXICAL, not a resolved,
     // guard -- "/var/backups/dockpanel/../../etc/shadow" satisfies
-    // starts_with() and the OS resolves the ".." on open, same shape as
-    // git_build.rs's is_valid_dockerfile/is_valid_build_context reject
+    // starts_with() and the OS resolves the ".." on open — the same shape
+    // the Dockerfile/build-context path validation rejects
     // elsewhere in this crate. ProtectSystem=strict blocks writes outside the
     // agent's ReadWritePaths allowlist, not reads, so an unguarded path here
     // would be arbitrary root-readable-file exfiltration to an

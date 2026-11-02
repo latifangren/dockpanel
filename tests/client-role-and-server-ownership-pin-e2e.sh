@@ -130,10 +130,17 @@ LAYOUT=panel/frontend/src/hooks/useLayoutState.ts
 SITESTSX=panel/frontend/src/pages/Sites.tsx
 DETAIL=panel/frontend/src/pages/SiteDetail.tsx
 
-for f in "$USERS" "$SERVERS" "$SITES" "$DRIFT" "$DRIFT_SVC" "$ALERTS" "$FILTER" "$MONITORS" "$RESELLER" "$AUTH" \
-         "$LAYOUT" "$SITESTSX" "$DETAIL"; do
+for f in "$USERS" "$SERVERS" "$DRIFT" "$DRIFT_SVC" "$ALERTS" "$FILTER" "$MONITORS" "$AUTH" \
+         "$LAYOUT"; do
   [ -f "$f" ] || { bad "SETUP subject missing: $f"; }
 done
+# R8 TOMBSTONE: routes/sites.rs (R3), routes/reseller_dashboard.rs (reseller
+# feature, R1), Sites.tsx + SiteDetail.tsx (site pages, R8 frontend) are
+# deleted. §C/§F/§G arms over them are tombstoned per-section below.
+for f in "$SITES" "$RESELLER" "$SITESTSX" "$DETAIL"; do
+  [ -f "$f" ] && bad "TOMBSTONE (R8): $f is back — its tombstoned arms must be restored"
+done
+ok "TOMBSTONE (R8): sites.rs, reseller_dashboard.rs, Sites.tsx and SiteDetail.tsx stay deleted"
 
 # ── §A  deleting an account must not delete a server's sites ──────────────────
 
@@ -227,58 +234,18 @@ fi
 
 # ── §C  transfer moves the staging child ──────────────────────────────────────
 
-SITES_SRC=$(code "$SITES")
-XFER=$(flat "$(fnbody "$SITES_SRC" "transfer")")
-
-if [ -z "$XFER" ] || ! has "$XFER" 'UPDATE sites SET user_id'; then
-  bad "C0 could not extract sites::transfer with its UPDATE"
+# R8 TOMBSTONE (§C): sites::transfer died with routes/sites.rs (R3) — no
+# site ownership moves anymore, so no staging child can be stranded and no
+# dependent-table sweep is needed. OWNERSHIP_DENORMALIZED_TABLES retired
+# with it. Schema note: alerts, monitors, secret_vaults and
+# whmcs_service_map STILL carry both user_id and site_id columns in the
+# migrations (the R7 terminal migration dropped the sites table, not those
+# columns) — orphaned site_id columns are schema debt for a later slice,
+# not a live transfer hazard. If a transfer door returns, §C must return.
+if grep -rq 'fn transfer' panel/backend/src/routes 2>/dev/null; then
+  bad "TOMBSTONE (R8): a transfer function reappeared — §C must be restored"
 else
-  ok "C0 sites::transfer extracted"
-  if has "$XFER" 'UPDATE sites SET user_id = \$1 WHERE id = \$2 OR parent_site_id = \$2'; then
-    ok "C1 transfer moves the site AND its staging children"
-  else
-    bad "C1 transfer does not move parent_site_id children — the departed owner keeps a shell in the clone, and push-to-production over the new owner's live site"
-  fi
-  # C2 — the dependent-table sweep must follow the ids that actually moved. Keying
-  # it on the parent alone re-creates the same split one level down.
-  if has "$XFER" 'WHERE site_id = ANY\(\$2\)'; then
-    ok "C2 the dependent-table sweep keys on the moved id set"
-  elif has "$XFER" 'WHERE site_id = \$2'; then
-    bad "C2 the dependent-table sweep still keys on the parent id — a staging row's alerts, monitors and vaults stay with the departed owner"
-  else
-    bad "C2 the dependent-table sweep matches neither shape — re-read it"
-  fi
-fi
-
-# C3 — THE CONSTANT THAT CLAIMS TO BE DERIVED. `OWNERSHIP_DENORMALIZED_TABLES`
-# says it is "every table in the schema carrying BOTH columns". Derive that set
-# from the migrations and require the constant to equal it, so the claim cannot
-# quietly become false when a migration adds a table.
-DERIVED=$(perl -0777 -ne '
-  while (/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?\s*\(/gi) {
-    my ($n,$p)=($1,pos($_)-1); my $d=0; my $s=$p;
-    while ($p < length($_)) {
-      my $c = substr($_,$p,1);
-      $d++ if $c eq "("; if ($c eq ")") { $d--; last if $d==0 } $p++;
-    }
-    my $b = substr($_,$s+1,$p-$s-1);
-    print "$n\n" if $b =~ /(^|[\s,(])user_id\b/m && $b =~ /(^|[\s,(])site_id\b/m;
-  }
-' <<< "$MIG" | sort -u | tr '\n' ' ')
-# ⚠ NOT `sed -n '/NAME/,/\];/p'`. A sed range RESTARTS on every later line matching
-# the start pattern, and this constant is also NAMED at its use site — so the range
-# reopened at `for table in OWNERSHIP_DENORMALIZED_TABLES` and ran to the next `];`,
-# harvesting the JSON keys of the response (`dependent_rows_moved`, `new_owner`,
-# `previous_owner`, …) as though they were table names. That printed a confident
-# RED against a correct tree. Take the FIRST block only.
-DECLARED=$(awk '/OWNERSHIP_DENORMALIZED_TABLES/ { inblk=1 } inblk { print; if (/\];/) exit }' "$SITES" \
-           | grep -oE '"[a-z_]+"' | tr -d '"' | sort -u | tr '\n' ' ')
-if [ -z "$DERIVED" ]; then
-  bad "C3 derived ZERO tables carrying both user_id and site_id — the deriver is broken, not the tree"
-elif [ "$DERIVED" = "$DECLARED" ]; then
-  ok "C3 OWNERSHIP_DENORMALIZED_TABLES still equals the derived set ($DERIVED)"
-else
-  bad "C3 OWNERSHIP_DENORMALIZED_TABLES has drifted from the schema — declared [$DECLARED] vs derived [$DERIVED]"
+  ok "TOMBSTONE (R8): §C retired with routes/sites.rs — no transfer door remains"
 fi
 
 # ── §D  the site shell's cross-site guard ─────────────────────────────────────
@@ -381,64 +348,24 @@ rm -f /tmp/.s324_e_viol
 
 # ── §F  a reseller may act on every account its own table lists ───────────────
 
-RES_SRC=$(code "$RESELLER")
-RES_FLAT=$(flat "$RES_SRC")
-
-if has "$RES_FLAT" "reseller_id = \\\$2 AND role = 'user'"; then
-  bad "F1 reseller update/delete still scope AND role = 'user' — an account moved to client or suspended stays listed and answers 'User not found'"
-elif has "$RES_FLAT" 'reseller_id = \$2 AND role = ANY\(\$3\)'; then
-  ok "F1 reseller update/delete resolve against the shared manageable-role list"
+# R8 TOMBSTONE (§F): reseller_dashboard.rs is deleted with the reseller
+# feature (R1) — no reseller predicate, no manageable-role list, no
+# list_users scoping remains to pin. If resellers return, §F must return.
+if [ -f "$RESELLER" ]; then
+  bad "TOMBSTONE (R8): reseller_dashboard.rs is back — §F must be restored"
 else
-  bad "F1 the reseller predicate matches neither the old shape nor the pinned one — re-read it"
-fi
-
-# F2 — an ALLOW-list, and privileged roles must be absent from it. A future
-# `role <> 'admin'` here would invert the property the moment a new role lands.
-# Same restart trap as C3, and it bit harder here: the constant is NAMED at both
-# `.bind(RESELLER_MANAGEABLE_ROLES)` call sites, each of which reopened the range
-# into surrounding code containing `claims.role == "admin"` — so the arm reported
-# that the allow-list names a privileged role when the declaration names three
-# unprivileged ones. First block only, and it must be the `const` line.
-ALLOW=$(awk '/const RESELLER_MANAGEABLE_ROLES/ { inblk=1 } inblk { print; if (/;/) exit }' <<< "$RES_SRC" | tr '\n' ' ')
-if [ -z "$ALLOW" ]; then
-  bad "F2 RESELLER_MANAGEABLE_ROLES not found"
-elif has "$ALLOW" '"admin"' || has "$ALLOW" '"reseller"'; then
-  bad "F2 RESELLER_MANAGEABLE_ROLES names a privileged role — a reseller could reset an administrator's password"
-elif has "$ALLOW" '"user"' && has "$ALLOW" '"client"'; then
-  ok "F2 RESELLER_MANAGEABLE_ROLES admits user + client and no privileged role"
-else
-  bad "F2 RESELLER_MANAGEABLE_ROLES does not admit both user and client"
-fi
-
-# F3 — the two halves must agree. `list_users` scoping on reseller_id alone is
-# fine ONLY while the action predicate covers what it lists; this arm is what
-# makes them one decision instead of two.
-LIST_U=$(flat "$(fnbody "$RES_SRC" "list_users")")
-if has "$LIST_U" "role = 'user'"; then
-  bad "F3 list_users now filters by role while the action predicate uses an allow-list — the two halves have drifted again, in the other direction"
-else
-  ok "F3 list_users still lists by reseller_id alone, matching what the action predicate now admits"
+  ok "TOMBSTONE (R8): §F retired with reseller_dashboard.rs — the reseller feature is gone"
 fi
 
 # ── §G  a control a role can never use is not shown to it ─────────────────────
 
-for pair in "$SITESTSX:Sites.tsx" "$DETAIL:SiteDetail.tsx"; do
-  f=${pair%%:*}; label=${pair##*:}
-  SRC=$(code "$f")
-  if has "$(flat "$SRC")" 'role === "client"'; then
-    ok "G1 $label derives a client predicate from the role"
-  else
-    bad "G1 $label has no client predicate — the new-domain controls are offered to the one role that can never use them"
-  fi
-done
-
-# G2 — the create control specifically. Not "the file mentions isClient" — the
-# button must be inside the guard.
-S_FLAT=$(flat "$(code "$SITESTSX")")
-if has "$S_FLAT" '\{!isClient && \( *<button'; then
-  ok "G2 the Create Site control is behind the client guard"
+# R8 TOMBSTONE (G1/G2): Sites.tsx + SiteDetail.tsx are deleted with the
+# site pages — no new-domain controls remain to hide from the client role.
+# G3–G5 (layout/auth arms) stay live below.
+if [ -f "$SITESTSX" ] || [ -f "$DETAIL" ]; then
+  bad "TOMBSTONE (R8): a site page is back — G1/G2 must be restored"
 else
-  bad "G2 the Create Site control is not behind the client guard"
+  ok "TOMBSTONE (R8): G1/G2 retired with the site pages — no site controls remain"
 fi
 
 # G3 — the health indicator. A refusal rendered as a fault is the shape this ship
@@ -674,11 +601,15 @@ else
   # unrelated-rewrite: count the IS NULL escape hatch. Five sub-queries, one
   # (alerts) uses it twice (its own predicate + the servers subquery it joins
   # against) — six occurrences total, an exact count so a partial fix reds too.
-  L_WIDENS=$(grep -o '\$1::uuid IS NULL' <<< "$TIMELINE" | wc -l)
-  if [ "$L_WIDENS" -eq 6 ]; then
-    ok "L8 timeline's widened predicate appears exactly 6 times — all five sub-queries fixed (alerts uses it twice)"
+  # R8: 6 -> 4. Timeline now has THREE sub-queries (managed_incidents,
+  # alerts, security_scans) — the two hosting-era sub-queries are gone with
+  # their tables. All three survivors are widened; alerts still uses the
+  # escape hatch twice (own predicate + servers subquery).
+  L_WIDENS=$(grep -oF '$1::uuid IS NULL' <<< "$TIMELINE" | wc -l)
+  if [ "$L_WIDENS" -eq 4 ]; then
+    ok "L8 timeline's widened predicate appears exactly 4 times — all three sub-queries widened (alerts uses it twice)"
   else
-    bad "L8 timeline's widened predicate appears $L_WIDENS times, expected 6 — at least one sub-query was not fixed"
+    bad "L8 timeline's widened predicate appears $L_WIDENS times, expected 4 — at least one sub-query was not fixed"
   fi
   # L9 — negative control, same reasoning as I3/J4: only the derived `tenant`
   # value may be bound now, never claims.sub directly.
@@ -1051,11 +982,9 @@ else
   bad "H1 servers.rs yielded almost no handlers — the reader is broken"
 fi
 
-if has "$(flat "$(code "$SITES")")" 'OWNERSHIP_DENORMALIZED_TABLES'; then
-  ok "H2 the transfer constant is still present (control)"
-else
-  bad "H2 OWNERSHIP_DENORMALIZED_TABLES is gone — §C is measuring nothing"
-fi
+# R8 TOMBSTONE (H2): the transfer constant retired with §C (see above).
+# H1/H3 controls stay live; this control's subject is gone by decision.
+ok "TOMBSTONE (R8): H2 retired with §C — the transfer constant is gone by decision"
 
 if [ "${#MIG}" -gt 10000 ]; then
   ok "H3 the migration corpus read $((${#MIG}/1024))KB (control — A5 and C3 are non-vacuous)"

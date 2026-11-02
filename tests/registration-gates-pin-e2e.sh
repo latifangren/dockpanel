@@ -38,7 +38,7 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[0;31m✗\033[0m %s\n' "$1"; }
 AUTH=panel/backend/src/routes/auth.rs
 OAUTH=panel/backend/src/routes/oauth.rs
 SETTINGS=panel/backend/src/routes/settings.rs
-SETTINGS_TSX=panel/frontend/src/pages/Settings.tsx
+SETTINGS_TSX=panel/frontend/src/pages/settings/AccountTab.tsx  # R8: the registration toggles moved to the Account tab
 
 for f in "$AUTH" "$OAUTH" "$SETTINGS" "$SETTINGS_TSX"; do
   [ -f "$f" ] || { echo "missing file: $f"; exit 1; }
@@ -122,7 +122,7 @@ echo "── 3. no DB-only switch: every gate has an operator control ──"
 # a renamed `const RSPAMD_MILTER` keep a pin green at s270.
 for key in self_registration_enabled oauth_auto_create; do
   if grep -qF "{ $key:" "$SETTINGS_TSX"; then
-    ok "$key has a control that writes it in Settings.tsx"
+    ok "$key has a control that writes it in the Account tab"
   else
     bad "$key is a DB-only switch again — it gates account creation and no operator can see or flip it in the panel"
   fi

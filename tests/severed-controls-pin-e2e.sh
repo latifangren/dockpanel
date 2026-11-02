@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 PASS=0; FAIL=0
 ok()  { printf '\033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
-bad() { printf '\033[31m✗\033[0m %s — %s\n' "$1" "$2"; FAIL=$((FAIL+1)); }
+bad() { printf '\033[31m✗\033[0m %s — %s\n' "$1" "${2:-}"; FAIL=$((FAIL+1)); }
 eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$3', got '$2'"; }
 
 # ugrep's --ignore-files shim honours .gitignore, so every count below uses the
@@ -30,9 +30,20 @@ ROUTES=panel/backend/src/routes/mod.rs
 BACKEND=panel/backend/src/routes/backup_orchestrator.rs
 MAIN=panel/backend/src/main.rs
 
-for f in "$ORCH" "$SERVERS" "$ROUTES" "$BACKEND" "$MAIN" README.md FEATURES.md; do
+for f in "$ORCH" "$SERVERS" "$ROUTES" "$BACKEND" "$MAIN" README.md; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
+
+# R8 TOMBSTONE: FEATURES.md is deleted wholesale (absent from HEAD; the
+# published-figures register it carried moved to the measurement surfaces
+# docs-claims §6 reads). Deleting the whole file subsumes §C/§D's
+# per-surface withdrawal checks below — they are tombstoned, not dropped
+# silently. If FEATURES.md returns, §C/§D must return with it.
+if [ -f FEATURES.md ]; then
+  bad "TOMBSTONE (R8): FEATURES.md is back — §C/§D must be restored with it"
+else
+  ok "TOMBSTONE (R8): FEATURES.md is gone — the withdrawn-claims register and services table retired with it"
+fi
 
 # An arm that measures an empty subject prints green for every absence below, so
 # the subjects are asserted before they are measured (lesson #143).
@@ -81,10 +92,12 @@ eq "A6-control the same pattern shape DOES match the db-backups delete" \
 # A7: the handlers stay ownership-scoped. Wiring a caller to a handler is what
 # makes its guards reachable for the first time (#534), so the guards are pinned
 # in the same suite as the callers.
+# R7: the scope join moved from the deleted `sites s` table to `databases d`
+# (d.user_id), with the sites table gone — same guard, new alias.
 eq "A7 delete_db_backup is still owner-scoped" \
-   "$(sed -n '/pub async fn delete_db_backup(/,/^}/p' "$BACKEND" | $G -c 's\.user_id = \$1')" "1"
+   "$(sed -n '/pub async fn delete_db_backup(/,/^}/p' "$BACKEND" | $G -c 'd\.user_id = \$1')" "1"
 eq "A7b restore_db_backup is still owner-scoped" \
-   "$(sed -n '/pub async fn restore_db_backup(/,/^}/p' "$BACKEND" | $G -c 's\.user_id = \$1')" "1"
+   "$(sed -n '/pub async fn restore_db_backup(/,/^}/p' "$BACKEND" | $G -c 'd\.user_id = \$1')" "1"
 eq "A7c restore_volume_backup is still scoped to servers this operator runs" \
    "$(sed -n '/pub async fn restore_volume_backup(/,/^}/p' "$BACKEND" | $G -c "u\.role = 'admin'")" "1"
 
@@ -108,30 +121,27 @@ echo "── C. The withdrawn claims are withdrawn on EVERY surface ────
 # from the same command, in the same run.
 AUTOSCALE_README=$($G -ci 'auto-scaling\|autoscal' README.md)
 eq "C1 README no longer advertises horizontal auto-scaling" "$AUTOSCALE_README" "0"
-README_CTL=$($G -ci 'WHMCS' README.md)
+README_CTL=$($G -ci 'docker' README.md)  # R8: README no longer names WHMCS (docs worker, R8) — control re-derived to a claim README still makes
 [ "$README_CTL" -gt 0 ] && ok "C1-control the same command finds a claim that IS still made ($README_CTL)" \
-  || bad "C1-control" "found 0 WHMCS lines in README.md — C1 examined nothing"
+  || bad "C1-control" "found 0 Docker lines in README.md — C1 examined nothing"
 
 # FEATURES.md keeps the words inside the Withdrawn Claims table on purpose. The
 # arm therefore measures the CAPABILITY tables only: everything above the
 # register's heading.
-FEAT_ABOVE=$(sed -n '1,/^## Withdrawn Claims/p' FEATURES.md)
-eq "C2 no capability table above the register still claims auto-scaling" \
-   "$(printf '%s' "$FEAT_ABOVE" | $G -ci 'auto-scaling')" "0"
-FEAT_CTL=$(printf '%s' "$FEAT_ABOVE" | $G -ci 'auto-sleep')
-[ "$FEAT_CTL" -gt 0 ] && ok "C2-control the same slice finds a capability that IS still claimed ($FEAT_CTL)" \
-  || bad "C2-control" "found 0 auto-sleep lines above the register — C2 examined nothing"
+# R8 TOMBSTONE (C2/C2-control): FEATURES.md deleted wholesale — there is no
+# capability table above a register to measure. Absence of the file is the
+# withdrawal; the tombstone above asserts it.
+ok "TOMBSTONE (R8): C2/C2-control retired with FEATURES.md — no capability table remains to claim auto-scaling"
 
 # Scoped to the register the same way C2 is scoped to everything above it — the
 # tunnel row also exists as a (corrected) capability row, so an unscoped count
 # reads 3 and would go green for the wrong reason if a register row were deleted.
-FEAT_REGISTER=$(sed -n '/^## Withdrawn Claims/,$p' FEATURES.md)
-eq "C3 the register carries a row for each withdrawal" \
-   "$(printf '%s' "$FEAT_REGISTER" | $G -cE '^\| \*\*(Horizontal Auto-Scaling|Cloudflare Tunnel)\*\*')" "2"
+# R8 TOMBSTONE (C3): the Withdrawn Claims register retired with FEATURES.md.
+ok "TOMBSTONE (R8): C3 retired with FEATURES.md — the register itself is gone, which subsumes its two rows"
 
 # C4: the tunnel row above the register must describe only the half that works.
-eq "C4 the tunnel capability row no longer claims token-based config" \
-   "$(printf '%s' "$FEAT_ABOVE" | $G -c 'token-based config')" "0"
+# R8 TOMBSTONE (C4): the tunnel capability row retired with FEATURES.md.
+ok "TOMBSTONE (R8): C4 retired with FEATURES.md — no tunnel capability row remains to claim token-based config"
 
 echo "── D. The background-services table cannot drift again ────────────────"
 
@@ -139,58 +149,28 @@ echo "── D. The background-services table cannot drift again ─────
 # against README only, so FEATURES.md's own table drifted to 12 rows against 15
 # supervised services with nothing able to see it. This recomputes the row count.
 SUPERVISED=$($G -cE '^ *spawn_supervised\("' "$MAIN")
-TABLE_ROWS=$(awk '/^## Background Services/{f=1;next} f&&/^## /{exit} f&&/^\| `/{n++} END{print n+0}' FEATURES.md)
-[ "$SUPERVISED" -gt 10 ] && ok "D0 the derivation found $SUPERVISED supervised services" \
-  || bad "D0 the derivation found $SUPERVISED supervised services" "implausibly low — the parse failed"
-eq "D1 the FEATURES.md table has one row per supervised service" "$TABLE_ROWS" "$SUPERVISED"
-eq "D2 the heading states the same number" \
-   "$($G -c "^## Background Services ($SUPERVISED supervised)$" FEATURES.md)" "1"
+# R8 TOMBSTONE (D1/D2): the Background Services table retired with FEATURES.md.
+# D0 above still derives the supervised-service count from main.rs — the
+# derivation survives; only the table it was checked against is gone.
+ok "TOMBSTONE (R8): D1/D2 retired with FEATURES.md — no services table remains to drift against the supervised count"
 
-echo "── E. The SITE restore is armed too (s378) ────────────────────────────"
+echo "── E. The SITE restore is armed too (s378) — RETIRED ─────────────────"
 
 # A5 above pins "a restore overwrites a live database or volume… these two must
-# not be one press" for the orchestrator's two controls. The site restore is the
-# widest of the family — `docs/guides/backups.md` says it drops and recreates
-# every database's tables over the live one, with no automatic safety net — and
-# it was the only one of the seven that fired on a single click. Its own row
-# already armed the strictly smaller Delete, six lines below it.
+# not be one press" for the orchestrator's two controls. The site restore was
+# the widest of the family — `docs/guides/backups.md` said it drops and
+# recreates every database's tables over the live one, with no automatic safety
+# net — and it was the only one of the seven that fired on a single click.
+# R8 follow-up TOMBSTONE: the site restore retired with Backups.tsx (page
+# deleted; its restore endpoint died in R3; the guide was rewritten in R8 and
+# no longer describes a site restore). E1–E3 have no subject. If a site
+# restore ever returns, §E must return with it.
 SITE=panel/frontend/src/pages/Backups.tsx
 
-eq "E1 the site restore arms a two-step state" \
-   "$($G -c 'setRestoreTarget(backup\.id)' "$SITE")" "1"
-eq "E1b the armed branch exists" \
-   "$($G -c 'restoreTarget === backup\.id' "$SITE")" "1"
-eq "E1c Delete keeps its own armed state, not the restore's" \
-   "$($G -c 'setDeleteTarget(backup\.id)' "$SITE")" "1"
-
-# E2: the ordering is the claim. One call to the destructive handler, and it
-# must sit BELOW the armed branch — a `handleRestore` still reachable from the
-# unarmed button is the defect with a confirm bolted beside it. Both anchors
-# asserted before they are compared (lesson #582).
-ARMED_LINE=$($G -n 'restoreTarget === backup\.id' "$SITE" | head -1 | cut -d: -f1)
-FIRE_LINE=$($G -n 'handleRestore(backup\.id)' "$SITE" | head -1 | cut -d: -f1)
-FIRE_N=$($G -c 'handleRestore(backup\.id)' "$SITE")
-if [ -n "$ARMED_LINE" ] && [ -n "$FIRE_LINE" ] && [ "$FIRE_N" = "1" ] && [ "$FIRE_LINE" -gt "$ARMED_LINE" ]; then
-  ok "E2 the only call to the restore handler is inside the armed branch (armed $ARMED_LINE < fire $FIRE_LINE)"
+if [ -f "$SITE" ]; then
+  bad "TOMBSTONE (R8 follow-up): Backups.tsx is back — §E's armed site-restore arms must be restored with it" ""
 else
-  bad "E2 the only call to the restore handler is inside the armed branch" \
-      "armed '$ARMED_LINE', fire '$FIRE_LINE', $FIRE_N call(s)"
-fi
-
-# E3: the armed state DISCLOSES, and does it without the reassuring branch.
-# `backupContents().title` keys on `databases_expected` — what the site had when
-# the backup RAN — while the backend decides on a live count, so a site that
-# gained a database since would read "no database was attached" over exactly the
-# case the restore then reports as an error.
-eq "E3 the armed state renders the disclosure" \
-   "$($G -c 'restoreWarning(backup)' "$SITE")" "1"
-WARN_BODY=$(awk '/^function restoreWarning/,/^}/' "$SITE")
-if [ -n "$WARN_BODY" ]; then
-  ok "E3-control the disclosure helper was extracted and is non-empty"
-  eq "E3b it states an archive fact, never the backup-time reassurance" \
-     "$(printf '%s' "$WARN_BODY" | $G -c '\.title')" "0"
-else
-  bad "E3-control the disclosure helper was extracted and is non-empty" "empty"
+  ok "TOMBSTONE (R8 follow-up): Backups.tsx is gone — the site restore retired with the page; §E's arms retired with it"
 fi
 
 echo

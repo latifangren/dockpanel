@@ -86,7 +86,9 @@ export default function Databases() {
     try {
       const [dbs, sitesData, stacksData] = await Promise.all([
         api.get<Database[]>("/databases"),
-        api.get<Site[]>("/sites"),
+        // R8: /sites was deleted in R3 and the sites table dropped in R7 —
+        // no site rows exist any more, so the site picker stays empty.
+        Promise.resolve([] as Site[]),
         // Stacks are admin-only server-side (require_admin) — skip the call
         // entirely for non-admins rather than surfacing its 403 as a page error.
         isAdmin ? api.get<Stack[]>("/stacks") : Promise.resolve([] as Stack[]),

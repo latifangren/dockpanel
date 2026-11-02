@@ -160,8 +160,10 @@ pairs=$(printf '%s\n' "$nulled" \
 # earned by the create would otherwise excuse the update regrowing one. Most
 # expected counts are 1 — the create occurrence — so any OTHER count in the same
 # file fails here unless written above.
-EXPECTED_PAIRS="alert_discord_url@Monitors.tsx=1 alert_slack_url@Monitors.tsx=1 allowed_images@ContainerPolicies.tsx=1 keyword@Monitors.tsx=1 logo_url@Resellers.tsx=1"
-eq "§1 the only null-for-empty fields left on a COALESCE-guarded column are the five with written reasons" \
+EXPECTED_PAIRS="alert_discord_url@Monitors.tsx=1 alert_slack_url@Monitors.tsx=1 allowed_images@ContainerPolicies.tsx=1 keyword@Monitors.tsx=1"
+# R8: logo_url@Resellers.tsx dropped with Resellers.tsx (reseller pages deleted
+# in R8) — the reseller-create null-for-empty died with the page. Four remain.
+eq "§1 the only null-for-empty fields left on a COALESCE-guarded column are the four with written reasons" \
    "$pairs" "$EXPECTED_PAIRS"
 
 echo

@@ -113,7 +113,9 @@ pub fn swept_subjects() -> Vec<String> {
 
 /// `settings` rows whose `value` is ciphertext. Mirrors the predicate the two
 /// writers in `routes::settings` apply (`SENSITIVE_KEYS` plus the
-/// `_client_secret` suffix) and the `pdns_api_key` written by `routes::system`.
+/// `_client_secret` suffix); `pdns_api_key` survives here only as a legacy
+/// stored row — no writer remains, but a row from an older install must
+/// still be re-keyed rather than stranded under a rotated key.
 ///
 /// The `IN (...)` list is a hand-copied literal — SQL text, not Rust — so it
 /// cannot `use` `SETTINGS_SENSITIVE_KEYS` directly the way `DESTINATION_SECRET_KEYS`

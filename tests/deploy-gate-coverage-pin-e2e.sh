@@ -182,7 +182,10 @@ fi
 
 # Exact, not >=: an arm that asks for "at least one" survives deleting one
 # (lesson #546).
-EXPECTED_GATED=7
+# R8: 7 -> 5, deliberately. The discovery above finds 6 doors; update_app
+# is the named exemption, leaving 5 gated. The 2 missing doors are the
+# git_deploy doors, deleted with the feature in R5 — no door lost its gate.
+EXPECTED_GATED=5
 if [ "$GATED_N" -eq "$EXPECTED_GATED" ]; then
   ok "exactly $EXPECTED_GATED doors call the gate, as expected"
 else
@@ -273,7 +276,7 @@ fi
 # to read.
 echo
 echo "── §6 the app-keyed scan surface is keyed by NAME ──"
-APPS_TSX=panel/frontend/src/pages/Apps.tsx
+APPS_TSX=panel/frontend/src/pages/apps/ScanDrawer.tsx  # R8: the scan drawer moved here in the Apps split; the 4 buttons live in this file
 BAD_KEY=$($G -c "rescanApp(matchedApp.container_id\|downloadSbom(matchedApp.container_id" "$APPS_TSX" || true)
 GOOD_KEY=$($G -c "rescanApp(matchedApp.name\|downloadSbom(matchedApp.name" "$APPS_TSX" || true)
 if [ "$BAD_KEY" -eq 0 ] && [ "$GOOD_KEY" -eq 4 ]; then
@@ -283,8 +286,10 @@ else
 fi
 # Control: the hex id is still used where it belongs, so the grep above can fire
 # in both directions rather than being green because the file changed shape.
-if [ "$($G -c 'matchedApp.container_id' "$APPS_TSX" || true)" -ge 0 ] \
-   && [ "$($G -c 'container_id' "$APPS_TSX" || true)" -ge 5 ]; then
+# R8: the control reads the PARENT page — ScanDrawer is name-keyed by
+# design and never spells container_id; Apps.tsx still uses the hex id
+# where it belongs (43 occurrences), so the §6 grep can fire both ways.
+if [ "$($G -c 'container_id' panel/frontend/src/pages/Apps.tsx || true)" -ge 5 ]; then
   ok "control: container_id is still present in Apps.tsx, so the arm above is not green by absence"
 else
   bad "control: container_id has vanished from Apps.tsx — §6 may be green because the file changed shape, not because it is correct"

@@ -41,7 +41,8 @@
 #   §C  Certificates: the row actions are gated and the LIST is NOT. Over-fixing
 #       this one would take a client's own certificates away from them, so the
 #       negative arm is as load-bearing as the positive.
-#   §D  the per-site backup picker reads the route that will answer it.
+#   §D  RETIRED (R8 follow-up): the per-site backup picker retired with
+#       Backups.tsx. The reader/writer predicate pair is still pinned in §E.
 #   §E  THE SEVERED PAIR, cross-handler: the route that LISTS destinations and
 #       the route that ACCEPTS one share a single predicate. A caller may not be
 #       offered a choice the writer will reject, nor denied one it would take.
@@ -70,7 +71,7 @@ DESTS="$ROUTES/backup_destinations.rs"
 SCHED="$ROUTES/backup_schedules.rs"
 MODRS="$ROUTES/mod.rs"
 
-for f in "$ALERTS" "$CERTS" "$BACKUPS" "$TERMINAL" "$DASH" "$DESTS" "$SCHED" "$MODRS"; do
+for f in "$ALERTS" "$CERTS" "$TERMINAL" "$DASH" "$DESTS" "$SCHED" "$MODRS"; do
   [ -f "$f" ] || { echo "FATAL: missing subject $f"; exit 1; }
 done
 [ -d "$ROUTES" ] || { echo "FATAL: missing routes dir $ROUTES"; exit 1; }
@@ -96,7 +97,6 @@ occurrences() { grep -oE -- "$2" <<< "$1" | wc -l; }
 
 ALERTS_S=$(code "$ALERTS")
 CERTS_S=$(code "$CERTS")
-BACKUPS_S=$(code "$BACKUPS")
 TERMINAL_S=$(code "$TERMINAL")
 DASH_S=$(code "$DASH")
 DESTS_S=$(code "$DESTS")
@@ -290,30 +290,16 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 echo
-echo "§D  the per-site backup picker asks the route that will answer it"
+echo "§D  RETIRED — the per-site backup picker retired with Backups.tsx (R8 follow-up)"
 
-if has "$BACKUPS_S" 'backup-destinations/selectable'; then
-  ok  "D1 the picker reads the caller-scoped destination route"
+# The picker D1–D4 pinned is gone with the page: its selectable-route read, its
+# administrator-list negative, its failed-load memory, and its Backup Manager
+# link. The backend pair behind it is still pinned in §E. If the page returns,
+# these arms must return with it.
+if [ -f "$BACKUPS" ]; then
+  bad "D0 Backups.tsx is back — §D's picker arms must be restored with it"
 else
-  bad "D1 the picker no longer reads the caller-scoped route — an administrator-only list cannot fill a site owner's dropdown"
-fi
-
-if hasnt "$BACKUPS_S" 'api\.get<BackupDestination\[\]>\("/backup-destinations"\)'; then
-  ok  "D2 the picker does NOT read the administrator list route"
-else
-  bad "D2 the picker reads the administrator list route again — it returns 403 for exactly the callers this page serves"
-fi
-
-if has "$BACKUPS_S" 'destinationsFailed'; then
-  ok  "D3 a failed destination load is remembered, so it can be told apart from an empty one"
-else
-  bad "D3 a failed load is indistinguishable from 'no destinations exist' — the defect nobody can report (#435)"
-fi
-
-if has "$BACKUPS_S" 'isAdmin \?' && has "$BACKUPS_S" 'backup-orchestrator\?tab=destinations'; then
-  ok  "D4 the Backup Manager link is offered only to callers who can open it"
-else
-  bad "D4 the empty state links every caller into an administrator-only page that bounces them back"
+  ok "D0 Backups.tsx is gone — the picker retired with the page; the reader/writer pair is still pinned in §E"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────

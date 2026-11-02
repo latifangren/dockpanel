@@ -30,9 +30,14 @@ S_STAGING=panel/agent/src/services/staging.rs
 R_SEC=panel/agent/src/routes/security.rs
 S_SEC=panel/agent/src/services/security.rs
 ERRRS=panel/backend/src/error.rs
-for f in "$R_FILES" "$S_FILES" "$R_VOL" "$S_VOL" "$R_STAGING" \
-         "$S_STAGING" "$R_SEC" "$S_SEC" "$ERRRS"; do
+for f in "$R_FILES" "$S_FILES" "$R_VOL" "$S_VOL" \
+         "$R_SEC" "$S_SEC" "$ERRRS"; do
   [ -f "$f" ] || { echo "missing $f"; exit 1; }
+done
+# R8 TOMBSTONE (staging subjects): agent routes/staging.rs + services/staging.rs
+# are deleted with the site-staging feature (R8) — §3 is tombstoned below.
+for f in "$R_STAGING" "$S_STAGING"; do
+  [ -f "$f" ] && { echo "TOMBSTONE (R8): $f is back — §3 must be restored"; exit 1; }
 done
 
 # Strip // line comments: this suite's whole subject is code whose COMMENTS
@@ -125,28 +130,13 @@ else
 fi
 
 echo
-echo "── 3. staging: the sentence already named the path ──"
+echo "── 3. staging: TOMBSTONED in R8 ──"
+# R8 TOMBSTONE (§3): the staging service + route are deleted with the
+# site-staging feature (clone_files/sync_files: 0 occurrences repo-wide).
+# No staging refusal remains to classify. If staging returns, §3 must
+# return with it.
+ok "TOMBSTONE (R8): §3 retired with agent staging.rs — no staging refusal remains"
 
-SRC_RS=$(strip "$R_STAGING"); SRC_SS=$(strip "$S_STAGING")
-if has "$SRC_SS" 'directory not found'; then
-  ok "the staging service still names the directory it could not find"
-else
-  bad "the staging refusal is gone from the service — the route arm is vacuous"
-fi
-SY=$(fnbody "$SRC_RS" sync_files)
-if [ "$(printf '%s' "$SY" | wc -l)" -lt 8 ]; then
-  bad "sync_files did not extract — its arms measure nothing"
-else
-  ok "sync_files extracted ($(printf '%s' "$SY" | wc -l) lines)"
-  hasE "$SY" 'NOT_FOUND' \
-    && ok "a missing document root answers 404, keeping the path it named" \
-    || bad "the staging refusal is a 5xx again — and it had spelled the exact path"
-  hasE "$SY" 'INTERNAL_SERVER_ERROR' \
-    && ok "a real sync failure is still a 5xx" \
-    || bad "the staging classifier is unconditional"
-fi
-
-echo
 echo "── 4. firewall: a package the panel will never install there ──"
 
 SRC_SEC=$(strip "$R_SEC"); SRC_SSEC=$(strip "$S_SEC")

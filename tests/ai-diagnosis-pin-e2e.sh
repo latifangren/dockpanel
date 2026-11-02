@@ -32,7 +32,7 @@ FE=panel/frontend/src
 SETTINGS_RS=$BE/routes/settings.rs
 AI_RS=$BE/services/ai_diagnosis.rs
 MOD_RS=$BE/routes/mod.rs
-SETTINGS_TSX=$FE/pages/Settings.tsx
+SETTINGS_TSX=$FE/pages/settings/AiDiagnosisSettings.tsx  # R8: the AI card moved to its Settings tab
 
 for f in "$SETTINGS_RS" "$AI_RS" "$MOD_RS" "$SETTINGS_TSX"; do
   [ -f "$f" ] || { echo "missing file: $f"; exit 1; }
@@ -124,12 +124,12 @@ done
 must_contain "$AI_FLAT" 'constMAX_OUTPUT_CHARS:usize=8000;' "output is truncated to a bounded size before it reaches any provider"
 
 # ── §5 — the frontend button only appears on a failed entry, and never auto-fires ──
-echo "── §6 the Settings.tsx control sends all four keys ──"
+echo "── §6 the AI diagnosis tab control sends all four keys ──"
 FE_SET_FLAT=$(perl -0777 -pe 's{/\*.*?\*/}{}gs' "$SETTINGS_TSX" | tr -d ' \t\n')
 for k in ai_diagnosis_enabled ai_diagnosis_provider ai_diagnosis_model; do
-  must_contain "$FE_SET_FLAT" "$k:" "Settings.tsx's AI diagnosis card sets $k in the PUT body on save"
+  must_contain "$FE_SET_FLAT" "$k:" "the AI diagnosis tab card sets $k in the PUT body on save"
 done
-must_contain "$FE_SET_FLAT" "body.ai_diagnosis_api_key" "Settings.tsx's AI diagnosis card sets body.ai_diagnosis_api_key on save"
+must_contain "$FE_SET_FLAT" "body.ai_diagnosis_api_key" "the AI diagnosis tab card sets body.ai_diagnosis_api_key on save"
 must_contain "$FE_SET_FLAT" 'if(apiKey&&apiKey!=="********"){body.ai_diagnosis_api_key=apiKey;}' \
   "the API key field guards against resubmitting the GET-response mask sentinel"
 

@@ -5078,7 +5078,7 @@ async fn blue_green_update(
     // the real name, the new one alive as the stand-in, nginx pointing at the
     // stand-in. A reported-successful update that leaves the app listed
     // twice, with no self-heal on the next update. Ported from the identical
-    // fix in `git_build.rs::blue_green_update` (CHANGELOG v2.55.0) — that
+    // fix in the former git-build blue/green update (CHANGELOG v2.55.0) — that
     // twin shares `find_free_port`/`health_check_port`/`swap_nginx_proxy_port`
     // with this function but never received the fix itself.
     //

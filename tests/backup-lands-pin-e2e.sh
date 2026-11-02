@@ -67,9 +67,17 @@ SCHED=panel/backend/src/services/backup_scheduler.rs
 RB=panel/agent/src/services/remote_backup.rs
 RBR=panel/agent/src/routes/remote_backup.rs
 SETUP=scripts/setup.sh
-for f in "$EXEC" "$SCHED" "$RB" "$RBR" "$SETUP"; do
+for f in "$EXEC" "$RB" "$RBR" "$SETUP"; do
   [ -f "$f" ] || { echo "missing $f"; exit 1; }
 done
+
+# R8 TOMBSTONE: backup_scheduler.rs is deleted (R3). The scheduled-upload
+# role it held moved to the policy executor (EXEC); §1/§2 below are re-aimed
+# at the executor's two INSERTs. If the scheduler returns, §1/§2 must cover
+# it again instead of passing on the executor alone.
+if [ -f "$SCHED" ]; then
+  echo "TOMBSTONE (R8): backup_scheduler.rs is back — §1/§2 must cover it again"; exit 1
+fi
 
 # Strip // line comments so a prose mention of a flag cannot satisfy an arm.
 # This pin's whole subject is code that LOOKS right, and its own header names
@@ -79,7 +87,7 @@ done
 strip() { sed 's://.*::' "$1"; }
 
 SRC_EXEC=$(strip "$EXEC")
-SRC_SCHED=$(strip "$SCHED")
+# R8: SRC_SCHED retired with the scheduler; §2 reads SRC_EXEC now.
 SRC_RB=$(strip "$RB")
 SRC_RBR=$(strip "$RBR")
 
@@ -111,7 +119,8 @@ else
   bad "the agent's upload budget moved — this pin's numbers need rechecking"
 fi
 
-for f in "$EXEC" "$SCHED"; do
+# R8: scheduler removed from this loop (deleted; tombstoned in SETUP).
+for f in "$EXEC"; do
   n=$(basename "$f")
   src=$(strip "$f")
   if has "$src" 'post_long("/backups/upload"'; then
@@ -140,16 +149,22 @@ echo "§2 a scheduled backup records WHERE its bytes went (B)"
 # "omits uploaded/destination_id" while both were plainly still there. A pin that
 # freezes a list guarantees the next legitimate addition looks like a regression,
 # and it cannot notice the asymmetry it was supposed to be watching for.
-SCHED_INSERT=$(sed -n '/INSERT INTO backups (/,/)/p' <<< "$SRC_SCHED" | head -2 | tr -d '\n')
-if [ -z "$SCHED_INSERT" ]; then
-  bad "the scheduler's INSERT could not be isolated — the arm examined nothing"
-elif hasE "$SCHED_INSERT" 'uploaded' && hasE "$SCHED_INSERT" 'destination_id'; then
-  ok "the scheduler's INSERT carries uploaded + destination_id"
-else
-  bad "the scheduler's INSERT omits uploaded/destination_id — the badge cannot light"
-fi
+# R8: the scheduler's single INSERT into `backups` is gone with it. The
+# executor records each kind separately — database_backups and
+# volume_backups — and BOTH must carry uploaded + destination_id, or the
+# badge cannot light for that kind.
+for tbl in database_backups volume_backups; do
+  EXEC_INSERT=$(sed -n "/INSERT INTO $tbl (/,/)/p" <<< "$SRC_EXEC" | head -2 | tr -d '\n')
+  if [ -z "$EXEC_INSERT" ]; then
+    bad "the executor's $tbl INSERT could not be isolated — the arm examined nothing"
+  elif hasE "$EXEC_INSERT" 'uploaded' && hasE "$EXEC_INSERT" 'destination_id'; then
+    ok "the executor's $tbl INSERT carries uploaded + destination_id"
+  else
+    bad "the executor's $tbl INSERT omits uploaded/destination_id — the badge cannot light"
+  fi
+done
 
-if hasE "$SRC_SCHED" 'let _uploaded_remote'; then
+if hasE "$SRC_EXEC" 'let _[a-z_]*uploaded'; then
   bad "the upload result is bound to a discarded _-prefixed binding again"
 else
   ok "the upload result is bound to a name that is actually read"
@@ -167,19 +182,21 @@ fi
 # no destination and a schedule with none writes FALSE too — so the only predicate
 # that identifies a failed off-site copy is the PAIR (destination_id IS NOT NULL
 # AND NOT uploaded), which is what the policy executor already writes.
-DEST_BIND=$(grep -oE '\.bind\([^)]*dest_id[^)]*\)' <<< "$SRC_SCHED" | head -1)
-if [ -z "$DEST_BIND" ]; then
-  bad "the scheduler binds no destination_id at all — a scheduled off-site copy records no destination"
-elif grep -q 'uploaded' <<< "$DEST_BIND"; then
-  bad "destination_id is bound only when the upload succeeded, so a failed off-site copy cannot be told from a schedule that never had a destination: $DEST_BIND"
+# R8: the destination bind now lives in the executor as
+# `.bind(destination.as_ref().map(|d| d.id))`, once per INSERT (measured 2).
+# It must stay unconditional — bound from the policy's own destination
+# whatever the upload did — and the `uploaded` result must reach both INSERTs.
+DEST_BIND_N=$(grep -c 'destination\.as_ref()\.map(|d| d\.id)' <<< "$SRC_EXEC" || true)
+UPLOADED_BIND_N=$(grep -c '\.bind(uploaded)' <<< "$SRC_EXEC" || true)
+if [ "$DEST_BIND_N" -ge 2 ]; then
+  ok "destination_id is bound from the policy's own destination in both INSERTs ($DEST_BIND_N binds) whatever the upload did"
 else
-  ok "destination_id is bound from the schedule's own destination whatever the upload did"
+  bad "the executor binds destination_id only $DEST_BIND_N time(s) — a scheduled off-site copy records no destination for some kind"
 fi
-
-if has "$(grep -B2 'dest_id: Option<Uuid>' <<< "$SRC_SCHED")" 'allow(dead_code)'; then
-  bad "dest_id is #[allow(dead_code)] again — the annotation hides the gap"
+if [ "$UPLOADED_BIND_N" -ge 2 ]; then
+  ok "the upload result reaches both INSERTs ($UPLOADED_BIND_N binds) — a failed off-site copy is told from a schedule with no destination"
 else
-  ok "dest_id carries no dead_code annotation"
+  bad "the upload result reaches only $UPLOADED_BIND_N INSERT(s) — one kind cannot tell a failed off-site copy from no destination"
 fi
 
 echo

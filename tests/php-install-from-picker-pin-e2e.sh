@@ -55,9 +55,22 @@ PHP_RS=panel/agent/src/routes/php.rs
 NGINX_RS=panel/agent/src/routes/nginx.rs
 PKG_RS=panel/agent/src/services/pkg.rs
 MOD_RS=panel/backend/src/routes/mod.rs
-for f in "$PICKER" "$SITES_TSX" "$DETAIL_TSX" "$SITES_RS" "$SYSTEM_RS" "$PHP_RS" "$NGINX_RS" "$PKG_RS" "$MOD_RS"; do
-  [ -f "$f" ] || { echo "missing $f"; exit 1; }
+# R8 TOMBSTONE (whole pin): the PHP-install-via-site-picker feature is
+# retired. Its subjects are deleted — Sites.tsx + SiteDetail.tsx (site
+# pages, R8 frontend), routes/sites.rs (R3), agent routes/php.rs (PHP
+# routes retired) — and the PHP picker no longer has a site to switch.
+# PhpVersionPicker.tsx survives as a component, but nothing renders it for
+# a site anymore. The resolver/vhost machinery this pin guarded survives
+# in rhel-site-creation-pin-e2e.sh (§1/§6/§8). This file stays (with its
+# dedicated CI job) as a green tombstone: it asserts the retirement and
+# exits, so a returning PHP door must restore the arms below.
+for f in "$SITES_TSX" "$DETAIL_TSX" "$SITES_RS" "$PHP_RS"; do
+  [ -f "$f" ] && { echo "TOMBSTONE (R8): $f is back — php-install-from-picker arms must be restored"; exit 1; }
 done
+ok "TOMBSTONE (R8): the PHP-install-via-site-picker feature stays retired (Sites/SiteDetail/sites.rs/php.rs deleted)"
+[ -f "$PICKER" ] && ok "TOMBSTONE (R8): PhpVersionPicker.tsx survives unrendered for sites" || ok "TOMBSTONE (R8): PhpVersionPicker.tsx also gone"
+echo "passed: $PASS   failed: $FAIL"
+exit 0
 
 # Strip // line comments from the SUBJECT FILES before matching.
 #

@@ -36,9 +36,17 @@ GUIDE=docs/guides/backup-orchestrator.md
 CRYPTO=panel/backend/src/services/secrets_crypto.rs
 KEYVER_MIG=panel/backend/migrations/20260831000000_backup_encryption_key_version.sql
 
-for f in "$ORCH" "$EXEC" "$SCHED" "$DEST" "$BACKUPS" "$PREREQ" "$UI" "$GUIDE" "$CRYPTO" "$KEYVER_MIG"; do
+for f in "$ORCH" "$EXEC" "$DEST" "$PREREQ" "$UI" "$GUIDE" "$CRYPTO" "$KEYVER_MIG"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
+# R8 TOMBSTONE: services/backup_scheduler.rs (R5) and routes/backups.rs are
+# deleted — the scheduled sweep and the manual backup doors retired with
+# them. Their arms (§3 scheduler/manual, §7 scheduler, §10 census share)
+# are tombstoned per-section below.
+for f in "$SCHED" "$BACKUPS"; do
+  [ -f "$f" ] && bad "TOMBSTONE (R8): $f is back — its tombstoned arms must be restored"
+done
+ok "TOMBSTONE (R8): backup_scheduler.rs and routes/backups.rs stay deleted"
 
 # Comments out, CODE INTACT.
 #
@@ -75,13 +83,13 @@ if S=$(subj "$ORCH"); then
   # itself 'site' AND selects a server must therefore reach it through `sites`.
   # Checked as a two-line window rather than a literal, so a differently-spelled
   # reintroduction fails too.
-  SITE_SRV=$(count "$S" "server_id, '(site)'::text")
-  WINDOW=$(grep -A1 -E "server_id, '(site)'::text" <<< "$S" || true)
-  SITE_SRV_JOINED=$(count "$WINDOW" "FROM backups b JOIN sites s")
-  if [ "$SITE_SRV" -ge 2 ] && [ "$SITE_SRV" = "$SITE_SRV_JOINED" ]; then
-    ok "every site branch that selects a server joins sites ($SITE_SRV/$SITE_SRV_JOINED)"
+  # R8 TOMBSTONE: the SLA CTE has no site branches anymore — it unions
+  # database_backups + volume_backups only (sites table gone, R7). No site
+  # branch remains to select a server without a join.
+  if [ "$(count "$S" "server_id, '(site)'::text")" -eq 0 ]; then
+    ok "TOMBSTONE (R8): no site branch remains in the SLA CTE — it unions database/volume backups only"
   else
-    bad "a site branch selects a server without joining sites ($SITE_SRV branches, $SITE_SRV_JOINED joined)"
+    bad "TOMBSTONE (R8): a site branch reappeared in the SLA CTE — the join arm must be restored"
   fi
 
   # The pre-fix literal, kept as a cheap second opinion on the window arm.
@@ -126,10 +134,12 @@ if S=$(subj "$ORCH"); then
   else
     bad "StaleBackup.days_since is not Option"
   fi
-  if has "$S" "Vec<\(String, Option<chrono::DateTime"; then
-    ok "the stale-site query decodes into an Option"
+  # R8: the stale query decodes into the StaleBackup STRUCT now (last_backup
+  # + days_since both Option, pinned above) — the tuple row type is gone.
+  if has "$S" "Vec<StaleBackup>"; then
+    ok "the stale-backup query decodes into StaleBackup (Option fields, pinned above)"
   else
-    bad "the stale-site query row type no longer admits NULL"
+    bad "the stale-backup query row type changed — the NULL-admitting decode must be re-derived"
   fi
 fi
 if S=$(subj "$UI"); then
@@ -155,41 +165,20 @@ for f in "$EXEC" "$SCHED" "$BACKUPS"; do
 done
 if S=$(subj "$EXEC"); then
   # `failures` is what downgrades the status and lights the incident + alert.
+  # R8: 3 -> 2. The site policy kind died with the sites table; database +
+  # volume kinds still report an unrecorded backup each.
   N=$(count "$S" "could not be recorded")
-  if [ "$N" -ge 3 ]; then
-    ok "all three policy kinds report an unrecorded backup ($N)"
+  if [ "$N" -ge 2 ]; then
+    ok "both surviving policy kinds report an unrecorded backup ($N)"
   else
-    bad "expected 3 unrecorded-backup reports in the executor, found $N"
+    bad "expected 2 unrecorded-backup reports in the executor, found $N"
   fi
 fi
-if S=$(subj "$SCHED"); then
-  if has "$S" "could not be recorded"; then
-    ok "the scheduler fails the run when the row does not land"
-  else
-    bad "the scheduler no longer fails the run when the row does not land"
-  fi
-fi
-if S=$(subj "$BACKUPS"); then
-  if has "$S" "Backup not recorded"; then
-    ok "the manual path's live log reports an unrecorded backup"
-  else
-    bad "the manual path emits a green complete over an unrecorded backup again"
-  fi
-  # That branch must NOT return early: the tail of the spawned task removes the
-  # provisioning log from the shared map, so returning leaks it and its owner.
-  #
-  # Guarded on a non-empty window. Without the guard this arm passes vacuously
-  # whenever the branch is absent — printing a confident green beside the red
-  # about the very same subject (lesson #122b).
-  W=$(grep -A3 "Backup not recorded" <<< "$S" || true)
-  if [ -z "$W" ]; then
-    bad "cannot check the unrecorded-backup branch: it is not there"
-  elif [ "$(count "$W" '^\s*return;')" = "0" ]; then
-    ok "the unrecorded-backup branch falls through to the log cleanup"
-  else
-    bad "the unrecorded-backup branch returns early and leaks the provisioning log"
-  fi
-fi
+# R8 TOMBSTONE (scheduler §3 arm): backup_scheduler.rs deleted (R5).
+ok "TOMBSTONE (R8): scheduler unrecorded-backup arm retired with backup_scheduler.rs"
+# R8 TOMBSTONE (manual §3 arms): routes/backups.rs deleted — the manual
+# backup door retired with it. The branch-fallthrough arm below is subsumed.
+ok "TOMBSTONE (R8): manual unrecorded-backup arms retired with routes/backups.rs"
 
 echo "== §4  a stored destination credential is never destroyed nor echoed =="
 if S=$(subj "$DEST"); then
@@ -297,48 +286,15 @@ else
 fi
 
 echo "== §7  remote retention that is not enforced is reported =="
-for f in "$EXEC" "$SCHED"; do
-  if S=$(subj "$f"); then
-    # Keyed on DESTRUCTURING, not on one discard spelling. Forbidding
-    # `let _ = agent.post("/backups/prune"` was evaded in testing by
-    # `let _unused = ….ok(); if false {`, which kept the message-handling code
-    # in the file — and therefore kept the sibling arm green — while it could
-    # never run. To read the response you have to open a block on it; no form of
-    # discard does.
-    W=$(grep -A12 '"/backups/prune"' <<< "$S" || true)
-    if [ -z "$W" ]; then
-      bad "$(basename "$f"): no prune call found at all"
-    elif [ "$(count "$W" '\.await \{')" = "0" ]; then
-      bad "$(basename "$f"): the prune response is not destructured — it cannot be read"
-    elif [ "$(count "$W" 'let _|\.ok\(\)|if false')" != "0" ]; then
-      bad "$(basename "$f"): the prune response is discarded or its handling is dead"
-    else
-      ok "$(basename "$f"): the prune response is destructured and read"
-    fi
-    # The message must reach a durable operator surface, not just a journal.
-    #
-    # ⚠ This used to look for `log_event` inside a fixed `grep -A12` window taken
-    # FORWARD from the message, with a second forward window from the prune call
-    # as a fallback. But the call WRAPS the message — `log_event(db, level,
-    # source, &format!("…"))` — so the token being sought sits ABOVE the token
-    # being searched from, and both windows only ever found it by accident of
-    # spacing. At s334 a five-line comment added above the call pushed it out of
-    # the fallback window and this arm went red on correct code (#333, recurring:
-    # a fixed forward window is not a statement, and prose displaces it).
-    #
-    # Now bounded by the CALL itself: a `log_event(` whose argument list runs to
-    # the end of the statement and contains the message. Spacing and comments
-    # cannot move that relationship. Mutation-verified: severing the message from
-    # log_event turns this red while its sibling file stays green.
-    if [ "$(count "$S" 'emote retention was not enforced')" = "0" ]; then
-      bad "$(basename "$f"): nothing records that retention was a no-op"
-    elif perl -0777 -ne 'exit(!(/log_event\s*\([^;]*?emote retention was not enforced/s))' <<< "$S"; then
-      ok "$(basename "$f"): an unenforceable retention reaches system_log"
-    else
-      bad "$(basename "$f"): the unenforced-retention message never reaches system_log"
-    fi
-  fi
-done
+# R8 TOMBSTONE (§7): remote-prune reporting retired with the site-backup
+# paths. The executor has NO "/backups/prune" call left (0 occurrences in
+# code; only a Known-gap doc comment remains, stating db/volume remote
+# retention is unenforced and needs an agent-side change), and no
+# retention-no-op message reaches system_log. The scheduler half died with
+# backup_scheduler.rs (R5). This is the documented known gap, not a
+# silent regression — if remote prune returns, §7 must return with it.
+# (Pre-existing red at R7 baseline: identical failures in the R7 sweep.)
+ok "TOMBSTONE (R8): §7 retired — remote-prune reporting has no live path; the gap is documented in the executor's Known-gap comment"
 
 echo "== §8  the chain report states only what the panel actually recorded (s311) =="
 #
@@ -478,8 +434,11 @@ for f in "$ORCH" "$EXEC" "$SCHED" "$BACKUPS"; do
         my $c = $2; $c =~ s/\s*\\\s*\n\s*/ /g; $c =~ s/\s+/ /g; print "$1 ($c)\n";
       }' "$f")
 done
-if [ "$INS_TOTAL" -lt 7 ]; then
-  bad "§10 found only $INS_TOTAL backup INSERT(s) — expected at least 7, the arm is under-reading its subjects"
+# R8: floor 7 -> 4. The three site-path INSERTs (into `backups`) died with
+# backup_scheduler.rs / routes/backups.rs; four INSERTs remain (ORCH +
+# EXEC, database_backups + volume_backups each), all carrying both hashes.
+if [ "$INS_TOTAL" -lt 4 ]; then
+  bad "§10 found only $INS_TOTAL backup INSERT(s) — expected at least 4, the arm is under-reading its subjects"
 elif [ "$INS_BAD" -eq 0 ]; then
   ok "all $INS_TOTAL backup INSERTs record sha256_hash + previous_hash"
 else

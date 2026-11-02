@@ -203,7 +203,6 @@ async fn main() {
         .merge(routes::volume_backup::router())
         .merge(routes::backup_verify::router())
         .merge(routes::backup_drill::router())
-        .merge(routes::staging::router())
         .merge(routes::services::router())
         .merge(routes::iac::router())
         .merge(routes::updates::router())
