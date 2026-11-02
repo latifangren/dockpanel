@@ -1,15 +1,10 @@
 pub mod backup_drill;
 pub mod backup_verify;
-pub mod backups;
-pub mod cms;
 pub mod database_backup;
 pub mod crons;
 pub mod database;
-pub mod deploy;
 pub mod diagnostics;
 pub mod telemetry;
-pub mod git_build;
-pub mod php;
 pub mod docker_apps;
 pub mod files;
 pub mod health;
@@ -17,8 +12,6 @@ pub mod iac;
 pub mod image_scan;
 pub mod logs;
 pub mod sbom;
-pub mod mail;
-pub mod migration;
 pub mod nginx;
 pub mod panel_update;
 pub mod remote_backup;
@@ -26,8 +19,6 @@ pub mod security;
 pub mod server_utils;
 pub mod service_installer;
 pub mod services;
-pub mod sftp;
-pub mod smtp;
 pub mod staging;
 pub mod ssl;
 pub mod ssl_registry;
@@ -36,7 +27,6 @@ pub mod system;
 pub mod terminal;
 pub mod updates;
 pub mod volume_backup;
-pub mod wordpress;
 
 use axum::{
     extract::Request,

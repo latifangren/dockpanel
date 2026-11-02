@@ -4,35 +4,13 @@ use axum::{
     Json, Router,
 };
 
-use super::{is_valid_domain, AppState};
+use super::AppState;
 use crate::services::backup_verify;
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
 
 fn err(status: StatusCode, msg: &str) -> ApiErr {
     (status, Json(serde_json::json!({ "error": msg })))
-}
-
-#[derive(serde::Deserialize)]
-pub struct VerifySiteRequest {
-    pub domain: String,
-    pub filename: String,
-}
-
-/// POST /backups/verify/site — Verify a site backup.
-async fn verify_site(
-    Json(req): Json<VerifySiteRequest>,
-) -> Result<Json<backup_verify::VerificationResult>, ApiErr> {
-    if !is_valid_domain(&req.domain) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
-    }
-    if req.filename.is_empty() || req.filename.contains("..") || req.filename.contains('/') {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid filename"));
-    }
-    let result = backup_verify::verify_site_backup(&req.domain, &req.filename)
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
-    Ok(Json(result))
 }
 
 #[derive(serde::Deserialize)]
@@ -70,7 +48,6 @@ async fn verify_volume(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/backups/verify/site", post(verify_site))
         .route("/backups/verify/database", post(verify_database))
         .route("/backups/verify/volume", post(verify_volume))
 }

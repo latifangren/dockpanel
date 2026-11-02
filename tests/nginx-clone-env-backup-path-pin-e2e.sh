@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
 # nginx-clone-env-backup-path-pin-e2e.sh — s438
 #
-# Pins the two remaining defense-in-depth findings from the s436
-# `dockpanel-fanout` round ([[project_dockpanel_tech_debt_p173]], Findings 1
-# and 2). Both were confirmed NOT reachable via the panel API today — every
-# current caller sources its domain/filepath from a DB-validated column, not
-# straight from an admin-supplied field — but the handlers themselves had no
-# validation of their own, so a future caller (or a future backend change
-# that trusts them) would inherit the gap silently.
+# R6 (2026-11-02): §A is deleted with routes/nginx.rs's clone_site/get_env/
+# set_env handlers, removed in the R6 nginx split. Deleted, not weakened:
+# the handlers no longer exist, and the A8 census floor (31 is_valid_domain
+# call sites in nginx.rs) died with the file's site-handler bulk. What
+# remains is §B, re-derived unchanged below.
 #
-#   §A  nginx.rs: clone_site/get_env/set_env were 3 of ~28 domain-taking
-#       handlers that skipped `is_valid_domain` while every sibling calls it
-#       first. The live systemd unit's `ReadWritePaths` allowlist includes
-#       `/etc/systemd/system` and `/var/spool/cron` — so an unvalidated
-#       domain segment (`../../etc/systemd/system`) is root code execution
-#       via cron/systemd-unit overwrite, not merely a stray file write.
 #   §B  remote_backup.rs's upload() gated the backup filepath with a lexical
 #       `starts_with()` check that "/var/backups/dockpanel/../../etc/shadow"
 #       satisfies — the OS resolves the `..` on open. ProtectSystem=strict
@@ -30,7 +22,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 echo
 echo "=============================================="
-echo "  nginx clone/env + remote-backup path validation — source pins (s438)"
+echo "  remote-backup path validation — source pins (s438, §B only)"
 echo "=============================================="
 echo
 
@@ -64,83 +56,13 @@ fnbody() {
   ' <<< "$1"
 }
 
-NGINX=panel/agent/src/routes/nginx.rs
 BACKUP=panel/agent/src/routes/remote_backup.rs
 
-for f in "$NGINX" "$BACKUP"; do
+for f in "$BACKUP"; do
   [ -f "$f" ] || { bad "SETUP subject missing: $f"; exit 1; }
 done
 
-NGINX_SRC=$(code "$NGINX")
 BACKUP_SRC=$(code "$BACKUP")
-
-# ── §A  nginx.rs: clone_site/get_env/set_env now validate their domain(s) ────
-
-CLONE=$(flat "$(fnbody "$NGINX_SRC" "clone_site")")
-if [ -z "$CLONE" ]; then
-  bad "A0 could not extract nginx::clone_site"
-else
-  ok "A0 nginx::clone_site extracted"
-  if has "$CLONE" 'is_valid_domain\(&body\.source_domain\)' && has "$CLONE" 'is_valid_domain\(&body\.target_domain\)'; then
-    ok "A1 clone_site validates BOTH source_domain and target_domain"
-  else
-    bad "A1 clone_site is missing domain validation on one or both fields — rsync --delete runs on an unvalidated path"
-  fi
-  CHK_AT=$(grep -boE 'is_valid_domain\(&body\.(source|target)_domain\)' <<< "$CLONE" | head -1 | cut -d: -f1)
-  # s459: clone_site no longer runs rsync inline — it delegates the whole
-  # copy (rsync included) to staging::clone_files, so the thing validation
-  # must precede is now that delegated call, not a `safe_command("rsync")`
-  # literal that no longer exists in this function's body at all.
-  RSYNC_AT=$(grep -bo 'services::staging::clone_files(' <<< "$CLONE" | head -1 | cut -d: -f1)
-  if [ -n "$CHK_AT" ] && [ -n "$RSYNC_AT" ] && [ "$CHK_AT" -lt "$RSYNC_AT" ]; then
-    ok "A2 the validation precedes the delegated clone_files call"
-  else
-    bad "A2 the validation does not precede the delegated clone_files call (check@${CHK_AT:-none} delegate@${RSYNC_AT:-none})"
-  fi
-fi
-
-GETENV=$(flat "$(fnbody "$NGINX_SRC" "get_env")")
-if [ -z "$GETENV" ]; then
-  bad "A3 could not extract nginx::get_env"
-else
-  ok "A3 nginx::get_env extracted"
-  if has "$GETENV" 'is_valid_domain\(&domain\)'; then
-    ok "A4 get_env validates domain before building the .env path"
-  else
-    bad "A4 get_env has no domain validation — reads an arbitrary root-readable file via a crafted domain segment"
-  fi
-  if has "$GETENV" '-> Result<Json<serde_json::Value>, ApiErr>'; then
-    ok "A5 get_env's return type was widened to Result so it can actually reject a bad domain"
-  else
-    bad "A5 get_env's signature no longer returns a Result — it cannot reject anything, regardless of what A4 found"
-  fi
-fi
-
-SETENV=$(flat "$(fnbody "$NGINX_SRC" "set_env")")
-if [ -z "$SETENV" ]; then
-  bad "A6 could not extract nginx::set_env"
-else
-  ok "A6 nginx::set_env extracted"
-  if has "$SETENV" 'is_valid_domain\(&domain\)'; then
-    ok "A7 set_env validates domain before writing the .env path"
-  else
-    bad "A7 set_env has no domain validation — writes an arbitrary path via a crafted domain segment"
-  fi
-fi
-
-# A8 — the census floor. 25 sibling handlers already called is_valid_domain
-# before this fix (finder- and skeptic-verified at s436); this fix adds 4 new
-# call sites (clone_site x2, get_env, set_env). A future removal of any of
-# these checks drops the total below this floor; a future ADDITION does not
-# break it, so this is deliberately a floor, not an exact-equality census
-# (the heavier enumeration [[project_dockpanel_lessons_p60]] describes is not
-# proportionate to a DiD-only, not-currently-reachable finding).
-N_CALLS=$(grep -oF 'is_valid_domain(' "$NGINX" | wc -l)
-if [ "$N_CALLS" -ge 31 ]; then
-  ok "A8 nginx.rs calls is_valid_domain at least 31 times (found $N_CALLS) — the 4 new call sites are present"
-else
-  bad "A8 nginx.rs calls is_valid_domain only $N_CALLS times, expected >= 31 — a validation call site was lost"
-fi
 
 # ── §B  remote_backup.rs: upload() rejects '..' in the filepath ──────────────
 

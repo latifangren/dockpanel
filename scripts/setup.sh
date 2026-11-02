@@ -59,8 +59,8 @@ PANEL_SSL_OK=0
 # Which firewall this box is enforcing with: firewalld | ufw | none.
 # Resolved by detect_firewall in main().
 FW_MGR="none"
-# DockPanel Lite (Alpine / postmarketOS profile): 1 skips host PHP and
-# host mail/DNS services in install_recommended_services and caps the
+# DockPanel Lite (Alpine / postmarketOS profile): 1 skips host PHP
+# in install_recommended_services and caps the
 # Postgres container's memory in setup_database. It is a UX/resource
 # profile, not a security boundary — see FORK.md. The frontend flag is
 # driven by the same env var in the backend (panel/backend config.rs).
@@ -866,9 +866,9 @@ create_directories() {
     if [ "$PKG_MGR" = "apt" ]; then
         mkdir -p /var/lib/dpkg /var/cache/apt /var/lib/apt
     fi
-    mkdir -p /run/opendkim /var/lib/nginx
+    mkdir -p /var/lib/nginx
     mkdir -p /var/lib/dockpanel/git /var/lib/dockpanel/recordings /var/cache/nginx/fastcgi
-    touch /etc/opendkim.conf /run/nginx.pid 2>/dev/null || true
+    touch /run/nginx.pid 2>/dev/null || true
 
     log "Directories created"
 }
@@ -2362,13 +2362,13 @@ install_php() {
 install_recommended_services() {
     header "Recommended Services"
 
-    # Lite mode skips host PHP and host mail/DNS services: on a phone
-    # those are exactly the heavyweight hosting pieces the Lite profile
-    # drops (WordPress/PHP sites, mail, DNS). The panel's Docker Apps,
+    # Lite mode skips host PHP: on a phone
+    # that is exactly the heavyweight hosting piece the Lite profile
+    # drops (WordPress/PHP sites). The panel's Docker Apps,
     # Databases and Backups paths do not need them. Non-lite installs
     # are unchanged.
     if [ "$DOCKPANEL_LITE" = "1" ]; then
-        log "Lite mode: skipping host PHP and host mail/DNS services"
+        log "Lite mode: skipping host PHP"
     else
         # PHP-FPM (needed for WordPress, PHP sites)
         install_php
@@ -2679,7 +2679,6 @@ print_summary() {
     fi
     echo ""
     echo -e "  ${BOLD}Optional (install from panel):${NC}"
-    echo -e "    Mail server:    Settings → Services or Mail page → Install"
     echo -e "    Webmail:        Apps → Deploy → Roundcube"
     echo -e "    Spam filter:    Apps → Deploy → Rspamd"
     echo ""

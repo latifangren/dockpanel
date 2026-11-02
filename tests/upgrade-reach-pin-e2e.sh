@@ -51,10 +51,8 @@ SET=scripts/setup.sh
 ORCH=panel/backend/src/routes/backup_orchestrator.rs
 MAIN=panel/backend/src/main.rs
 RMOD=panel/backend/src/routes/mod.rs
-GITD=panel/backend/src/routes/git_deploys.rs
-DEPL=panel/backend/src/routes/deploy.rs
 
-for f in "$UPD" "$SET" "$ORCH" "$MAIN" "$RMOD" "$GITD" "$DEPL"; do
+for f in "$UPD" "$SET" "$ORCH" "$MAIN" "$RMOD"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -285,20 +283,7 @@ else
   echo "  - skipped §E/def (subject unreadable)"
 fi
 
-# Both webhook handlers must READ that constant. A literal repeated per file is
-# how the janitor and the handlers came to disagree in the first place.
-READERS=0
-for f in "$GITD" "$DEPL"; do
-  if T=$(subj code "$f"); then
-    has "$T" 'WEBHOOK_ATTEMPT_LIMIT' && READERS=$((READERS+1))
-  fi
-done
-if [ "$READERS" -eq 2 ]; then
-  ok "both webhook handlers read the shared constant ($READERS/2)"
-else
-  bad "only $READERS/2 webhook handlers read WEBHOOK_ATTEMPT_LIMIT — the literal has drifted back"
-fi
-
-echo
+# R5: both webhook handlers are gone (site-deploy in R3, git-deploy in R5);
+# the janitor in main.rs is the only reader left.
 echo "upgrade-reach: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -430,141 +430,15 @@ fi
 echo
 echo "§F the scheduled and webhook paths name the host too (s299)"
 
-DEPS=panel/backend/src/services/deploy_scheduler.rs
-PREV=panel/backend/src/services/preview_cleanup.rs
-GITD=panel/backend/src/routes/git_deploys.rs
 DEPR=panel/backend/src/routes/deploy.rs
 MET=panel/backend/src/services/metrics_collector.rs
 
-for f in "$DEPS" "$PREV" "$GITD" "$DEPR" "$MET"; do
+for f in "$DEPR" "$MET"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
-DEPS_S=$(subj "$DEPS" || true)
-PREV_S=$(subj "$PREV" || true)
-GITD_S=$(subj "$GITD" || true)
 DEPR_S=$(subj "$DEPR" || true)
 MET_S=$(subj "$MET" || true)
-
-# F1/F2 — the scheduler's two fleet-wide SELECTs must name the server. Both were
-# `SELECT id, name, ... FROM git_deploys` with no server_id at all, so the row
-# could not say which machine it meant even in principle.
-if [ -n "$DEPS_S" ]; then
-  SCHED=$(fnbody "$DEPS_S" "check_schedules")
-  if [ -z "$SCHED" ]; then
-    skip "F1/F2/F14/F15 — check_schedules body not extractable"
-  else
-    if [ "$(count "$SCHED" "SELECT[^;]*server_id[^;]*FROM git_deploys")" -ge 2 ]; then
-      ok "F1/F2 both scheduler queries (cron + one-time) select server_id"
-    else
-      bad "F1/F2 a scheduler query still reads git_deploys without server_id — the row cannot name its host"
-    fi
-
-    # F14 — the one-time clear is the ONLY thing between a scheduled deploy and
-    # an unbounded redeploy loop: a successful run leaves the row 'running',
-    # which the one-time SELECT does not exclude. It used to be swallowed
-    # with `.ok()`.
-    if has "$SCHED" "rows_affected\(\)"; then
-      ok "F14 the one-time schedule clear is checked before deploying"
-    else
-      bad "F14 the one-time schedule clear is unchecked — an uncleared row redeploys every tick"
-    fi
-
-    # F15 — reachability BEFORE the clear. Clearing first discards the
-    # operator's only copy of a one-time instruction for a server we then
-    # decline to deploy to. Order matters, so measure the order.
-    F15_RESOLVE=$(grep -n "for_server" <<< "$SCHED" | head -1 | cut -d: -f1)
-    F15_CLEAR=$(grep -n "scheduled_deploy_at = NULL" <<< "$SCHED" | head -1 | cut -d: -f1)
-    if [ -n "$F15_RESOLVE" ] && [ -n "$F15_CLEAR" ] && [ "$F15_RESOLVE" -lt "$F15_CLEAR" ]; then
-      ok "F15 the one-time path checks the server is reachable BEFORE clearing the schedule"
-    else
-      bad "F15 the one-time schedule is cleared before the server is known reachable — an unreachable member loses it silently"
-    fi
-  fi
-else
-  skip "F1/F2/F14/F15 — deploy_scheduler.rs not extractable"
-fi
-
-# F3/F4/F5 — trigger_deploy_task is where the host was decided. It took an
-# AgentClient and wrapped it `AgentHandle::Local(agent)` three lines before
-# fetching the row that carries server_id.
-if [ -n "$GITD_S" ]; then
-  TDT=$(fnbody "$GITD_S" "trigger_deploy_task")
-  if [ -z "$TDT" ]; then
-    skip "F3/F4/F5 — trigger_deploy_task body not extractable"
-  else
-    if has "$TDT" "AgentHandle::Local"; then
-      bad "F3 trigger_deploy_task still forces the LOCAL agent — every scheduled deploy runs on the panel host"
-    else
-      ok "F3 trigger_deploy_task no longer forces AgentHandle::Local"
-    fi
-
-    if has "$TDT" "for_server\(config\.server_id\)"; then
-      ok "F4 trigger_deploy_task resolves the agent from the ROW's own server_id"
-    else
-      bad "F4 trigger_deploy_task does not resolve for_server(config.server_id)"
-    fi
-
-    # The refusal must be a refusal: an early return, not a fallback.
-    if has "$TDT" "Refusing to act on a different host"; then
-      ok "F5 an unreachable deploy server is refused, never swapped for the local one"
-    else
-      bad "F5 trigger_deploy_task has no explicit refusal when the server is unreachable"
-    fi
-  fi
-else
-  skip "F3/F4/F5 — git_deploys.rs not extractable"
-fi
-
-# F6/F7 — the spawn sites. A migration is not done when the callee is done
-# (lesson #156): grep the SPAWN, not just the call.
-if [ -n "$MAIN_S" ]; then
-  if has "$MAIN_S" "deploy_scheduler::run\(s_db\.clone\(\), s_agents"; then
-    ok "F6 main.rs spawns deploy_scheduler with the REGISTRY"
-  else
-    bad "F6 deploy_scheduler is still spawned with the legacy single-agent handle"
-  fi
-  if has "$MAIN_S" "preview_cleanup::run\(s_db\.clone\(\), s_agents"; then
-    ok "F7 main.rs spawns preview_cleanup with the REGISTRY"
-  else
-    bad "F7 preview_cleanup is still spawned with the legacy single-agent handle"
-  fi
-else
-  skip "F6/F7 — main.rs not extractable"
-fi
-
-# F8/F9 — preview teardown. git_previews carries its own server_id since
-# 20260818000000, but the sweep still reads the deploy's copy through the JOIN —
-# that is the one the teardown's authority derives from, and this arm pins it.
-if [ -n "$PREV_S" ]; then
-  if [ "$(count "$PREV_S" "d\.server_id")" -ge 2 ]; then
-    ok "F8 both preview sweeps carry the git deploy's server_id through the JOIN"
-  else
-    bad "F8 a preview sweep still selects rows that cannot name their host"
-  fi
-  if has "$PREV_S" "for_server\(" && has "$PREV_S" "Refusing to act on a different host"; then
-    ok "F9 preview teardown resolves that server and refuses when unreachable"
-  else
-    bad "F9 preview teardown still tears down containers on whichever host the panel runs on"
-  fi
-else
-  skip "F8/F9 — preview_cleanup.rs not extractable"
-fi
-
-# F10 — the git-deploy webhook. Unauthenticated by design (it carries a secret,
-# not a session), so it has no ServerScope and reached for the local agent.
-if [ -n "$GITD_S" ]; then
-  WH=$(fnbody "$GITD_S" "webhook")
-  if [ -z "$WH" ]; then
-    skip "F10 — webhook body not extractable"
-  elif has "$WH" "for_server\(config\.server_id\)" && ! has "$WH" "AgentHandle::Local"; then
-    ok "F10 the git-deploy webhook deploys on the server the deployment lives on"
-  else
-    bad "F10 a webhook push still builds and replaces containers on the panel host"
-  fi
-else
-  skip "F10 — git_deploys.rs not extractable"
-fi
 
 # F11 — the SITE deploy webhook, same shape, different file. sites.server_id is
 # NOT NULL, and the handler used to select only `domain`.

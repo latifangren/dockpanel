@@ -78,10 +78,9 @@ SERVICE_INSTALLER_RS=panel/agent/src/routes/service_installer.rs
 IAC_RS=panel/agent/src/routes/iac.rs
 SECURITY_SCANNER_RS=panel/agent/src/services/security_scanner.rs
 DIAGNOSTICS_RS=panel/agent/src/services/diagnostics.rs
-MAIL_RS=panel/agent/src/routes/mail.rs
 for f in "$PKG_RS" "$PHP_RS" "$NGINX_ROUTE_RS" "$NGINX_SVC_RS" "$SITES_RS" \
          "$OWNERSHIP_RS" "$GIT_BUILD_SVC_RS" "$DOCKER_APPS_ROUTE_RS" "$DOCKER_APPS_SVC_RS" \
-         "$SERVICE_INSTALLER_RS" "$IAC_RS" "$SECURITY_SCANNER_RS" "$DIAGNOSTICS_RS" "$MAIL_RS"; do
+         "$SERVICE_INSTALLER_RS" "$IAC_RS" "$SECURITY_SCANNER_RS" "$DIAGNOSTICS_RS"; do
   [ -f "$f" ] || { echo "MISSING SUBJECT FILE: $f"; exit 1; }
 done
 
@@ -101,7 +100,6 @@ SRC_SERVICE_INSTALLER=$(strip "$SERVICE_INSTALLER_RS")
 SRC_IAC=$(strip "$IAC_RS")
 SRC_SECURITY_SCANNER=$(strip "$SECURITY_SCANNER_RS")
 SRC_DIAGNOSTICS=$(strip "$DIAGNOSTICS_RS")
-SRC_MAIL=$(strip "$MAIL_RS")
 SRC_SITES=$(strip "$SITES_RS")
 
 # Here-strings, never pipelines: a `grep -q` closing the pipe SIGPIPEs the
@@ -289,15 +287,7 @@ for label in "${!PROPAGATION[@]}"; do
   fi
 done
 
-# mail.rs is the one file that got this right BEFORE the fix existed — it
-# tries both literal paths for the panel's own vhost. Pin that this is still
-# true, as a control: if this ever regresses to hardcoding one path, the
-# panel's own webmail-domain detection breaks on whichever family it drops.
-if hasE "$SRC_MAIL" '"/etc/nginx/sites-enabled/dockpanel-panel.conf"' && hasE "$SRC_MAIL" '"/etc/nginx/conf.d/dockpanel-panel.conf"'; then
-  ok "mail.rs's pre-existing dual-path check for the panel's own vhost is still intact (control)"
-else
-  bad "mail.rs no longer tries both families for the panel's own vhost"
-fi
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
 
 echo
 echo "§8 the parked (disabled) directory: RHEL shares one dir, and a shared-dir scan is not double-counted"

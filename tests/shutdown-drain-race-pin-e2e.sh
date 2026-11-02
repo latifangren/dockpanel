@@ -99,14 +99,10 @@ NOTIFICATIONS=panel/backend/src/routes/notifications.rs
 NOTIFICATIONS_C=$(code "$NOTIFICATIONS")
 SITES=panel/backend/src/routes/sites.rs
 SITES_C=$(code "$SITES")
-GIT_DEPLOYS=panel/backend/src/routes/git_deploys.rs
-GIT_DEPLOYS_C=$(code "$GIT_DEPLOYS")
 DOCKER_APPS=panel/backend/src/routes/docker_apps.rs
 DOCKER_APPS_C=$(code "$DOCKER_APPS")
 SYSTEM=panel/backend/src/routes/system.rs
 SYSTEM_C=$(code "$SYSTEM")
-MIGRATION=panel/backend/src/routes/migration.rs
-MIGRATION_C=$(code "$MIGRATION")
 
 # ── §A AppState carries a shutdown broadcast ────────────────────────────────
 echo "── §A main.rs: AppState carries the same shutdown broadcast every background service gets ──"
@@ -263,12 +259,6 @@ else
   bad "D2 sites.rs::provision_log is missing the shutdown race"
 fi
 
-if has "$GIT_DEPLOYS_C" '\.take_until\(crate::helpers::shutdown_signal_fut\(&state\)\)'; then
-  ok "D3 git_deploys.rs::deploy_log takes_until shutdown"
-else
-  bad "D3 git_deploys.rs::deploy_log is missing the shutdown race"
-fi
-
 if has "$DOCKER_APPS_C" '\.take_until\(crate::helpers::shutdown_signal_fut\(&state\)\)'; then
   ok "D4 docker_apps.rs::deploy_log takes_until shutdown"
 else
@@ -281,20 +271,15 @@ else
   bad "D5 system.rs::install_log is missing the shutdown race"
 fi
 
-if has "$MIGRATION_C" '\.take_until\(crate::helpers::shutdown_signal_fut\(&state\)\)'; then
-  ok "D6 migration.rs::progress takes_until shutdown"
-else
-  bad "D6 migration.rs::progress is missing the shutdown race"
-fi
-
-# Whole-crate completeness control: exactly 6 Sse::new sites exist and exactly
-# 6 take_until(shutdown_signal_fut(...)) sites exist — if a 7th SSE handler is
+# Whole-crate completeness control: exactly 3 Sse::new sites exist and exactly
+# 3 take_until(shutdown_signal_fut(...)) sites exist — if a 4th SSE handler is
 # ever added without this race, this count catches it; if take_until count
 # ever drops below Sse::new count, a regression removed the race somewhere.
+# (R5: the git-deploy and migration SSE streams left with those features.)
 SSE_SITES=$(grep -rlE 'Sse::new' panel/backend/src/routes/*.rs | wc -l | tr -d ' ')
 SHUTDOWN_RACED_FILES=$(grep -rlE '\.take_until\(crate::helpers::shutdown_signal_fut\(&state\)\)' panel/backend/src/routes/*.rs | wc -l | tr -d ' ')
-if [ "$SSE_SITES" -eq 6 ] && [ "$SHUTDOWN_RACED_FILES" -eq 6 ]; then
-  ok "D7 (crate-wide control) all 6 Sse::new sites are exactly the 6 files racing shutdown — no gap, no drift"
+if [ "$SSE_SITES" -eq 3 ] && [ "$SHUTDOWN_RACED_FILES" -eq 3 ]; then
+  ok "D7 (crate-wide control) all 3 Sse::new sites are exactly the 3 files racing shutdown — no gap, no drift"
 else
   bad "D7 (crate-wide control) Sse::new sites=$SSE_SITES, shutdown-raced files=$SHUTDOWN_RACED_FILES — mismatch, investigate"
 fi

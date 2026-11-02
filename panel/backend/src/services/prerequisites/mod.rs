@@ -27,7 +27,6 @@
 //! |----------|---------|
 //! | [`dns`]  | does this domain point at this server yet? (v2.28.0) |
 //! | [`apps`] | can this container actually start with these settings? |
-//! | [`mail`] | are this domain's mail records actually published? |
 //! | [`backups`] | will these backups survive losing this machine? |
 //!
 //! Adding a vertical is a new submodule plus a route; it is never an edit to an
@@ -44,7 +43,6 @@ pub mod apps;
 pub mod backups;
 pub mod copy;
 pub mod dns;
-pub mod mail;
 
 // The DNS vertical shipped in v2.28.0 addressed as
 // `services::prerequisites::check_dns_points_here`, and its wiring was verified
@@ -91,8 +89,7 @@ pub struct DnsRecordHint {
     pub value: String,
     pub ttl: String,
     /// Why this record exists, in the user's terms. Optional because the DNS
-    /// vertical's single record needs no caption — the callout says it. A set of
-    /// five mail records does.
+    /// vertical's single record needs no caption — the callout says it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
     /// Whether this particular record was found published. `None` when the set
@@ -121,15 +118,6 @@ impl DnsRecordHint {
         }
     }
 
-    pub fn with_purpose(mut self, purpose: impl Into<String>) -> Self {
-        self.purpose = Some(purpose.into());
-        self
-    }
-
-    pub fn with_present(mut self, present: bool) -> Self {
-        self.present = Some(present);
-        self
-    }
 }
 
 /// The concrete thing that would fix an unmet prerequisite.
@@ -145,10 +133,6 @@ impl DnsRecordHint {
 pub enum Remediation {
     /// One DNS record to create. The DNS vertical's shape.
     DnsRecord { record: DnsRecordHint },
-    /// A set of records that must all exist — mail's MX/SPF/DKIM/DMARC, where
-    /// each carries its own `present` flag so the user sees which one is missing
-    /// rather than being told to re-check all five.
-    DnsRecords { records: Vec<DnsRecordHint> },
     /// A value the panel can supply on the user's behalf: the next free port, a
     /// generated password. `applies_to` names the form field it belongs in, so
     /// the frontend can offer to fill it rather than making the user retype it.

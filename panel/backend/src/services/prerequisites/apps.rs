@@ -155,8 +155,10 @@ pub fn check_required_env(intent: &AppDeployIntent, specs: &[AppEnvSpec]) -> Pre
 /// since long before this layer existed (`routes/sites.rs`); apps never got the
 /// equivalent, so a collision surfaces as a Docker error after the pull.
 ///
-/// Three sources, in order of authority: the host's own bind probe, then the
-/// containers DockPanel manages, then the sites it proxies.
+/// Two sources, in order of authority: the host's own bind probe, then the
+/// containers DockPanel manages. (R1 removed the third source — the sites
+/// it proxied — with the `sites` table; see the R1 comment in
+/// `gather_app_facts` in `routes::docker_apps`.)
 pub fn check_port_available(intent: &AppDeployIntent, facts: &HostFacts) -> PrereqResult {
     let port = intent.port;
 

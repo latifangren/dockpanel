@@ -52,8 +52,6 @@ cd "$(dirname "$0")/.."
 GATEWAY=panel/backend/src/routes/webhook_gateway.rs
 EXTENSIONS=panel/backend/src/routes/extensions.rs
 EXT_SVC=panel/backend/src/services/extensions.rs
-DEPLOY=panel/backend/src/routes/deploy.rs
-GITDEPLOYS=panel/backend/src/routes/git_deploys.rs
 REENCRYPT=panel/backend/src/services/credential_reencrypt.rs
 MIGRATION=panel/backend/migrations/20260830010000_widen_webhook_secret_columns.sql
 
@@ -103,54 +101,11 @@ has "$EXT_SVC" 'decrypt_credential_from_env\(&webhook_secret\)' \
   "B7 emit_event decrypts via the AppState-free helper (no AppState in this fn)"
 
 echo
-echo "== §D  deploy.rs: encrypt on write, decrypt what RETURNING * actually holds =="
-
-hasml "$DEPLOY" 'encrypted_webhook_secret = crate::services::secrets_crypto::encrypt_credential\(\s*&webhook_secret' \
-  "D1 set_config encrypts the freshly-minted secret"
-has "$DEPLOY" '\.bind\(&encrypted_webhook_secret\)' \
-  "D2 the INSERT...ON CONFLICT binds the encrypted local"
-hasml "$DEPLOY" 'config\.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy\(\s*&config\.webhook_secret' \
-  "D3 set_config decrypts the RETURNING-* value in place (not the pre-write local)"
-# Ordering/correctness control: ON CONFLICT's DO UPDATE never assigns
-# webhook_secret, so an update-existing call must return the ORIGINAL stored
-# secret, not the freshly-generated one that was silently discarded.
-has "$DEPLOY" 'repo_url = \$2, branch = \$3, deploy_script = \$4, auto_deploy = \$5, atomic_deploy = \$7, keep_releases = \$8, updated_at = NOW\(\)' \
-  "D4 CONTROL: DO UPDATE's SET list still omits webhook_secret (confirms decrypt-what-came-back is the correct fix, not a stale assumption)"
-has "$DEPLOY" 'let config = config\.map\(\|mut c\| \{' \
-  "D5 get_config decrypts before returning"
-hasml "$DEPLOY" 'stored_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy\(\s*&config\.webhook_secret' \
-  "D6 the inbound webhook receiver decrypts before the ct_eq compare"
-has "$DEPLOY" 'secret\.as_bytes\(\)\.ct_eq\(stored_secret\.as_bytes\(\)\)' \
-  "D7 the ct_eq compare uses the DECRYPTED local, not config.webhook_secret directly"
-
-echo
-echo "== §E  git_deploys.rs: encrypt on create, decrypt on every read + inbound verify =="
-
-hasml "$GITDEPLOYS" 'encrypted_webhook_secret = crate::services::secrets_crypto::encrypt_credential\(\s*&webhook_secret' \
-  "E1 create() encrypts the freshly-minted secret"
-has "$GITDEPLOYS" '\.bind\(&encrypted_webhook_secret\)' \
-  "E2 the INSERT binds the encrypted local"
-N=$(count "$GITDEPLOYS" 'deploy\.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy')
-if [ "$N" -ge 3 ]; then
-  ok "E3 decrypted in place at create/get_one/update (>=3 call sites, found $N)"
-else
-  bad "E3 decrypted in place at create/get_one/update (found $N, want >=3)"
-fi
-hasml "$GITDEPLOYS" 'd\.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy\(\s*&d\.webhook_secret' \
-  "E4 list() decrypts each row in the same loop that masks github_token"
-hasml "$GITDEPLOYS" 'stored_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy\(\s*&config\.webhook_secret' \
-  "E5 the inbound webhook receiver decrypts before hashing"
-has "$GITDEPLOYS" 'h\.update\(stored_secret\.as_bytes\(\)\)' \
-  "E6 the stored-side SHA256 hash is computed over the DECRYPTED value"
-
-echo
-echo "== §F  credential_reencrypt.rs's registry carries all 5 new subjects =="
+echo "== §F  credential_reencrypt.rs's registry carries the surviving webhook-secret subjects =="
 
 for subj in \
   '"webhook_endpoints", "id", "verify_secret"' \
-  '"extensions", "id", "webhook_secret"' \
-  '"deploy_configs", "id", "webhook_secret"' \
-  '"git_deploys", "id", "webhook_secret"'; do
+  '"extensions", "id", "webhook_secret"'; do
   esc=$(printf '%s' "$subj" | sed 's/[.[\*^$()+?{|]/\\&/g')
   if grep -qE -- "\($esc\)" "$REENCRYPT"; then
     ok "F1 SIMPLE_SUBJECTS contains ($subj)"
@@ -161,9 +116,7 @@ done
 
 for pair in \
   '"webhook_gateway", "webhook_endpoints.verify_secret"' \
-  '"extensions", "extensions.webhook_secret"' \
-  '"deploy", "deploy_configs.webhook_secret"' \
-  '"git_deploys", "git_deploys.webhook_secret"'; do
+  '"extensions", "extensions.webhook_secret"'; do
   esc=$(printf '%s' "$pair" | sed 's/[.[\*^$()+?{|]/\\&/g')
   if grep -qE -- "\($esc\)" "$REENCRYPT"; then
     ok "F2 COVERED_MODULES pairs ($pair)"

@@ -241,26 +241,6 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
-section "5. MAIL SYSTEM"
-# ═══════════════════════════════════════════════════════════════════════
-
-# Check mail service status (install not tested — requires Postfix)
-MAIL_DOMAINS=$(api_get "/mail/domains")
-if echo "$MAIL_DOMAINS" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
-    ok "Mail domains endpoint works"
-else
-    fail "Mail domains endpoint failed"
-fi
-
-# Check mail install status via agent
-MAIL_INSTALL_STATUS=$(api_get_status "/agent/mail/status")
-if [ "$MAIL_INSTALL_STATUS" = "200" ]; then
-    ok "Mail status endpoint responds"
-else
-    skip "Mail status (HTTP $MAIL_INSTALL_STATUS)"
-fi
-
-# ═══════════════════════════════════════════════════════════════════════
 section "6. MIGRATION WIZARD"
 # ═══════════════════════════════════════════════════════════════════════
 

@@ -84,15 +84,6 @@ echo "── Git Deploys ──"
 test_api GET /api/git-deploys "List git deploys"
 
 echo ""
-echo "── DNS ──"
-test_api GET /api/dns/zones "List DNS zones"
-
-echo ""
-echo "── Mail ──"
-test_api GET /api/mail/domains "Mail domains"
-test_api GET /api/mail/queue "Mail queue"
-
-echo ""
 echo "── Backup Manager ──"
 test_api GET /api/backup-orchestrator/health "Backup health"
 test_api GET /api/backup-orchestrator/policies "Backup policies"

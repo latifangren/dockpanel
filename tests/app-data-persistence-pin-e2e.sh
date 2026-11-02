@@ -463,21 +463,14 @@ if B=$(subj "$BE_APPS"); then
   fi
 fi
 
-if M=$(subj "$BE_MAIL"); then
-  # A census of the INSTALLERS, keyed on what they do rather than on a list.
-  short=$(grep -nE '\.post\("/mail/(install|uninstall|rspamd/install|webmail/install)"' <<< "$M")
-  if [ -z "$short" ]; then
-    ok "D2 no mail installer is dispatched on the 60s verb"
-  else
-    bad "D2 mail installer(s) still on the short verb: $(tr -s ' ' <<< "$short" | head -4)"
-  fi
-  n_ml=$(grep -cE '\.post_long\("/mail/(install|uninstall|rspamd/install|webmail/install)"' <<< "$M")
-  if [ "$n_ml" -eq 4 ]; then
-    ok "D2b all four mail installers use post_long"
-  else
-    bad "D2b $n_ml of 4 mail installers use post_long"
-  fi
+# R4: routes/mail.rs (the mail-installer dispatcher) was deleted with mail
+# hosting. The D2/D2b verb census has no subject any more; pin the absence.
+if [ -f "$BE_MAIL" ]; then
+  bad "D2 routes/mail.rs still exists — mail hosting was removed in R4"
+else
+  ok "D2 routes/mail.rs is gone (mail hosting removed in R4)"
 fi
+
 
 if Y=$(subj "$BE_SYS"); then
   if grep -q 'post("/services/install/powerdns"' <<< "$Y"; then

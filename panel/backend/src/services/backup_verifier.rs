@@ -50,24 +50,6 @@ async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
         return Ok(());
     }
 
-    // Pick up to 3 unverified site backups (created in last 7 days, not yet verified).
-    // `s.server_id` rides the JOIN this query already makes — the same shape
-    // `preview_cleanup` uses, and the reason no migration is needed for `backups`.
-    // It is NOT NULL (20260319000000_multi_server.sql:76) and a site never moves
-    // hosts: nothing in the codebase issues `UPDATE sites SET server_id`.
-    let site_backups: Vec<(Uuid, String, String, Uuid)> = sqlx::query_as(
-        "SELECT b.id, s.domain, b.filename, s.server_id FROM backups b \
-         JOIN sites s ON s.id = b.site_id \
-         LEFT JOIN backup_verifications bv ON bv.backup_type = 'site' AND bv.backup_id = b.id \
-         WHERE bv.id IS NULL AND b.created_at > NOW() - INTERVAL '7 days' \
-         ORDER BY b.created_at DESC LIMIT 3"
-    )
-    .fetch_all(db).await.map_err(|e| e.to_string())?;
-
-    for (backup_id, domain, filename, server_id) in &site_backups {
-        verify_one(db, agents, *server_id, "site", *backup_id, domain, filename, None, None).await;
-    }
-
     // Database backups resolve their server through the site that owns the database,
     // not through `database_backups.server_id`: that column is nullable and a policy
     // with no server writes NULL into it. `sites.server_id` is NOT NULL, so this join
@@ -115,7 +97,7 @@ async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
     // "considered", not "verified": a row whose server is unreachable is skipped
     // above, and the old wording printed the same line whether every backup passed
     // or every one errored.
-    let total = site_backups.len() + db_backups.len() + vol_backups.len();
+    let total = db_backups.len() + vol_backups.len();
     if total > 0 {
         tracing::info!("Backup verifier: considered {total} backups");
     }
@@ -165,10 +147,6 @@ async fn verify_one(
     };
 
     let result = match backup_type {
-        "site" => {
-            let body = serde_json::json!({ "domain": name, "filename": filename });
-            agent.post("/backups/verify/site", Some(body)).await
-        }
         "database" => {
             let body = serde_json::json!({
                 "db_type": db_type.unwrap_or("postgres"),

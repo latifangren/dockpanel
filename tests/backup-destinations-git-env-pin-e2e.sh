@@ -33,6 +33,8 @@
 #
 # Pure source analysis: no box, no network, no build.
 
+# R5 (2026-11-02): §1-§4 pinned the git-deploy request body (git_deploys.rs);
+# removed with the feature. This file now pins only the backup-destination half (§5-§10).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -41,8 +43,6 @@ FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  \033[0;32m✓\033[0m %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  \033[0;31m✗\033[0m %s\n' "$1"; }
 
-GD_RS=panel/backend/src/routes/git_deploys.rs
-AGENT_GB=panel/agent/src/routes/git_build.rs
 BD_RS=panel/backend/src/routes/backup_destinations.rs
 BSCHED_RS=panel/backend/src/services/backup_scheduler.rs
 BPOL_RS=panel/backend/src/services/backup_policy_executor.rs
@@ -51,7 +51,7 @@ ORCH_TSX=panel/frontend/src/pages/BackupOrchestrator.tsx
 SETTINGS_TSX=panel/frontend/src/pages/Settings.tsx
 BACKUPS_TSX=panel/frontend/src/pages/Backups.tsx
 
-for f in "$GD_RS" "$AGENT_GB" "$BD_RS" "$BSCHED_RS" "$BPOL_RS" "$BSCHEDR_RS" \
+for f in "$BD_RS" "$BSCHED_RS" "$BPOL_RS" "$BSCHEDR_RS" \
          "$ORCH_TSX" "$SETTINGS_TSX" "$BACKUPS_TSX"; do
   [ -f "$f" ] || { echo "missing file: $f"; exit 1; }
 done
@@ -105,109 +105,12 @@ countf() { code_of "$1" | grep -cF -- "$2" || true; }
 
 echo "§0 the source these pins read survives comment stripping"
 STRIP_OK=0
-for f in "$GD_RS" "$AGENT_GB" "$BD_RS" "$BSCHED_RS" "$BPOL_RS" "$BSCHEDR_RS" \
+for f in "$BD_RS" "$BSCHED_RS" "$BPOL_RS" "$BSCHEDR_RS" \
          "$ORCH_TSX" "$SETTINGS_TSX" "$BACKUPS_TSX"; do
   assert_readable "$f" && STRIP_OK=$((STRIP_OK+1))
 done
-if [ "$STRIP_OK" -eq 9 ]; then
-  ok "all 9 inspected files survive stripping"
-fi
-
-echo
-echo "§1 the panel spells the environment the way the agent reads it (#94)"
-
-# DISCOVERY, not a restated constant: the accepted spellings are parsed out of
-# the agent's struct, and the sent spelling out of the panel's one builder. A
-# rename on either side has to survive being compared with the other.
-AGENT_FIELD=$(code_of "$AGENT_GB" \
-  | awk '/struct DeployRequest/,/^}/' \
-  | grep -A1 -E '#\[serde\(default(, alias)?' \
-  | grep -oE '^[ \t]*[a-z_]+: HashMap<String, String>' \
-  | grep -oE '[a-z_]+' | head -1)
-AGENT_ALIASES=$(code_of "$AGENT_GB" \
-  | awk '/struct DeployRequest/,/^}/' \
-  | grep -oE 'alias = "[a-z_]+"' | grep -oE '"[a-z_]+"' | tr -d '"')
-AGENT_KEYS=$(printf '%s\n%s\n' "$AGENT_FIELD" "$AGENT_ALIASES" | grep -c . || true)
-
-if [ -n "$AGENT_FIELD" ] && [ "$AGENT_KEYS" -ge 2 ]; then
-  ok "agent DeployRequest env field discovered: '$AGENT_FIELD' (+$((AGENT_KEYS-1)) alias) "
-else
-  bad "could not discover the agent's env field and at least one alias — a broken pattern must not read as a clean sweep (#100)"
-fi
-
-PANEL_KEY=$(code_of "$GD_RS" \
-  | awk '/fn build_deploy_body/,/^}/' \
-  | grep -oE '"(env|env_vars)":' | grep -oE 'env(_vars)?' | head -1)
-
-if [ -n "$PANEL_KEY" ]; then
-  ok "panel build_deploy_body sends the environment as '$PANEL_KEY'"
-else
-  bad "build_deploy_body sends no env key at all — the deploy body has lost the environment again"
-fi
-
-# Both sides must be non-empty BEFORE they are compared. Without this guard the
-# comparison passes when neither side was discovered: the accepted-spellings list
-# is then two blank lines and `grep -x ""` matches the blank PANEL_KEY. Watched
-# it do exactly that against the pre-fix tree, where it was the one arm of this
-# section that stayed green while the defect it names was present.
-if [ -z "$AGENT_FIELD" ] || [ -z "$PANEL_KEY" ]; then
-  bad "cannot compare spellings: agent field='$AGENT_FIELD' panel key='$PANEL_KEY' — one side was not discovered, which is not a pass"
-elif printf '%s\n%s\n' "$AGENT_FIELD" "$AGENT_ALIASES" | grep -cx -- "$PANEL_KEY" >/dev/null; then
-  ok "'$PANEL_KEY' is a spelling the agent accepts"
-else
-  bad "the panel sends '$PANEL_KEY' and the agent accepts only: $(printf '%s %s' "$AGENT_FIELD" "$AGENT_ALIASES") — this is #94 exactly"
-fi
-
-echo
-echo "§2 never both spellings in one body (#94's own fix would break every deploy)"
-
-# serde rejects a payload carrying a field AND its alias as a duplicate field.
-BOTH=$(code_of "$GD_RS" | awk '/fn build_deploy_body/,/^}/' | grep -cE '"env(_vars)?":' || true)
-if [ "$BOTH" -eq 1 ]; then
-  ok "build_deploy_body sets exactly one env key"
-else
-  bad "build_deploy_body sets $BOTH env keys — serde treats a field plus its alias as a duplicate field and rejects the whole request"
-fi
-
-echo
-echo "§3 every deploy body comes from the one builder (#94's fifth call site)"
-
-DEPLOY_CALLS=$(countf "$GD_RS" '"/git/deploy"')
-BUILDER_CALLS=$(countre "$GD_RS" 'build_deploy_body\(DeployBody \{')
-
-if [ "$DEPLOY_CALLS" -ge 5 ]; then
-  ok "found $DEPLOY_CALLS callers of /git/deploy to account for"
-else
-  bad "found only $DEPLOY_CALLS /git/deploy callers — the discovery pattern is broken, not the code (#100)"
-fi
-
-if [ "$BUILDER_CALLS" -eq "$DEPLOY_CALLS" ]; then
-  ok "all $DEPLOY_CALLS deploy bodies are built by build_deploy_body"
-else
-  bad "$DEPLOY_CALLS callers of /git/deploy but $BUILDER_CALLS uses of build_deploy_body — a body is being hand-rolled again, which is how auto-rollback lost env, memory_mb and cpu_percent"
-fi
-
-# The struct has no Default and no Option-defaulting, so every caller must name
-# every field. If that stops being true, an omission goes quiet again.
-if hasre "$GD_RS" 'struct DeployBody' && ! hasre "$GD_RS" 'impl Default for DeployBody'; then
-  ok "DeployBody has no Default — a caller cannot omit a field silently"
-else
-  bad "DeployBody gained a Default; omitting env or memory_mb would compile again"
-fi
-
-echo
-echo "§4 the environment reaching the agent is a map of strings (#94's aftermath)"
-
-if hasre "$GD_RS" 'fn env_object'; then
-  ok "env_vars is coerced before it is sent"
-else
-  bad "no env_object coercion — a non-string value in the env_vars JSONB now fails the WHOLE deploy at the agent's HashMap<String, String>"
-fi
-
-if hasre "$GD_RS" '"env": env_object\(' ; then
-  ok "the deploy body's env comes from the coercion, not from the raw column"
-else
-  bad "build_deploy_body passes env_vars through without coercion"
+if [ "$STRIP_OK" -eq 7 ]; then
+  ok "all 7 inspected files survive stripping"
 fi
 
 echo

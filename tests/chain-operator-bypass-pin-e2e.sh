@@ -53,11 +53,13 @@
 #    tests red against the disabled guard, then green against the restored one.
 #
 #   run: bash tests/chain-operator-bypass-pin-e2e.sh
+# R5 (2026-11-02): the backend save-time gate is_safe_shell_command was removed
+# with git-deploy/cron; §B and the §B2 backend arms are deleted. Only the
+# agent-side gate and the Dozzle arms remain.
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CMDFILTER="$REPO/panel/agent/src/services/command_filter.rs"
-BACKEND_MOD="$REPO/panel/backend/src/routes/mod.rs"
 DOCKER_APPS_BACKEND="$REPO/panel/backend/src/routes/docker_apps.rs"
 
 PASS=0; FAIL=0
@@ -77,28 +79,12 @@ has "$CMDFILTER" 'fn test_cron_bare_chain_operators_rejected_paired_operators_ke
   "a dedicated regression test exists for the bypass PoC strings + the && / || legitimate case"
 
 echo
-echo "== B. backend is_safe_shell_command carries the identical fix (cron/pre_build_cmd/post_deploy_cmd save-time gate) =="
-
-hasE "$BACKEND_MOD" 'if cmd.contains\(.;.\) \{' \
-  "is_safe_shell_command rejects a bare ; unconditionally"
-has "$BACKEND_MOD" 'if i - start != 2' \
-  "is_safe_shell_command scans runs of | the same way as the agent-side fix"
-has "$BACKEND_MOD" 'fn shell_command_rejects_bare_chain_operators_keeps_paired_operators' \
-  "a dedicated regression test exists on the backend side too"
-
-echo
 echo "== B2. the & bypass the first fix missed: bare & is now rejected, && kept =="
 
 has "$CMDFILTER" "if bytes\[i\] == b'&'" \
   "is_safe_cron_command scans runs of & the same way it scans runs of |"
 has "$CMDFILTER" 'fn test_cron_bare_ampersand_rejected_paired_kept' \
   "a dedicated regression test exists for the & bypass PoC strings + the && legitimate case"
-has "$BACKEND_MOD" "if bytes\[i\] == b'&'" \
-  "is_safe_shell_command scans runs of & the same way it scans runs of |"
-has "$BACKEND_MOD" 'fn shell_command_rejects_bare_ampersand_keeps_paired' \
-  "a dedicated regression test exists on the backend side too"
-
-echo
 echo "== C. Dozzle sidecar: forced nginx password-protection on deploy =="
 
 has "$DOCKER_APPS_BACKEND" 'const SIDECAR_TEMPLATES: &\[&str\] = &\["dozzle"\]' \

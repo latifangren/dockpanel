@@ -96,10 +96,8 @@ countin()   { fnbody "$1" "$2" | grep -Fc -- "$3"; }
 
 IMAGE_SCANNER=panel/agent/src/services/image_scanner.rs
 SBOM_SCANNER=panel/agent/src/services/sbom_scanner.rs
-CMS=panel/agent/src/services/cms.rs
-WORDPRESS=panel/agent/src/services/wordpress.rs
 
-for f in "$IMAGE_SCANNER" "$SBOM_SCANNER" "$CMS" "$WORDPRESS"; do
+for f in "$IMAGE_SCANNER" "$SBOM_SCANNER"; do
   [ -f "$f" ] || { echo "missing source file: $f"; exit 1; }
 done
 
@@ -174,56 +172,10 @@ else
   bad "generate_sbom is missing kill_on_drop(true) — a timed-out SBOM run can orphan"
 fi
 
-echo
-echo "── 5. S4: cms.rs — a shared credential-file permission helper, wired into the 4 CMS installers that hold DB creds ──"
-if bodyhasre "$CMS" "^async fn secure_credential_file" 'chmod.*640'; then
-  ok "secure_credential_file chmods its target to 640"
-else
-  bad "secure_credential_file no longer chmods to 640 — the helper's own body changed shape"
-fi
-for pair in "install_laravel:env_file" "install_codeigniter:env_file"; do
-  fn="${pair%%:*}"; var="${pair##*:}"
-  if bodyhasre "$CMS" "^pub async fn $fn" "secure_credential_file\(&$var\)"; then
-    ok "$fn now secures its .env file's permissions"
-  else
-    bad "$fn no longer calls secure_credential_file on its .env file"
-  fi
-done
-if bodyhas "$CMS" "^pub async fn install_drupal" "secure_credential_file" && \
-   bodyhas "$CMS" "^pub async fn install_drupal" "settings.php"; then
-  ok "install_drupal secures drush's generated settings.php"
-else
-  bad "install_drupal no longer secures settings.php's permissions"
-fi
-if bodyhas "$CMS" "^pub async fn install_joomla" "secure_credential_file" && \
-   bodyhas "$CMS" "^pub async fn install_joomla" "configuration.php"; then
-  ok "install_joomla secures the generated configuration.php"
-else
-  bad "install_joomla no longer secures configuration.php's permissions"
-fi
-# Positive control: Symfony's install() takes no db_pass at all (confirmed by
-# its own signature) — it must NOT be wired, or a future blanket copy-paste
-# would be chmod'ing a file that was never proven to hold credentials here.
-if bodyhas "$CMS" "^pub async fn install_symfony" "secure_credential_file"; then
-  bad "install_symfony now calls secure_credential_file — re-check whether Symfony's .env gained DB creds in this function (if so, this control is stale, not a regression)"
-else
-  ok "install_symfony correctly left unwired (control: its own signature takes no db_pass)"
-fi
-
-echo
-echo "── 6. S4: wordpress.rs::install — tightens wp-config.php after wp-cli writes it ──"
-if bodyhas "$WORDPRESS" "^pub async fn install\(" "chmod" && \
-   bodyhas "$WORDPRESS" "^pub async fn install\(" "640" && \
-   bodyhas "$WORDPRESS" "^pub async fn install\(" "wp-config.php"; then
-  ok "install() chmods wp-config.php to 640"
-else
-  bad "install() no longer tightens wp-config.php's permissions"
-fi
-if bodyhas "$WORDPRESS" "^pub async fn install\(" "www-data:www-data"; then
-  ok "install() still chowns the site to www-data:www-data (positive control — the chown wasn't replaced, only supplemented)"
-else
-  bad "install() no longer chowns the site at all — unrelated regression"
-fi
+# R6 (2026-11-02): sections 5-6 pinned services/cms.rs (secure_credential_file
+# and its CMS installers) and services/wordpress.rs::install (wp-config.php
+# tightening), both deleted in the R6 hosting removal. Deleted, not weakened:
+# the functions no longer exist anywhere in the tree.
 
 echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

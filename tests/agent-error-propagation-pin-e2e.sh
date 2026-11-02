@@ -11,9 +11,10 @@
 #              body) was stringified and every non-2xx became one generic 502.
 #   frontend — api.ts rewrote ANY 502 into the "agent offline" sentence.
 #
-# Plus the WAF half of #92: the installer's unicode.mapping fallback wrote a
-# ZERO-BYTE file, which ModSecurity cannot parse, so nginx -t failed the first
-# time a site enabled the WAF — after the installer had reported success.
+# R6 (2026-11-02): the WAF half of #92 (§6, the installer's unicode.mapping
+# fallback) is deleted with install_waf in the R6 service_installer split.
+# Deleted, not weakened: the installer no longer exists, and its vendored
+# mapping asset is orphaned with it.
 #
 # ⚠ Every source check below strips comments before searching. This file's own
 # subject matter is spelled out in the comments of the code it inspects, so a
@@ -32,8 +33,6 @@ bad() { FAIL=$((FAIL+1)); printf '  ✗ %s\n' "$1"; }
 ERR_RS=panel/backend/src/error.rs
 API_TS=panel/frontend/src/api.ts
 SVC_RS=panel/agent/src/routes/service_installer.rs
-MIG_TSX=panel/frontend/src/pages/Migration.tsx
-MAPPING=panel/agent/assets/unicode.mapping
 
 # Strip block comments, then whole-line `//` comments. `//` is only stripped at
 # the start of a (trimmed) line: stripping it mid-line would blank the inside
@@ -132,78 +131,8 @@ else
   bad "no upstream_error — Stripe/Cloudflare failures have nowhere honest to go"
 fi
 
-# dns.rs legitimately talks to BOTH: Cloudflare over reqwest and the agent for
-# the cloudflared service. The separation is type-enforced (agent_error only
-# accepts AgentError, which a reqwest::Error is not), so what is pinned here is
-# that the Cloudflare half has somewhere honest to go.
-if hasre panel/backend/src/routes/dns.rs 'upstream_error\("Cloudflare'; then
-  ok "dns.rs reports Cloudflare failures as Cloudflare failures"
-else
-  bad "dns.rs no longer routes Cloudflare failures through upstream_error"
-fi
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
 
-echo
-echo "§6 the WAF's unicode.mapping cannot be empty (#92)"
-
-if [ -f "$MAPPING" ]; then
-  ok "the vendored mapping asset is in the tree"
-else
-  bad "panel/agent/assets/unicode.mapping is missing — the include_str! will not compile"
-fi
-
-SZ=$(wc -c < "$MAPPING" 2>/dev/null || echo 0)
-if [ "$SZ" -gt 40000 ]; then
-  ok "the mapping asset is a real file ($SZ bytes)"
-else
-  bad "the mapping asset is $SZ bytes — a truncated mapping fails nginx -t exactly like the empty one did"
-fi
-
-if [ "$(grep -cE '^20127' "$MAPPING" 2>/dev/null || echo 0)" -gt 0 ]; then
-  ok "the asset defines code page 20127, which modsecurity.conf names"
-else
-  bad "the asset has no 20127 section — the code page modsecurity.conf asks for is absent"
-fi
-
-if hasre "$SVC_RS" 'include_str!\("\.\./\.\./assets/unicode\.mapping"\)'; then
-  ok "the mapping rides the binary instead of depending on distro packaging"
-else
-  bad "unicode.mapping is not embedded — Debian 13 ships no copy, so the install writes nothing usable"
-fi
-
-# NEGATIVE: the zero-byte fallback. Written as a regex over CODE so the comment
-# explaining why it was removed cannot satisfy it.
-if hasre "$SVC_RS" 'write\("/etc/modsecurity/unicode\.mapping", ""\)'; then
-  bad "the empty-file fallback is back — it creates a file ModSecurity cannot parse and reports the install as successful"
-else
-  ok "no zero-byte unicode.mapping fallback"
-fi
-
-if hasre "$SVC_RS" 'c\.contains\("20127"\)'; then
-  ok "the installer verifies the mapping it just wrote, rather than assuming it"
-else
-  bad "the installer does not check unicode.mapping after writing — #45's shape, and the reason #92 shipped as a success"
-fi
-
-echo
-echo "§7 the migration field asks for a path the agent accepts (#90)"
-
-if hasre "$MIG_TSX" 'placeholder="/var/backups/'; then
-  ok "the placeholder suggests an accepted directory"
-else
-  bad "the Backup File Path placeholder does not suggest /var/backups/"
-fi
-
-if hasre "$MIG_TSX" 'placeholder="/home/'; then
-  bad "the placeholder still suggests /home/, which routes/migration.rs is written to refuse"
-else
-  ok "the placeholder no longer suggests a path the agent rejects"
-fi
-
-if has "$MIG_TSX" '/var/backups/' && has "$MIG_TSX" '/tmp/'; then
-  ok "the field states the real constraint to the operator"
-else
-  bad "the helper text does not state where the archive must live"
-fi
 
 echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

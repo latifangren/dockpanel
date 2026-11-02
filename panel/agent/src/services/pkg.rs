@@ -191,6 +191,8 @@ fn php_rpm_name(debian: &str) -> &str {
 ///
 /// Versions above 8.3 need the third-party remi repository, which is not wired;
 /// callers get the closest available stream and are told which one they got.
+// R6: callers were PHP/site code deleted in R6. Retained as package-manager surface; pins assert its subprocess safety.
+#[allow(dead_code)]
 pub async fn enable_php_stream(version: &str) -> Result<(), String> {
     let Some(inst) = installer().await else {
         return Err("No supported package manager found".into());
@@ -221,6 +223,8 @@ pub async fn enable_php_stream(version: &str) -> Result<(), String> {
 /// one package) while showing none of them running (the running-check and the
 /// socket path are both Debian-shaped). Returns `None` on apt boxes, where the
 /// per-version packages answer the question directly.
+// R6: callers were PHP/site code deleted in R6. Retained as package-manager surface; pins assert its subprocess safety.
+#[allow(dead_code)]
 pub async fn installed_php_version() -> Option<String> {
     if manager().await != PkgMgr::Rpm {
         return None;
@@ -258,6 +262,8 @@ pub async fn installed_php_version() -> Option<String> {
 /// knew about this split (see [`crate::routes::php::socket_exists`]), but
 /// `nginx.rs::put_site()` re-implemented a Debian-only existence check
 /// instead of sharing it. This is the single source of truth both now call.
+// R6: callers were PHP/site code deleted in R6. Retained as package-manager surface; pins assert its subprocess safety.
+#[allow(dead_code)]
 pub async fn resolve_php_fpm_socket(version: &str) -> Option<String> {
     let debian = format!("/run/php/php{version}-fpm.sock");
     if std::path::Path::new(&debian).exists() {
@@ -273,6 +279,8 @@ pub async fn resolve_php_fpm_socket(version: &str) -> Option<String> {
 
 /// The PHP module streams this box offers, newest first. Empty on apt boxes,
 /// where versions come from the archive rather than a stream.
+// R6: callers were PHP/site code deleted in R6. Retained as package-manager surface; pins assert its subprocess safety.
+#[allow(dead_code)]
 pub async fn php_streams() -> Vec<String> {
     let Some(inst) = installer().await else {
         return Vec::new();
@@ -375,6 +383,8 @@ fn rpm_service_name(debian_unit: &str) -> &str {
 /// missing name with `Error: Unable to find a match` and installs nothing
 /// (verified s266). So the probe has to exist on both sides, or porting the
 /// installer would quietly drop the protection that lesson bought.
+// R6: callers were PHP/site code deleted in R6. Retained as package-manager surface; pins assert its subprocess safety.
+#[allow(dead_code)]
 pub async fn available(package: &str) -> bool {
     match installer().await {
         Some(Installer::AptGet) => {
@@ -430,6 +440,8 @@ pub async fn install(packages: &[&str]) -> Result<(), String> {
 /// the extensions apt can actually supply). Promoting it into the module means
 /// the RHEL side inherits the protection instead of re-learning #73 the
 /// expensive way.
+// R6: callers were PHP/site code deleted in R6. Retained as package-manager surface; pins assert its subprocess safety.
+#[allow(dead_code)]
 pub async fn install_available(packages: &[&str]) -> Result<Vec<String>, String> {
     let mut wanted = Vec::new();
     let mut skipped = Vec::new();
@@ -671,68 +683,6 @@ pub async fn ufw_refusal_reason() -> Option<String> {
     }
 }
 
-/// Why the panel will not install the mail stack on this box, or `None` where
-/// it will.
-///
-/// **RETIRED for the RHEL family at s268, because the drill was run.** The
-/// refusal existed from s266 to s268 with the honest reason that nothing past
-/// the packages had been driven there. It has now been driven end to end on
-/// Rocky 9.8: a message travelled between two real domains over the public
-/// internet and arrived `dkim=pass`, verified by the receiving box's own
-/// OpenDKIM against a key published in real DNS.
-///
-/// **The refusal's own premise turned out to be wrong in both directions**, and
-/// that is the part worth keeping. It claimed "the packages install" — they did
-/// not, because EPEL's `opendkim` needs two CRB libraries and CRB was never
-/// enabled; the claim came from a name-availability probe rather than from a
-/// transaction. And it warned about the Debian failure mode (postinst starts
-/// the daemons, so "installed and running" is true for free), which does not
-/// occur here at all, because RHEL does not start services on install. What it
-/// did not name is what actually broke: `/var/vmail` labelled `var_t` so
-/// Dovecot could not write a single maildir, and a Dovecot built without
-/// Argon2 so no mailbox could be opened. Five findings, none of them the one
-/// the refusal was written about.
-///
-/// What remains is a REAL precondition rather than a family ban: the package
-/// set has to be installable. On the RHEL family that means CRB is enabled —
-/// `setup.sh` does it now, but a box installed before s268, or one whose repo
-/// config was changed by hand, would otherwise fail deep inside the installer
-/// with `nothing provides libmilter.so.1.0`. Checking it here turns that into
-/// a sentence an operator can act on (#90b).
-pub async fn mail_refusal_reason() -> Option<String> {
-    None
-}
-
-/// Turn a raw package-manager failure from the mail install into something an
-/// operator can act on.
-///
-/// **This replaced a precondition GATE, and the reason is worth keeping.** The
-/// first attempt at retiring the blanket refusal put an `available("opendkim")`
-/// probe in front of the installer. It refused a Rocky 9.8 box where the
-/// packages were perfectly installable, because `dnf` run inside the agent's
-/// sandbox answers `Config error: [Errno 30] Read-only file system:
-/// '/var/log/dnf.log'` — a failure that has nothing to do with availability.
-/// A probe that cannot distinguish "not installable" from "the probe could not
-/// run" must not be allowed to refuse: that is the same "refusal that stopped
-/// being true" this module warns about, introduced while fixing one.
-///
-/// So the check moved to where the truth already is. The transaction either
-/// succeeds or reports precisely why, and `nothing provides` on the RHEL family
-/// has one overwhelmingly likely cause — EPEL enabled without CRB, which EPEL
-/// itself requires. Attach that hint to the real error instead of guessing in
-/// advance.
-pub async fn explain_package_failure(raw: &str) -> String {
-    if manager().await != PkgMgr::Dpkg && raw.contains("nothing provides") {
-        return format!(
-            "{raw}\n\nThis usually means the CRB repository is not enabled. EPEL requires it, \
-             and OpenDKIM's dependencies (sendmail-milter, libmemcached-awesome) live there. \
-             Enable it with `dnf config-manager --set-enabled crb` (`powertools` on EL8) and \
-             retry — DockPanel's installer does this on new installs."
-        );
-    }
-    raw.to_string()
-}
-
 /// Add a third-party repository for `what`, when the running family needs one.
 ///
 /// The two callers differ in an instructive way. Nodesource publishes a
@@ -775,25 +725,6 @@ pub async fn add_repo(repo: Repo) -> Result<(), String> {
             "curl -fsSL https://pkg.cloudflare.com/cloudflared-ascii.repo \
                -o /etc/yum.repos.d/cloudflared.repo"
                 .to_string()
-        }
-        (Repo::Rspamd, true) => {
-            // Never reached by design — see the enum comment. An explicit error
-            // beats silently adding an apt repo the archive already covers.
-            return Err("Rspamd is packaged by Debian and Ubuntu; no extra repository is needed".into());
-        }
-        (Repo::Rspamd, false) => {
-            // rspamd is NOT in EPEL — `dnf install rspamd` on a stock Rocky 9
-            // with EPEL *and* CRB enabled answers "Unable to find a match"
-            // (measured s270). Upstream publishes a per-major-version flat
-            // repo, keyed `centos-<major>` for the whole RHEL family.
-            let major = os_release_value("VERSION_ID")
-                .await
-                .and_then(|v| v.split('.').next().map(str::to_string))
-                .ok_or_else(|| "Cannot detect OS major version from /etc/os-release".to_string())?;
-            format!(
-                "curl -fsSL https://rspamd.com/rpm-stable/centos-{major}/rspamd.repo \
-                   -o /etc/yum.repos.d/rspamd.repo"
-            )
         }
     };
 
@@ -874,7 +805,6 @@ fn repo_artifact_paths(repo: Repo) -> &'static [&'static str] {
             "/usr/share/keyrings/cloudflare-main.gpg",
             "/etc/yum.repos.d/cloudflared.repo",
         ],
-        Repo::Rspamd => &["/etc/yum.repos.d/rspamd.repo"],
     }
 }
 
@@ -882,10 +812,6 @@ fn repo_artifact_paths(repo: Repo) -> &'static [&'static str] {
 pub enum Repo {
     NodeSource,
     Cloudflared,
-    /// Rspamd upstream. **RHEL-family only** — Debian and Ubuntu carry rspamd
-    /// in their own archives (driven at s262), and adding a repo there would
-    /// change the family that already works to fix the one that does not.
-    Rspamd,
 }
 
 /// A value from `/etc/os-release`, or `None` when this release does not carry
@@ -1087,15 +1013,4 @@ mod tests {
         assert!(paths.contains(&"/etc/yum.repos.d/cloudflared.repo"));
     }
 
-    /// Rspamd's footprint is a single flat repo file (add_repo's rpm-only
-    /// branch never writes a keyring) — unlike NodeSource/Cloudflared, this
-    /// list was already correct before this fix and must stay exactly that
-    /// size, not grow to match the other two by copy-paste.
-    #[test]
-    fn rspamd_cleanup_is_exactly_the_one_repo_file() {
-        assert_eq!(
-            repo_artifact_paths(Repo::Rspamd),
-            &["/etc/yum.repos.d/rspamd.repo"]
-        );
-    }
 }

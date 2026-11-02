@@ -176,12 +176,11 @@ UPDATE=scripts/update.sh
 AGENT_SRC=panel/agent/src
 SI=panel/agent/src/routes/service_installer.rs
 PKG=panel/agent/src/services/pkg.rs
-PHP=panel/agent/src/routes/php.rs
 SEC=panel/agent/src/services/security.rs
 DIAG=panel/agent/src/services/diagnostics.rs
 SAFE=panel/agent/src/safe_cmd.rs
 
-for f in "$UNIT" "$SETUP" "$UPDATE" "$SI" "$PKG" "$PHP" "$SEC" "$DIAG" "$SAFE"; do
+for f in "$UNIT" "$SETUP" "$UPDATE" "$SI" "$PKG" "$SEC" "$DIAG" "$SAFE"; do
   [ -f "$f" ] || { echo "missing file: $f"; exit 1; }
 done
 
@@ -487,7 +486,10 @@ echo "── 8. Package operations dispatch on the real manager ──"
 # Every optional-service installer must go through the abstraction. Counting
 # guarded-vs-total positionally means adding a NEW installer that shells apt
 # directly fails this, rather than the pin passing because the others are fine.
-INSTALLERS='install_php install_certbot install_fail2ban install_powerdns install_redis install_nodejs install_waf install_cloudflared'
+# R6 (2026-11-02): install_php and install_waf were deleted with the
+# service_installer split; they are removed from this census, not
+# excused — the remaining installers must still all route through pkg.
+INSTALLERS='install_certbot install_fail2ban install_redis install_nodejs install_cloudflared'
 PKGROUTE_RE='pkg::(install|install_available|add_repo)'
 total=0 routed=0 unrouted=''
 for f in $INSTALLERS; do
@@ -505,18 +507,9 @@ else
   bad "these installers bypass services::pkg and will fail on any non-apt box:$unrouted ($routed/$total routed)"
 fi
 
-# THE END-OF-LIFE PHP PIN. `dnf install php-fpm` with no stream enabled resolves
-# to the non-modular base package — PHP 8.0.30 on Rocky 9, older than every
-# stream the box offers and end-of-life since 2023 — while the Services page
-# reports PHP installed and running. The stream must be selected FIRST.
-PHP_BODY=$(fn_body "$SI" install_php)
-stream_ln=$(printf '%s\n' "$PHP_BODY" | grep -n 'enable_php_stream' | head -1 | cut -d: -f1)
-pinst_ln=$(printf '%s\n'  "$PHP_BODY" | grep -n 'pkg::install'      | head -1 | cut -d: -f1)
-if [ -n "$stream_ln" ] && [ -n "$pinst_ln" ] && [ "$stream_ln" -lt "$pinst_ln" ]; then
-  ok "install_php selects the PHP module stream before installing, not after"
-else
-  bad "install_php installs PHP without first enabling a module stream — on Rocky 9 that silently installs end-of-life PHP 8.0 while reporting success"
-fi
+# R6 (2026-11-02): the end-of-life PHP pin measured install_php in
+# service_installer.rs, deleted in the R6 split. Deleted, not weakened:
+# there is no PHP installer left whose stream selection could regress.
 
 # A package name and a systemd unit name are different strings that merely
 # coincide on Debian. Translating one and not the other installs the right
@@ -529,30 +522,10 @@ else
   bad "install_redis enables a hardcoded redis-server unit — that unit does not exist on the RHEL family, so Redis installs and never starts"
 fi
 
-# php.rs was the surface s265's refusal layer never reached: no family guard at
-# all, so every handler failed with a raw "Failed to find executable apt-get".
-if fn_body "$PHP" install_version | grep -c 'php_streams' >/dev/null; then
-  ok "php.rs install_version branches on the package family before reaching apt machinery"
-else
-  bad "php.rs install_version has no family guard — on the RHEL family it falls through to apt-cache/ppa:ondrej and fails with 'Failed to find executable apt-get'"
-fi
+# R6 (2026-11-02): both php.rs arms measured routes/php.rs, deleted in
+# R6 with the versioned PHP surface. Deleted, not weakened.
 
-# The PHP page must not report every offered version as installed just because
-# the RPM family collapses them onto one package.
-if has_code "$PHP" -F -e 'installed_php_version'; then
-  ok "php.rs distinguishes PHP versions on a family that ships only one package"
-else
-  bad "php.rs asks the collapsed package query per version — on the RHEL family that reports ALL offered versions as installed"
-fi
-
-# A missing file that SKIPS is worse than one that fails: the PowerDNS schema
-# path is distro-specific, and both old branches were [ -f ]-guarded, so a miss
-# left an empty database behind a successful install.
-if fn_body "$SI" install_powerdns | grep -c 'schema not found' >/dev/null; then
-  ok "the PowerDNS SQLite schema load fails loudly when no known schema path matches"
-else
-  bad "the PowerDNS schema load can silently skip — the install reports success, pdns starts, and the DNS server answers nothing"
-fi
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
 
 # Name-map completeness for the entries that were missing and would fail
 # SILENTLY (the extension loop tolerates absent packages by design, so an
@@ -732,7 +705,7 @@ fi
 # §7 and §8 read line numbers out of this stream and compare them. Deleting
 # rather than blanking would renumber every subject and change what they measure.
 LINEDRIFT=""
-for f in "$UNIT" "$SETUP" "$UPDATE" "$SI" "$PKG" "$PHP" "$SEC" "$DIAG" "$SAFE"; do
+for f in "$UNIT" "$SETUP" "$UPDATE" "$SI" "$PKG" "$SEC" "$DIAG" "$SAFE"; do
   a=$(wc -l < "$f"); b=$(code_lines "$f" | wc -l)
   [ "$a" != "$b" ] && LINEDRIFT="$LINEDRIFT $f($a≠$b)"
 done
@@ -783,9 +756,7 @@ PINNED=(
   "$SI|-F|ufw_refusal_reason"
   "$SI|-F|pkg::install"
   "$SI|-E|$PKGROUTE_RE"
-  "$SI|-F|enable_php_stream"
   "$SI|-F|service_name"
-  "$SI|-F|schema not found"
   "$PKG|-F|PkgMgr::Rpm"
   "$PKG|-F|firewall::detect"
   "$PKG|-F|rpm.nodesource.com"
@@ -794,9 +765,6 @@ PINNED=(
   "$PKG|-E|fn rpm_name\("
   "$PKG|-E|fn php_rpm_name\("
   "$PKG|-E|fn add_repo\("
-  "$PHP|-F|php_streams"
-  "$PHP|-F|installed_php_version"
-  "$PHP|-E|fn install_version\("
   "$SEC|-F|firewalld_status"
   "$SEC|-F|firewall::detect"
   "$DIAG|-F|firewall::detect"
@@ -983,7 +951,7 @@ SELF=tests/rpm-install-pin-e2e.sh
 # defined at the top of this file carries that name inside its own, so without
 # it every legitimate call to the scanner convicted itself and the two arms that
 # use it were reported as raw reads.
-SUBJ_VARS='UNIT|SETUP|UPDATE|SI|PKG|PHP|SEC|DIAG|SAFE|AGENT_SRC'
+SUBJ_VARS='UNIT|SETUP|UPDATE|SI|PKG|SEC|DIAG|SAFE|AGENT_SRC'
 RAW_ARMS=$(code_lines "$SELF" | grep -nE "(^|[^_[:alnum:]])grep[^|;]*\"\\\$($SUBJ_VARS)[\"/]" || true)
 if [ -z "$RAW_ARMS" ]; then
   ok "no arm greps a subject file directly; every read goes through code_lines"

@@ -324,11 +324,6 @@ async fn main() {
     // to_version = CARGO_PKG_VERSION so the UI shows succeeded vs rolled-back.
     services::panel_update::finalize_pending_on_startup(&state.db).await;
 
-    // Same argument, one table over: migration analysis and import both run in a
-    // spawned task, so a restart takes them with no chance to write a verdict.
-    // On boot nothing is running, so any row still claiming to be is stale.
-    routes::migration::finalize_analyzing_on_startup(&state.db).await;
-
     // Supervised background task spawner: monitors JoinHandle, auto-restarts on panic
     // with exponential backoff, and respects shutdown signal.
     fn spawn_supervised<F, Fut>(
@@ -430,17 +425,6 @@ async fn main() {
     let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
     spawn_supervised("metrics_collector", &shutdown_tx, move |rx| services::metrics_collector::run(s_db.clone(), s_agents.clone(), rx));
 
-    // The deploy scheduler queries EVERY server's cron deploys, so it gets the
-    // registry: each row is deployed on the server that owns it. See
-    // `trigger_deploy_task`.
-    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
-    spawn_supervised("deploy_scheduler", &shutdown_tx, move |rx| services::deploy_scheduler::run(s_db.clone(), s_agents.clone(), rx));
-
-    // Previews are torn down on the server their git deploy lives on, resolved
-    // through the JOIN the sweep already performs.
-    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
-    spawn_supervised("preview_cleanup", &shutdown_tx, move |rx| services::preview_cleanup::run(s_db.clone(), s_agents.clone(), rx));
-
     // Every verifier query is fleet-wide, so it gets the registry: an archive is read
     // on the host that wrote it. See `verify_one`.
     let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
@@ -455,11 +439,6 @@ async fn main() {
     // certifies DR for a machine it never tested. See `dispatch_policy_drills`.
     let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
     spawn_supervised("drill_scheduler", &shutdown_tx, move |rx| services::drill_scheduler::run(s_db.clone(), s_agents.clone(), rx));
-
-    // Each site's access log lives on the server that owns it, so this too takes
-    // the registry. See `traffic_accounting_scheduler::collect_one`.
-    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
-    spawn_supervised("traffic_accounting_scheduler", &shutdown_tx, move |rx| services::traffic_accounting_scheduler::run(s_db.clone(), s_agents.clone(), rx));
 
     // Local BY INTENT, not by omission: it diagnoses the panel host itself. It takes
     // the registry so that intent is stated in the type and calls `agents.local()`.

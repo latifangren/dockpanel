@@ -143,8 +143,6 @@ async fn system_info() -> Json<SystemInfo> {
         "docker",
         "fail2ban",
         "ufw",
-        "postfix",
-        "dovecot",
         "redis-server",
     ];
 

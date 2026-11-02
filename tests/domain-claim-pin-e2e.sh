@@ -37,17 +37,14 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
 CLAIM=panel/backend/src/services/domain_claim.rs
 SITES=panel/backend/src/routes/sites.rs
 STAGING=panel/backend/src/routes/staging.rs
-MIG=panel/backend/src/routes/migration.rs
-GITDEP=panel/backend/src/routes/git_deploys.rs
 APPS_BE=panel/backend/src/routes/docker_apps.rs
 NGINX_ROUTE=panel/agent/src/routes/nginx.rs
 NGINX_SVC=panel/agent/src/services/nginx.rs
 APPS_ROUTE=panel/agent/src/routes/docker_apps.rs
-GIT_BUILD=panel/agent/src/services/git_build.rs
 TRAEFIK=panel/agent/src/services/traefik.rs
 
-for f in "$CLAIM" "$SITES" "$STAGING" "$MIG" "$GITDEP" "$APPS_BE" \
-         "$NGINX_ROUTE" "$NGINX_SVC" "$APPS_ROUTE" "$GIT_BUILD" "$TRAEFIK"; do
+for f in "$CLAIM" "$SITES" "$STAGING" "$APPS_BE" \
+         "$NGINX_ROUTE" "$NGINX_SVC" "$APPS_ROUTE" "$TRAEFIK"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -249,34 +246,7 @@ check_calls_guard "$SITES"   rename_domain   "sites::rename_domain"
 check_calls_guard "$SITES"   clone_site      "sites::clone_site"
 check_calls_guard "$SITES"   add_alias       "sites::add_alias"
 check_calls_guard "$STAGING" create          "staging::create"
-check_calls_guard "$GITDEP"  create          "git_deploys::create"
-check_calls_guard "$GITDEP"  update          "git_deploys::update"
 check_calls_guard "$APPS_BE" deploy          "docker_apps::deploy"
-
-# The two that are not plain fn bodies: the migration import's work happens in a
-# spawned task, and the preview path reports rather than rejects.
-if S=$(subj "$MIG"); then
-  if derives "$S" 'ensure_claimable'; then
-    ok "migration::import claims through the shared guard"
-  else
-    bad "migration::import no longer claims through the shared guard"
-  fi
-fi
-if S=$(subj "$GITDEP"); then
-  B=$(fnbody "$S" handle_preview_deploy)
-  if derives "$B" 'find_occupant'; then
-    ok "the preview path checks the synthesised domain before taking it"
-  else
-    bad "the preview path takes {branch}.{domain} without checking it"
-  fi
-  # It must ALSO not trust the webhook caller's Host header to decide what is
-  # reserved — that request is unauthenticated.
-  if has "$B" 'is_reserved_domain_for'; then
-    bad "the preview path trusts an attacker-supplied Host header for reserved checks"
-  else
-    ok "the preview path does not trust the webhook's Host header"
-  fi
-fi
 
 # The delegation itself: sites.rs must not have grown its own copy back.
 if S=$(subj "$SITES"); then
@@ -294,7 +264,7 @@ echo "== §B2  no claim path keeps a private conflict query =="
 # The negative that makes §B stick. A domain-conflict SELECT anywhere but the
 # guard means some path can answer the question its own way again, which is how
 # `create` and `update` came to disagree in the first place.
-for f in "$SITES" "$STAGING" "$GITDEP" "$APPS_BE" "$MIG"; do
+for f in "$SITES" "$STAGING" "$APPS_BE"; do
   if S=$(subj "$f"); then
     # Anchored on the opening quote: sites.rs:883 has
     #   VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', ...)
@@ -395,31 +365,6 @@ if [ -n "$ARD" ]; then
     ok "the app deploy still reaches the vhost writer"
   else
     bad "the app deploy no longer writes a vhost at all"
-  fi
-fi
-
-# git_build's writer returns a String error rather than an HTTP response, so it
-# is checked by name rather than through check_writer.
-#
-# Scoped to setup_nginx_proxy's BODY, not the file: git_build.rs:643 holds a
-# Dockerfile template containing `collectstatic --noinput 2>/dev/null || true`,
-# and a file-wide liveness check reads that shell idiom as a neutralised
-# condition. Lesson #131's window bleed, widened from a function to a file.
-if S=$(subj "$GIT_BUILD"); then
-  B=$(fnbody "$S" setup_nginx_proxy)
-  if [ -z "$B" ]; then
-    bad "could not extract setup_nginx_proxy — the arm is not measuring anything"
-  elif derives "$B" 'read_to_string\(&config_path\)' \
-       && derives "$B" 'restore_or_remove\(&config_path'; then
-    ok "the git-deploy writer snapshots and restores"
-  else
-    bad "the git-deploy writer no longer snapshots and restores"
-  fi
-  strays=$(grep -oE 'remove_file\([^)]*\)' <<< "$B" | grep -cvE 'tmp_path|\.tmp|\.restore' || true)
-  if [ "$strays" -eq 0 ]; then
-    ok "the git-deploy writer deletes nothing but its own temporary files"
-  else
-    bad "the git-deploy writer has $strays delete(s) of something other than a temp file"
   fi
 fi
 
@@ -531,7 +476,7 @@ fi
 # request; a literal makes the gate vacuous while leaving every other arm green.
 # Flattened, because these calls are formatted across many lines.
 BYPASS=0
-for f in "$SITES" "$STAGING" "$MIG" "$GITDEP" "$APPS_BE" panel/backend/src/routes/stacks.rs; do
+for f in "$SITES" "$STAGING" "$APPS_BE" panel/backend/src/routes/stacks.rs; do
   S=$(subj "$f") || continue
   F=$(tr '\n' ' ' <<< "$S")
   # A string literal in the role position of a call to the guard.
@@ -556,120 +501,9 @@ else
   bad "no client-role migration found — the gate refuses a value no account can hold"
 fi
 
-echo "== §G  a mail domain is a domain HOLDER, and only an admin may claim over it =="
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
+# R5 (2026-11-02): the git-deploy/migration arms (§B callers, §B2/§F loops, §C git_build writer) were deleted with those features; the guard's git_deploys TABLE leg stays until R7.
 
-# s347 / GitHub #106. Client-scoped mail matches `mail_domains.domain` against the
-# domain of a site the caller owns — which makes `sites.domain` an authorisation
-# key, and that column is writable by the very account being authorised. Before
-# this, the occupancy oracle asked sites, git deploys, stacks and each agent's
-# apps, and never asked about mail: so a non-admin could point a site they already
-# owned at a name whose mailboxes existed and mint their own access to them. The
-# collision had no nginx symptom, which is why it survived — a mail-only domain
-# has no vhost to overwrite.
-
-if S=$(subj "$CLAIM"); then
-  B=$(fnbody "$S" find_occupant)
-  if [ -z "$B" ]; then
-    bad "§G: could not extract find_occupant"
-  else
-    if derives "$B" 'mail_domains'; then
-      ok "the occupancy oracle asks whether a mail domain holds the name"
-    else
-      bad "find_occupant no longer asks about mail domains — a non-admin can claim a name whose mailboxes exist"
-    fi
-
-    # Ordering is load-bearing, not cosmetic. `ensure_claimable` TOLERATES this
-    # occupant for an administrator, so a mail domain reported IN PLACE OF a vhost
-    # holder would let an admin claim over a live site, git deploy, stack or app.
-    # Asking last makes that impossible by construction.
-    m=$(grep -nE 'mail_domains' <<< "$B" | head -1 | cut -d: -f1)
-    a=$(grep -nE '"/apps"' <<< "$B" | head -1 | cut -d: -f1)
-    if [ -n "$m" ] && [ -n "$a" ] && [ "$m" -gt "$a" ]; then
-      ok "the mail question is asked LAST, after every holder that must always refuse"
-    else
-      bad "the mail leg no longer runs last — a tolerated occupant can now mask a vhost collision"
-    fi
-
-    # Fleet-wide and case-folded, like the three SQL legs above it. A server term
-    # here would let the same name be claimed on a second host while its mailboxes
-    # live on the first.
-    q=$(grep -oE 'SELECT id FROM mail_domains[^"]*' <<< "$B" | head -1)
-    if [ -n "$q" ] && ! grep -qE 'server_id' <<< "$q"; then
-      ok "the mail leg is fleet-wide, matching the sites/git/stack legs"
-    else
-      bad "the mail leg grew a server term — a name can be claimed on one host while its mail lives on another"
-    fi
-    if [ -n "$q" ] && grep -qE 'lower\(domain\)' <<< "$q"; then
-      ok "the mail leg folds case rather than trusting the writer's convention"
-    else
-      bad "the mail comparison is case-sensitive — EXAMPLE.com walks past a row holding example.com"
-    fi
-  fi
-
-  E=$(fnbody "$S" ensure_claimable)
-  if [ -z "$E" ]; then
-    bad "§G: could not extract ensure_claimable"
-  else
-    if derives "$E" 'may_claim_mail_held'; then
-      ok "the guard consults the mail-claim rule before tolerating an occupant"
-    else
-      bad "the guard stopped consulting the mail-claim rule — either every claim is refused, or every claim is allowed"
-    fi
-    # The tolerance must name exactly ONE variant. Folding a second occupant into
-    # that branch would let an administrator claim over a live vhost, and it would
-    # look like a one-word change.
-    #
-    # ⚠ OCCURRENCES, not lines. The shared `count` is `grep -c`, which counts
-    # matching LINES — and the natural way to write this regression puts the
-    # second variant on the SAME line (`!= A && != B`), so a line count reports
-    # one and the arm passes. Measured: that mutation SURVIVED this arm until it
-    # was rewritten to count occurrences. `wc -l` on `grep -o` output is safe
-    # under pipefail — wc consumes all input, so there is no SIGPIPE (unlike a
-    # pipe into `grep -q`).
-    n=$(grep -oE 'Occupant::' <<< "$E" | wc -l)
-    if [ "$n" -eq 1 ]; then
-      ok "exactly one occupant is tolerated, and it is named explicitly"
-    else
-      bad "the tolerance branch names $n occupants — it must name only the mail one"
-    fi
-    if derives "$E" 'Occupant::MailDomain'; then
-      ok "the tolerated occupant is the mail domain"
-    else
-      bad "the tolerance is no longer keyed on the mail occupant"
-    fi
-  fi
-
-  # Fails CLOSED, unlike its sibling. `may_claim_new` returns true for a role it
-  # does not recognise, so drift merely un-restricts. This one must return false,
-  # so drift refuses — an unknown role string must never be able to take a mailbox.
-  #
-  # ⚠ s348: this arm USED TO BE A FALSE GREEN, and it was measured as one. It
-  # asked only whether the body `derives` the administrator comparison — a
-  # PRESENCE test. The regression that matters here does not REMOVE that
-  # comparison, it ADDS one beside it, so `role == "admin" || role == "client"`
-  # still contained the string the arm looked for and the suite printed 60/60
-  # green while the gate admitted clients. A presence test cannot see a widening;
-  # only a count can. So the arm now asserts BOTH halves of the sentence it has
-  # always claimed to make: the administrator is admitted, and NOTHING else is.
-  G=$(fnbody "$S" may_claim_mail_held)
-  if [ -z "$G" ]; then
-    bad "§G: could not extract may_claim_mail_held"
-  elif ! derives "$G" 'role == "admin"'; then
-    bad "the mail gate stopped failing closed — a role it does not recognise may now claim a name whose mailboxes exist"
-  elif [ "$(occurrences "$G" 'role[[:space:]]*==')" -ne 1 ]; then
-    bad "the mail gate compares the role more than once — a second admitted role would hand a name whose mailboxes exist to a non-administrator, which is the escalation this gate exists to refuse"
-  else
-    ok "the mail gate admits the administrator role and NOTHING else — exactly one role comparison"
-  fi
-
-  # The refusal has to say WHAT holds the name. "In use" with no owner is the
-  # sentence this whole module was written to stop printing.
-  if derives "$S" 'Occupant::MailDomain =>'; then
-    ok "the mail occupant carries a message of its own"
-  else
-    bad "the mail occupant has no message — the refusal cannot name what holds the domain"
-  fi
-fi
 
 echo
 echo "──────────────────────────────────────────"

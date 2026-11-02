@@ -76,14 +76,11 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
 
 APPS=panel/backend/src/routes/docker_apps.rs
 TERM=panel/backend/src/routes/terminal.rs
-SITES=panel/backend/src/routes/sites.rs
-STAGING=panel/backend/src/routes/staging.rs
-MIGR=panel/backend/src/routes/migration.rs
 SET=panel/backend/src/routes/settings.rs
 NOTIF=panel/backend/src/services/notifications.rs
 SETTINGS_TSX=panel/frontend/src/pages/Settings.tsx
 
-for f in "$APPS" "$TERM" "$SITES" "$STAGING" "$MIGR" "$SET" "$NOTIF" "$SETTINGS_TSX"; do
+for f in "$APPS" "$TERM" "$SET" "$NOTIF" "$SETTINGS_TSX"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -195,85 +192,6 @@ if A=$(subj "$APPS") && T=$(subj "$TERM"); then
     ok "A5 $(basename $APPS) does not re-derive the predicate"
   else
     bad "A5 $(basename $APPS) does not re-derive the predicate"
-  fi
-fi
-
-echo "== §B  every door that creates a site consults the lockdown =="
-
-SITE_DOORS=""
-for f in "$SITES" "$STAGING" "$MIGR"; do
-  if S=$(subj "$f"); then
-    for fn in $(fns_matching "$S" 'INSERT INTO sites'); do
-      SITE_DOORS="${SITE_DOORS}${f}:${fn}"$'\n'
-    done
-  else
-    bad "B- could not read $f"
-  fi
-done
-SITE_N=$(grep -c . <<< "$SITE_DOORS")
-
-# Four, and the count is asserted before the members are judged. If a fifth
-# handler starts writing `sites` rows this arm names the shortfall rather than
-# silently judging the four it knows.
-if [ "$SITE_N" -eq 4 ]; then
-  ok "B0 enumeration found $SITE_N site-creating handlers: $(tr '\n' ' ' <<< "$SITE_DOORS")"
-else
-  bad "B0 expected 4 site-creating handlers, enumerated $SITE_N: $(tr '\n' ' ' <<< "$SITE_DOORS")"
-fi
-
-while read -r entry; do
-  [ -n "$entry" ] || continue
-  f=${entry%%:*}; fn=${entry##*:}
-  B=$(fnbody "$(subj "$f")" "$fn")
-
-  if grep -qE 'is_locked_down\(&state\.db\)' <<< "$B"; then
-    ok "B1 $(basename $f)::$fn refuses during a lockdown"
-  else
-    bad "B1 $(basename $f)::$fn refuses during a lockdown"
-  fi
-done <<< "$SITE_DOORS"
-
-# The per-hour ceiling: three of the four, and the fourth is an exclusion that is
-# WRITTEN DOWN rather than merely true (lesson #426 — an exclusion you did not
-# record is revocable by any feature). A bulk import is an operator asking for
-# many sites from a source they named; a ceiling of three would break the
-# feature rather than guard it.
-CEIL=0
-while read -r entry; do
-  [ -n "$entry" ] || continue
-  f=${entry%%:*}; fn=${entry##*:}
-  B=$(fnbody "$(subj "$f")" "$fn")
-  if grep -qE 'site_rate_limit\(&state\.db\)' <<< "$B"; then
-    CEIL=$((CEIL+1))
-  elif [ "$(basename $f)" = "migration.rs" ]; then
-    if grep -qE 'ceiling|per-hour' <<< "$(sed -n '/pub async fn import(/,/^}/p' "$f")"; then
-      ok "B2 $(basename $f)::$fn is the recorded exclusion from the ceiling"
-    else
-      bad "B2 $(basename $f)::$fn omits the ceiling with no recorded reason"
-    fi
-  fi
-done <<< "$SITE_DOORS"
-
-if [ "$CEIL" -eq 3 ]; then
-  ok "B3 the per-hour ceiling is enforced by $CEIL of the 4 doors"
-else
-  bad "B3 expected the ceiling on 3 doors, found $CEIL"
-fi
-
-# ONE definition of the number. A second copy is how two doors start answering
-# differently, and it is why the helper became crate-visible instead of being
-# duplicated into the module that could not reach it.
-if S=$(subj "$SITES"); then
-  DEFS=$(grep -cE '^(pub\(crate\) )?async fn site_rate_limit' <<< "$S")
-  if [ "$DEFS" -eq 1 ]; then
-    ok "B4 the ceiling has exactly one definition"
-  else
-    bad "B4 the ceiling has $DEFS definitions"
-  fi
-  if grep -qE 'pub\(crate\) async fn site_rate_limit' <<< "$S"; then
-    ok "B5 the ceiling is reachable from other modules"
-  else
-    bad "B5 the ceiling is reachable from other modules"
   fi
 fi
 

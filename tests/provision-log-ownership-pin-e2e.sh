@@ -134,7 +134,8 @@ fnbody() { awk "/pub async fn $2\(/,/^}/" <<< "$1"; }
 # code — indistinguishable from the regression.
 readable() { [ -n "$2" ] || bad "could not extract $1 — the arms reading it mean nothing"; }
 
-if [ "$NROUTES" -ge 50 ]; then
+# R5: floor re-derived 50 -> 47; R1-R5 deleted 8 route files.
+if [ "$NROUTES" -ge 47 ]; then
   ok "scanning all $NROUTES route files"
 else
   bad "only $NROUTES route files found — the scan lost its subjects"
@@ -195,7 +196,9 @@ echo "§3 every creation site records an owner"
 # file, so git_deploys could lose 3 of its 4 and stay green — which is how the
 # pre-change ratio (3 of 16) could be re-established one site at a time. Adding a
 # provisioning log to a feature is expected to change the number here.
-census="backups:2 deploy:1 sites:1 migration:1 git_deploys:4 mail:2 system:4 docker_apps:2"
+# R5: backups.rs/deploy.rs deleted in R3, system.rs lost 2 creation sites
+# with R4's handler deletions; only the surviving files are counted.
+census="system:2 docker_apps:2"
 total=0
 for e in $census; do
   f=${e%%:*}; want=${e##*:}
@@ -207,16 +210,16 @@ for e in $census; do
     bad "$f.rs registers $got owners, expected $want — a creation site lost its owner, or a new one needs adding here"
   fi
 done
-if [ "$total" -eq 17 ]; then
-  ok "17 creation sites, all owned"
+if [ "$total" -eq 4 ]; then
+  ok "4 creation sites, all owned"
 else
-  bad "$total registrations across the census, expected 17"
+  bad "$total registrations across the census, expected 4"
 fi
 
 echo
 echo "§4 every reader proves ownership"
 
-READERS="sites:provision_log docker_apps:deploy_log git_deploys:deploy_log system:install_log migration:progress"
+READERS="docker_apps:deploy_log system:install_log"
 for pair in $READERS; do
   file=${pair%%:*}; fn=${pair##*:}
   body=$(fnbody "$(strip "$ROUTES/$file.rs")" "$fn")
@@ -231,10 +234,9 @@ done
 
 # Narrow claim, deliberately. This says only that no reader carries the
 # `claims.role != "admin"` COMPARISON that let both broken readers skip the
-# ownership test. `require_admin(&claims.role)` NARROWS a route and is fine —
-# migration::progress does exactly that and must keep it. Three of these five
-# were already green before the fix (sites and migration never had the
-# exemption; install_log's defect was a different shape, covered below), so
+# ownership test. `require_admin(&claims.role)` NARROWS a route and is fine.
+# Both surviving readers were already green before the fix (docker_apps never
+# had the exemption; install_log's defect was a different shape, covered below), so
 # treat this as a guard against reintroduction, not as evidence any of them is
 # correct — §4's first loop is what establishes that.
 for pair in $READERS; do

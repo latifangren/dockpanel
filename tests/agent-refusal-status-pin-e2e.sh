@@ -29,11 +29,9 @@ R_STAGING=panel/agent/src/routes/staging.rs
 S_STAGING=panel/agent/src/services/staging.rs
 R_SEC=panel/agent/src/routes/security.rs
 S_SEC=panel/agent/src/services/security.rs
-R_SMTP=panel/agent/src/routes/smtp.rs
-S_SMTP=panel/agent/src/services/smtp.rs
 ERRRS=panel/backend/src/error.rs
 for f in "$R_FILES" "$S_FILES" "$R_VOL" "$S_VOL" "$R_STAGING" \
-         "$S_STAGING" "$R_SEC" "$S_SEC" "$R_SMTP" "$S_SMTP" "$ERRRS"; do
+         "$S_STAGING" "$R_SEC" "$S_SEC" "$ERRRS"; do
   [ -f "$f" ] || { echo "missing $f"; exit 1; }
 done
 
@@ -149,10 +147,9 @@ else
 fi
 
 echo
-echo "── 4. firewall + mail: a package the panel will never install there ──"
+echo "── 4. firewall: a package the panel will never install there ──"
 
 SRC_SEC=$(strip "$R_SEC"); SRC_SSEC=$(strip "$S_SEC")
-SRC_RSM=$(strip "$R_SMTP"); SRC_SSM=$(strip "$S_SMTP")
 
 hasE "$SRC_SSEC" 'pub const UFW_MISSING' \
   && ok "the ufw refusal is a named constant, not a sentence to guess at" \
@@ -188,24 +185,7 @@ else
   bad "only ${SEC_SITES:-0} security handler(s) classify — add/delete/apply-fix must all three"
 fi
 
-hasE "$SRC_SSM" 'pub const MSMTP_MISSING' \
-  && ok "the msmtp refusal is a named constant" \
-  || bad "MSMTP_MISSING is gone — Test Email is back to blaming the operator's relay"
-has "$SRC_SSM" 'MSMTP_MISSING.to_string()' \
-  && ok "the mail service raises it when the binary is absent" \
-  || bad "the service never raises MSMTP_MISSING — the route arm is vacuous"
-TE=$(fnbody "$SRC_RSM" test_email)
-if [ "$(printf '%s' "$TE" | wc -l)" -lt 8 ]; then
-  bad "test_email did not extract — its arms measure nothing"
-else
-  ok "test_email extracted ($(printf '%s' "$TE" | wc -l) lines)"
-  hasE "$TE" 'FAILED_DEPENDENCY' \
-    && ok "a host with no msmtp answers 4xx instead of implicating the relay" \
-    || bad "Test Email is a 5xx again — the operator will go debug their mail provider"
-  hasE "$TE" 'INTERNAL_SERVER_ERROR' \
-    && ok "a genuine send failure is still a 5xx" \
-    || bad "the mail classifier is unconditional"
-fi
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
 
 echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

@@ -27,9 +27,13 @@ pub struct CmdOutput {
 /// that adopted a page it merely guessed was ours would delete an operator's
 /// file, so the writer and the reader have to be the same string by
 /// construction rather than by anyone remembering to update both.
+// R6: placeholder-page surface; callers were site handlers deleted in R6. Retained with document_root_for (scheme-and-import pin asserts it).
+#[allow(dead_code)]
 pub const PLACEHOLDER_MARKER: &str = "Site is ready. Upload your files to replace this page.";
 
 /// The filler page written into a new site's document root.
+// R6: retained with document_root_for; deploy.rs tests still exercise it.
+#[allow(dead_code)]
 pub fn placeholder_page(domain: &str) -> String {
     format!(
         "<!DOCTYPE html><html><head><title>{domain}</title></head>\
@@ -43,12 +47,16 @@ pub fn placeholder_page(domain: &str) -> String {
 /// Keyed on content, never on the name. `index.html` is the most ordinary
 /// filename there is and an operator's own upload must never be mistaken for
 /// ours; a file that cannot be read is, deliberately, not ours.
+// R6: retained with document_root_for; deploy.rs still references it.
+#[allow(dead_code)]
 pub fn is_placeholder_page(path: &std::path::Path) -> bool {
     std::fs::read_to_string(path)
         .map(|body| body.contains(PLACEHOLDER_MARKER))
         .unwrap_or(false)
 }
 
+// R6: callers were site handlers deleted in R6. Retained as the single answer to 'which directory does nginx serve' (scheme-and-import pin asserts it).
+#[allow(dead_code)]
 pub fn document_root_for(site_dir: &str, runtime: &str) -> String {
     match runtime {
         "proxy" | "node" | "python" => site_dir.to_string(),
@@ -163,42 +171,6 @@ impl VhostTarget {
     }
 }
 
-/// The listener and certificate directives of a rendered vhost, deduplicated and
-/// indented ready to drop into another server block.
-///
-/// **The defect this closes, and it is the whole feature.** The maintenance
-/// response written when a site is disabled hardcoded `listen 80;`, while every
-/// template binds the server's own address whenever the panel knows it —
-/// `listen 203.0.113.10:80;`. nginx attaches each server block to the listening
-/// socket its directives name, and selects a name among the servers attached to
-/// the socket a connection actually arrived on. So the maintenance block sat on
-/// the wildcard socket and was never consulted for a request arriving on the
-/// server's address: **the disabled site went on serving its own content, with
-/// the panel reporting it disabled and the agent reporting success.**
-///
-/// Copying the addresses out of the body being parked, rather than naming them
-/// here, means the response answers on exactly what the site answered on and
-/// keeps doing so when the templates change. The certificate lines come too,
-/// because a `listen …443 ssl` without them is a configuration nginx refuses —
-/// and a site with a certificate has to be able to say it is disabled over
-/// HTTPS, which is the only scheme its visitors are redirected to.
-pub fn listener_lines(vhost: &str) -> String {
-    let mut seen: Vec<&str> = Vec::new();
-    let mut out = String::new();
-    for line in vhost.lines() {
-        let t = line.trim();
-        let wanted = t.starts_with("listen ")
-            || t.starts_with("ssl_certificate ")
-            || t.starts_with("ssl_certificate_key ");
-        if wanted && !seen.contains(&t) {
-            seen.push(t);
-            out.push_str("    ");
-            out.push_str(t);
-            out.push('\n');
-        }
-    }
-    out
-}
 
 /// Decide between an in-service path and a parked one.
 ///
@@ -845,89 +817,6 @@ pub fn render_site_config(
     }
 }
 
-/// Write a per-site PHP-FPM pool config with resource limits.
-///
-/// Debian-shaped layout only (`/etc/php/{version}/fpm/pool.d`) — the RHEL
-/// family has no per-version pool directory to write into (one `php-fpm`
-/// package serves whichever stream is active), so this never runs there in
-/// practice: `nginx.rs::put_site()` only calls it for a socket path that
-/// resolved to the Debian shape in the first place. If that ever changes,
-/// this early return keeps a RHEL call a no-op (degrading to the shared
-/// pool) rather than an error.
-pub fn write_php_pool_config(
-    domain: &str,
-    php_version: &str,
-    memory_mb: u32,
-    max_workers: u32,
-    pool_owner: Option<(&str, &str)>,
-) -> Result<(), String> {
-    let pool_dir = format!("/etc/php/{php_version}/fpm/pool.d");
-    if !std::path::Path::new(&pool_dir).exists() {
-        return Ok(()); // Debian pool.d tree absent (RHEL, or PHP not installed) — skip silently
-    }
-
-    // Sanitize domain for use as pool name (replace dots with underscores)
-    let pool_name = domain.replace('.', "_");
-
-    // SFTP-enabled sites own their content under their own uid/gid (see
-    // `services::sftp_accounts`), so the pool that reads/writes it must run as
-    // that same identity — `www-data` would lose write access the moment the
-    // site's directory is re-chowned. `None` (every non-SFTP site, the common
-    // case) keeps the original shared identity.
-    let (user, group) = pool_owner.unwrap_or(("www-data", "www-data"));
-
-    let config = format!(
-        r#"[{pool_name}]
-user = {user}
-group = {group}
-listen = /run/php/php{php_version}-fpm-{pool_name}.sock
-listen.owner = {user}
-listen.group = {group}
-listen.mode = 0660
-
-pm = dynamic
-pm.max_children = {max_workers}
-pm.start_servers = {start}
-pm.min_spare_servers = 1
-pm.max_spare_servers = {spare}
-pm.max_requests = 500
-
-php_admin_value[memory_limit] = {memory_mb}M
-php_admin_value[upload_max_filesize] = 64M
-php_admin_value[post_max_size] = 64M
-php_admin_value[max_execution_time] = 300
-"#,
-        start = std::cmp::min(2, max_workers),
-        spare = std::cmp::min(3, max_workers),
-    );
-
-    let pool_path = format!("{pool_dir}/{pool_name}.conf");
-    std::fs::write(&pool_path, &config)
-        .map_err(|e| format!("Failed to write FPM pool config: {e}"))?;
-
-    tracing::info!("PHP-FPM pool config written: {pool_path} (user={user}, workers={max_workers}, memory={memory_mb}M)");
-    Ok(())
-}
-
-/// Reload PHP-FPM for a given version.
-pub async fn reload_php_fpm(php_version: &str) -> Result<(), String> {
-    let service = format!("php{php_version}-fpm");
-    let output = safe_command("systemctl")
-        .args(["reload", &service])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to reload {service}: {e}"))?;
-
-    if output.status.success() {
-        tracing::info!("{service} reloaded");
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Not fatal — pool config will apply on next restart
-        tracing::warn!("{service} reload failed (will apply on restart): {stderr}");
-        Ok(())
-    }
-}
 
 /// Run `nginx -t` to test configuration.
 pub async fn test_config() -> Result<CmdOutput, std::io::Error> {
@@ -1032,41 +921,6 @@ mod tests {
         assert!(!target.is_live());
         assert_eq!(target.path(), parked.to_str().unwrap());
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn the_maintenance_response_answers_where_the_site_answered() {
-        // The exact shape the templates emit when the panel knows its address.
-        // A stub naming `listen 80` is attached to a different socket and is
-        // never consulted, which is how disabling a site did nothing at all.
-        let vhost = "server {\n    listen 203.0.113.10:80;\n    listen [::]:80;\n    server_name a.example;\n    root /var/www/a.example/public;\n}\n";
-        let l = listener_lines(vhost);
-        assert!(l.contains("listen 203.0.113.10:80;"), "the site's own address must come across: {l}");
-        assert!(l.contains("listen [::]:80;"));
-        assert!(!l.contains("server_name"), "only listeners and certificates travel");
-        assert!(!l.contains("root "));
-    }
-
-    #[test]
-    fn a_tls_site_can_still_say_it_is_disabled_over_https() {
-        // `listen …443 ssl` without a certificate is a config nginx refuses, so
-        // the certificate lines have to travel with the listener.
-        let vhost = "server {\n    listen 203.0.113.10:80;\n    server_name a.example;\n}\nserver {\n    listen 203.0.113.10:443 ssl;\n    listen [::]:443 ssl;\n    ssl_certificate /etc/ssl/a/fullchain.pem;\n    ssl_certificate_key /etc/ssl/a/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n}\n";
-        let l = listener_lines(vhost);
-        assert!(l.contains("listen 203.0.113.10:443 ssl;"));
-        assert!(l.contains("ssl_certificate /etc/ssl/a/fullchain.pem;"));
-        assert!(l.contains("ssl_certificate_key /etc/ssl/a/privkey.pem;"));
-        // Everything else about TLS has a working default; carrying it would be
-        // copying the site rather than its doorway.
-        assert!(!l.contains("ssl_protocols"));
-    }
-
-    #[test]
-    fn a_repeated_listener_is_emitted_once() {
-        // Both server blocks of the https template carry `listen [::]:80`, and
-        // nginx refuses a server block that names the same address twice.
-        let vhost = "server {\n    listen [::]:80;\n}\nserver {\n    listen [::]:80;\n}\n";
-        assert_eq!(listener_lines(vhost).matches("listen [::]:80;").count(), 1);
     }
 
     #[test]

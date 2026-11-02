@@ -77,10 +77,8 @@ bodyhasre() { [ -n "$(fnbody "$1" "$2" | grep -E -- "$3")" ]; }
 count()     { code "$1" | grep -Fc -- "$2"; }
 
 UPDATES=panel/agent/src/routes/updates.rs
-SMTP=panel/agent/src/services/smtp.rs
-PHP=panel/agent/src/routes/php.rs
 
-for f in "$UPDATES" "$SMTP" "$PHP"; do
+for f in "$UPDATES"; do
   [ -f "$f" ] || { echo "missing source file: $f"; exit 1; }
 done
 
@@ -140,69 +138,11 @@ else
 fi
 
 echo
-echo "── 3. Topic 2: services/smtp.rs — from_name reaches msmtp via from_full_name ──"
-if bodyhas "$SMTP" "^pub fn configure" 'from_full_name'; then
-  ok "configure() writes msmtp's from_full_name directive"
-else
-  bad "configure() no longer writes from_full_name — from_name is dead again"
-fi
-if bodyhasre "$SMTP" "^pub fn configure" 'from_name\.is_empty\(\)'; then
-  ok "configure() guards on from_name being empty before emitting the directive"
-else
-  bad "configure()'s empty-from_name guard is missing"
-fi
-# Control: from_full_name must be INSIDE the account block (after `from`,
-# before `user`), not in `defaults` — msmtp scopes it per-account like `from`.
-# The template is a raw string with a REAL newline between the two lines,
-# so this checks adjacency by line number rather than a single-line regex.
-FROM_LINE=$(grep -n 'from[[:space:]]*{from}$' "$SMTP" | head -1 | cut -d: -f1)
-NAME_LINE=$(grep -n '^{from_name_line}user' "$SMTP" | head -1 | cut -d: -f1)
-if [ -n "$FROM_LINE" ] && [ -n "$NAME_LINE" ] && [ "$NAME_LINE" -eq $((FROM_LINE + 1)) ]; then
-  ok "from_full_name is emitted immediately after from, inside the account block"
-else
-  bad "from_full_name's placement in the config template changed (from=$FROM_LINE, name=$NAME_LINE) — re-verify it is still inside the account block"
-fi
-
-echo
-echo "── 4. Topic 2: services/smtp.rs — msmtp.log is no longer truncated on every save ──"
-if bodyhasre "$SMTP" "^pub fn configure" '!std::path::Path::new\("/var/log/msmtp\.log"\)\.exists\(\)'; then
-  ok "configure() only creates msmtp.log when it does not already exist"
-else
-  bad "configure() no longer guards the msmtp.log write — may truncate on every save again"
-fi
-# Control: exactly one write to this path, and it must be the guarded one —
-# a regression that adds a second unconditional write would slip past a
-# has()-only check.
-WRITE_COUNT=$(count "$SMTP" '/var/log/msmtp.log", "").ok();')
-if [ "$WRITE_COUNT" -eq 1 ]; then
-  ok "exactly one write to msmtp.log in the file (the guarded one)"
-else
-  bad "found $WRITE_COUNT writes to msmtp.log, expected 1 — an unguarded second write may have been added"
-fi
-
-echo
-echo "── 5. Off-menu: routes/php.rs propagates output_with_timeout to its 3 remaining sites ──"
-if bodyhasre "$PHP" "^async fn install_version\(" 'output_with_timeout'; then
-  ok "install_version() uses output_with_timeout"
-else
-  bad "install_version() does not use output_with_timeout — orphaned-unit fix not propagated"
-fi
-if bodyhasre "$PHP" "^async fn uninstall_version\(" 'output_with_timeout'; then
-  ok "uninstall_version() uses output_with_timeout (covers both the purge and the autoremove follow-up)"
-else
-  bad "uninstall_version() does not use output_with_timeout — orphaned-unit fix not propagated"
-fi
-# Control: zero remaining instances of the OLD double-wrap pattern
-# (tokio::time::timeout(...) around a plain .output() call) anywhere in the
-# file — this is the exact shape v2.213.0 fixed in pkg.rs and this session
-# fixed here; a regression re-introducing it anywhere would slip past the
-# two positive checks above alone.
-OLD_PATTERN_COUNT=$(code "$PHP" | grep -Pzo 'tokio::time::timeout\(\s*std::time::Duration::from_secs\(300\),\s*safe_command_unsandboxed' 2>/dev/null | grep -ac 'tokio::time::timeout' || true)
-if [ "${OLD_PATTERN_COUNT:-0}" -eq 0 ]; then
-  ok "no remaining caller-side tokio::time::timeout wrapping a plain safe_command_unsandboxed(...).output() in php.rs"
-else
-  bad "found $OLD_PATTERN_COUNT remaining old-shape timeout wraps in php.rs — the orphaned-unit bug may still exist somewhere"
-fi
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
+# Topics 3-4 pinned services/smtp.rs (msmtp configure), deleted in R4. Topics 1, 2 survive.
+# R6 (2026-11-02): section 5 pinned routes/php.rs, deleted in R6 with the
+# versioned PHP surface. Deleted, not weakened: install_version and
+# uninstall_version no longer exist anywhere in the tree.
 
 echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

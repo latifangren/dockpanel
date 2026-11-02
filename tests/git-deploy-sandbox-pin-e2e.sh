@@ -32,7 +32,6 @@ set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SAFECMD="$REPO/panel/agent/src/safe_cmd.rs"
-GITBUILD="$REPO/panel/agent/src/services/git_build.rs"
 UNIT="$REPO/panel/agent/dockpanel-agent.service"
 UPDATE="$REPO/scripts/update.sh"
 SETUP="$REPO/scripts/setup.sh"
@@ -74,18 +73,6 @@ hasE "$UNIT" 'ReadWritePaths=.*/var/lib/dockpanel' \
 nocode "$UNIT" 'ReadWritePaths=.*(/root|/usr/local/bin)' \
      "the fix did NOT widen the sandbox to /root or /usr/local/bin"
 
-has  "$GITBUILD" 'NIXPACKS_BIN: &str = "/var/lib/dockpanel/bin/nixpacks"' \
-     "nixpacks installs inside ReadWritePaths, not /usr/local/bin"
-has  "$GITBUILD" 'NIXPACKS_CACHE_ROOT: &str = "/var/lib/dockpanel/nixpacks-cache"' \
-     "its build cache too (/var/cache/dockpanel was never in ReadWritePaths)"
-nocode "$GITBUILD" 'mv /tmp/nixpacks /usr/local/bin' \
-     "the download no longer moves the binary into a read-only prefix"
-nocode "$GITBUILD" '/var/cache/dockpanel/nixpacks' \
-     "no code path still points the cache at the unwritable location"
-code "$GITBUILD" 'Path::new\(NIXPACKS_BIN\)\.is_file\(\)' \
-     "an already-downloaded nixpacks is found again (it is off the agent's PATH)"
-
-echo
 echo "B. The update's agent check asks the agent"
 code "$UPDATE" 'curl .*--unix-socket .*AGENT_SOCK.*localhost/health' \
      "the check probes the agent's own socket"
@@ -197,8 +184,9 @@ else
 fi
 code "$NGINXSVC" 'read_to_string\(path\)' \
      "the page is recognised by CONTENT — an operator's own index.html is not ours to delete"
-code "$REPO/panel/agent/src/routes/nginx.rs" 'placeholder_page\(' \
-     "and put_site writes it through that same helper rather than a second literal"
+# R6 (2026-11-02): the put_site arm is deleted with routes/nginx.rs::put_site,
+# removed in the R6 nginx split. The placeholder_page helper itself survives
+# in services/nginx.rs and is still read via is_placeholder_page by deploy.rs.
 
 # CLASS ARM: every path in this file that materialises a checkout on disk must
 # hand it to the user the web server runs as. atomic_deploy always did; the
@@ -216,7 +204,11 @@ CHOWN_N=$(grep -cE 'hand_tree_to_web_user\(' <<< "$SHIPPED")
 # The helper is called once per shipped checkout path plus once at its own
 # declaration, so the subject count is the callers.
 CHOWN_CALLS=$(grep -cE '^\s*hand_tree_to_web_user\(&' <<< "$SHIPPED")
-if [ "$CHOWN_SUBJECTS" -ge 2 ] && [ "$CHOWN_CALLS" -ge "$CHOWN_SUBJECTS" ]; then
+# R6 re-derivation: atomic_deploy's clone path was deleted in R6, leaving ONE
+# shipped checkout path (clone_or_pull). The property is unchanged — every
+# shipped path reaches the handover — so the floor tracks the surviving
+# path count (1), not the historical 2.
+if [ "$CHOWN_SUBJECTS" -ge 1 ] && [ "$CHOWN_CALLS" -ge "$CHOWN_SUBJECTS" ]; then
   ok "all $CHOWN_SUBJECTS shipped checkout paths reach hand_tree_to_web_user ($((ALL_CLONES - CHOWN_SUBJECTS)) test-only clones excluded by name)"
 else
   bad "$CHOWN_SUBJECTS shipped checkout paths but only $CHOWN_CALLS reach the handover — a deploy succeeds and the app cannot write"
@@ -227,8 +219,9 @@ fi
 # stopped doing the job. Extracting a helper moves the subject of every pin that
 # measured it, so both halves are pinned: the callers reach it, and it still
 # hands the tree over.
-if [ "$CHOWN_N" -ge 3 ] \
-   && grep -qE 'args\(\["-R", "www-data:www-data"' <<< "$SHIPPED"; then
+HAND_FN="$(fn_body "$DEPLOYSVC" hand_tree_to_web_user)"
+if [ -n "$HAND_FN" ] \
+   && grep -qE 'args\(\["-R", "www-data:www-data"' <<< "$HAND_FN"; then
   ok "and hand_tree_to_web_user still chowns the tree to www-data"
 else
   bad "hand_tree_to_web_user no longer chowns to www-data — every caller is now a no-op"
@@ -307,7 +300,10 @@ read -r CGIT CSAFE COTHER <<< "$(SRC="$SHIPPED" perl -e '$src=$ENV{SRC};'"$CLASS
 # the exception exists to let root operate on a tree somebody else owns, and the
 # somebody else here is the web user. The requirement is now the opposite — the
 # ownership guard stays switched ON, and the repository is kept root's instead.
-if [ "${CGIT:-0}" -ge 4 ] && [ "${CSAFE:-0}" -eq 0 ]; then
+# R6 re-derivation: atomic_deploy's git -C was deleted in R6, leaving 3 shipped
+# git -C invocations. The property is unchanged — none lifts the guard — so
+# the floor tracks the surviving count (3); CSAFE == 0 is the whole point.
+if [ "${CGIT:-0}" -ge 3 ] && [ "${CSAFE:-0}" -eq 0 ]; then
   ok "none of the $CGIT shipped git -C invocations lifts the ownership guard ($COTHER non-git -C excluded by name)"
 else
   bad "$CSAFE of $CGIT shipped git -C invocations still declare a directory safe — root will run git out of a tree the site controls"

@@ -16,6 +16,10 @@ pub struct VerificationCheck {
     pub message: String,
 }
 
+// R6: the production caller (verify_site_backup) was deleted with the
+// site-backup surface. The verdict predicate is retained for the four
+// verdict tests below, which pin the CRITICAL-vs-informational rule.
+#[allow(dead_code)]
 /// A site backup counts as verified only if every CRITICAL check passed. `has_entry_point`
 /// is informational (a valid non-web backup legitimately has no index.*) and must not gate
 /// the verdict. The previous `checks_passed >= checks_run - 1` slack certified a corrupt,
@@ -24,90 +28,6 @@ pub struct VerificationCheck {
 /// in the verify safety net itself. Extracted so the decision is unit-testable.
 fn site_backup_passed(checks: &[VerificationCheck]) -> bool {
     checks.iter().all(|c| c.name == "has_entry_point" || c.passed)
-}
-
-/// Verify a site backup: extract to temp dir, check file count and structure.
-pub async fn verify_site_backup(domain: &str, filename: &str) -> Result<VerificationResult, String> {
-    let start = std::time::Instant::now();
-    let mut checks = Vec::new();
-
-    let backup_path = format!("/var/backups/dockpanel/{domain}/{filename}");
-    if !std::path::Path::new(&backup_path).exists() {
-        return Err("Backup file not found".to_string());
-    }
-
-    // Check 1: File exists and has reasonable size
-    let meta = std::fs::metadata(&backup_path)
-        .map_err(|e| format!("Cannot read file: {e}"))?;
-    checks.push(VerificationCheck {
-        name: "file_exists".into(),
-        passed: meta.len() > 100,
-        message: format!("Backup file size: {} bytes", meta.len()),
-    });
-
-    // Check 2: Extract to temp dir and verify contents
-    let temp_dir = format!("/tmp/dockpanel-verify-{}", uuid::Uuid::new_v4());
-    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Temp dir: {e}"))?;
-
-    let extract_ok = tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        safe_command("tar")
-            .args(["xzf", &backup_path, "-C", &temp_dir, "--no-same-owner", "--no-same-permissions"])
-            .output(),
-    )
-    .await
-    .map(|r| r.map(|o| o.status.success()).unwrap_or(false))
-    .unwrap_or(false);
-
-    checks.push(VerificationCheck {
-        name: "extract_success".into(),
-        passed: extract_ok,
-        message: if extract_ok { "Archive extracts cleanly".into() } else { "Failed to extract archive".into() },
-    });
-
-    // Check 3: Count files in extracted directory
-    if extract_ok {
-        let count_output = safe_command("find")
-            .args([&temp_dir, "-type", "f"])
-            .output()
-            .await;
-        let file_count = count_output
-            .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
-            .unwrap_or(0);
-
-        checks.push(VerificationCheck {
-            name: "file_count".into(),
-            passed: file_count > 0,
-            message: format!("{file_count} files extracted"),
-        });
-
-        // Check 4: Look for common web files (index.php/html, wp-config.php, etc.)
-        let has_index = std::path::Path::new(&format!("{temp_dir}/index.php")).exists()
-            || std::path::Path::new(&format!("{temp_dir}/index.html")).exists()
-            || std::path::Path::new(&format!("{temp_dir}/public/index.html")).exists()
-            || std::path::Path::new(&format!("{temp_dir}/public/index.php")).exists();
-
-        checks.push(VerificationCheck {
-            name: "has_entry_point".into(),
-            passed: has_index,
-            message: if has_index { "Entry point found (index.php/html)".into() } else { "No index file found (may be expected for non-web backups)".into() },
-        });
-    }
-
-    // Cleanup temp dir
-    std::fs::remove_dir_all(&temp_dir).ok();
-
-    let checks_run = checks.len() as i32;
-    let checks_passed = checks.iter().filter(|c| c.passed).count() as i32;
-    let passed = site_backup_passed(&checks);
-
-    Ok(VerificationResult {
-        passed,
-        checks_run,
-        checks_passed,
-        details: checks,
-        duration_ms: start.elapsed().as_millis() as u64,
-    })
 }
 
 /// Validate a resource name (database, app, container, etc.).

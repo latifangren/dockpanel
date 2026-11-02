@@ -384,17 +384,6 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
-section "12. DNS MANAGEMENT"
-# ─────────────────────────────────────────────────────────────────────────
-
-DNS_STATUS=$(api_get_status "/dns/zones")
-if [ "$DNS_STATUS" = "200" ]; then
-    ok "DNS zones endpoint accessible"
-else
-    fail "DNS zones endpoint returned HTTP $DNS_STATUS"
-fi
-
-# ─────────────────────────────────────────────────────────────────────────
 section "13. SECURITY"
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -544,17 +533,6 @@ if [ "$EXT_STATUS" = "200" ]; then
     ok "Extensions endpoint accessible"
 else
     fail "Extensions endpoint returned HTTP $EXT_STATUS"
-fi
-
-# ─────────────────────────────────────────────────────────────────────────
-section "23. MAIL (STATUS ONLY)"
-# ─────────────────────────────────────────────────────────────────────────
-
-MAIL_STATUS=$(api_get_status "/mail/domains")
-if [ "$MAIL_STATUS" = "200" ]; then
-    ok "Mail domains endpoint accessible"
-else
-    fail "Mail domains endpoint returned HTTP $MAIL_STATUS"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────

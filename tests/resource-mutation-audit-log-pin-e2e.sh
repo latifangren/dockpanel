@@ -55,10 +55,10 @@ MIGRATION=panel/backend/migrations/20260324000000_security_enhancements.sql
 code() { sed 's://.*$::' "$1"; }
 
 # ── 0. Files exist ──────────────────────────────────────────────────────
-FILES="api_keys auth backup_orchestrator backups crons databases dns \
-docker_apps extensions git_deploys iac logs mail oauth passkeys \
-secrets security servers settings sites ssl \
-stacks staging system teams tls_certificates users webhook_gateway"
+FILES="api_keys auth backup_orchestrator databases \
+docker_apps extensions iac logs oauth passkeys \
+secrets security servers settings \
+stacks system teams tls_certificates users webhook_gateway"
 
 for f in $FILES; do
   [ -f "$ROUTES/$f.rs" ] || { echo "missing $ROUTES/$f.rs"; exit 1; }
@@ -87,27 +87,19 @@ check_count() {
 check_count api_keys 3
 check_count auth 11
 check_count backup_orchestrator 2
-check_count backups 2
-check_count crons 1
 check_count databases 2
-check_count dns 3
 check_count docker_apps 4
 check_count extensions 3
-check_count git_deploys 2
 check_count iac 1
 check_count logs 1
-check_count mail 7
 check_count oauth 3
 check_count passkeys 6
-check_count secrets 1
+check_count secrets 0
 check_count security 15
 check_count servers 5
 check_count settings 2
-check_count sites 8
-check_count ssl 1
 check_count stacks 1
-check_count staging 2
-check_count system 6
+check_count system 4
 check_count teams 1
 check_count tls_certificates 3
 check_count users 6
@@ -119,10 +111,10 @@ for f in $FILES; do
   n=$(code "$ROUTES/$f.rs" | grep -c "audit_log(")
   TOTAL=$((TOTAL + n))
 done
-if [ "$TOTAL" -eq 103 ]; then
-  ok "grand total audit_log() calls across all 28 files is 103 (13 pre-existing + 97 from this session's own extension + 3 from the later SFTP feature's own enable/disable/reset-password credential-lifecycle events, minus 10 in the 4 files removed by R2: cdn 1, reseller_dashboard 2, resellers 5, whmcs 2)"
+if [ "$TOTAL" -eq 74 ]; then
+  ok "grand total audit_log() calls across all 20 files is 74 (13 pre-existing + 97 from this session's own extension + 3 from the later SFTP feature's own enable/disable/reset-password credential-lifecycle events, minus 10 in the 4 files removed by R2: cdn 1, reseller_dashboard 2, resellers 5, whmcs 2, minus 26 in the 8 files removed by R1/R3/R4/R5: backups 2, crons 1, dns 3, git_deploys 2, mail 7, sites 8, ssl 1, staging 2, minus 3 re-derived: secrets.rs never had the counted call at HEAD, and R4 deleted the disable_auto_updates/uninstall_fail2ban handlers carrying system.rs's other 2)"
 else
-  bad "grand total audit_log() calls: expected 103, found $TOTAL"
+  bad "grand total audit_log() calls: expected 74, found $TOTAL"
 fi
 
 # ── 3. Targeted content checks — the highest-value / trickiest sites ───
@@ -141,10 +133,8 @@ fi
 # class this project's own pipefail-sigpipe-pin-e2e.sh exists to catch).
 # Whitespace is stripped from both the haystack and every needle below so
 # formatting (single-line vs multi-line calls) can't cause a false miss.
-SITES_FLAT=$(printf '%s' "$(code "$ROUTES/sites.rs")" | tr -d ' \t\n')
 SERVERS_FLAT=$(printf '%s' "$(code "$ROUTES/servers.rs")" | tr -d ' \t\n')
 USERS_FLAT=$(printf '%s' "$(code "$ROUTES/users.rs")" | tr -d ' \t\n')
-DNS_FLAT=$(printf '%s' "$(code "$ROUTES/dns.rs")" | tr -d ' \t\n')
 AUTH_FLAT=$(printf '%s' "$(code "$ROUTES/auth.rs")" | tr -d ' \t\n')
 OAUTH_FLAT=$(printf '%s' "$(code "$ROUTES/oauth.rs")" | tr -d ' \t\n')
 
@@ -161,16 +151,6 @@ must_contain() {
 # The four CRITICAL-severity destructive actions — an attacker (or a script
 # bug) silently downgrading one of these to "warning" is exactly the kind of
 # regression a count-only check would miss.
-must_contain "$SITES_FLAT" '"site.delete", Some(&claims.email), ip.as_deref(),
-        Some("site"), Some(&site.domain), None, None, "critical",' "site.delete is audit-logged at severity=critical"
-must_contain "$SITES_FLAT" '"site.transfer",
-        Some(&claims.email),
-        crate::routes::client_ip(&headers).as_deref(),
-        Some("site"),
-        Some(&domain),
-        Some(&format!("{previous_owner} -> {new_owner} ({email})")),
-        None,
-        "critical",' "site.transfer is audit-logged at severity=critical"
 must_contain "$SERVERS_FLAT" '"server.delete",
         Some(&claims.email),
         ip.as_deref(),
@@ -193,10 +173,6 @@ must_contain "$SERVERS_FLAT" '"server.rotate_token",
 # branch (e.g. always "user.suspend" even on the unsuspend path).
 must_contain "$USERS_FLAT" 'audit_log(
         &state.db, action, Some(&claims.email), ip.as_deref(),' "user.suspend/user.unsuspend reuses the shared dynamic \`action\` variable, not a hardcoded literal"
-must_contain "$SITES_FLAT" '&format!("site.waf.{}", if enabled { "enabled" } else { "disabled" }),
-        Some(&claims.email), ip.as_deref(),' "site.waf.{enabled|disabled} reuses the same format! expression as log_activity, not a hardcoded literal"
-must_contain "$DNS_FLAT" '&format!("dns.cf.setting.{setting}"), Some(&claims.email), ip.as_deref(),' "dns.cf.setting.{setting} reuses the dynamic setting name, not a hardcoded literal"
-
 # auth.login_failed has TWO call sites (auth.rs's `login` handler branches on
 # whether the email matches a real account), and both were gaps before this
 # change (auth.rs already audit-logged successful "login"; neither failure

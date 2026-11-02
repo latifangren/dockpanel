@@ -31,12 +31,10 @@ BE=panel/backend/src
 FE=panel/frontend/src
 SETTINGS_RS=$BE/routes/settings.rs
 AI_RS=$BE/services/ai_diagnosis.rs
-GIT_DEPLOYS_RS=$BE/routes/git_deploys.rs
 MOD_RS=$BE/routes/mod.rs
-GIT_DEPLOYS_TSX=$FE/pages/GitDeploys.tsx
 SETTINGS_TSX=$FE/pages/Settings.tsx
 
-for f in "$SETTINGS_RS" "$AI_RS" "$GIT_DEPLOYS_RS" "$MOD_RS" "$GIT_DEPLOYS_TSX" "$SETTINGS_TSX"; do
+for f in "$SETTINGS_RS" "$AI_RS" "$MOD_RS" "$SETTINGS_TSX"; do
   [ -f "$f" ] || { echo "missing file: $f"; exit 1; }
 done
 
@@ -56,7 +54,6 @@ must_contain() {
 
 AI_FLAT=$(tr -d ' \t\n' < "$AI_RS")
 SETTINGS_FLAT=$(tr -d ' \t\n' < "$SETTINGS_RS")
-GD_FLAT=$(tr -d ' \t\n' < "$GIT_DEPLOYS_RS")
 
 # ── §1 — off by default, and configured the same way every other setting is ──
 echo "── §1 the four settings exist, writable, and the key is encrypted ──"
@@ -91,27 +88,20 @@ must_contain "$AI_FLAT" 'if get("ai_diagnosis_enabled")!="true"{returnOk(None);}
   "load_config refuses to return a usable config unless ai_diagnosis_enabled == \"true\""
 must_contain "$AI_FLAT" 'ifprovider.is_empty()||model.is_empty()||api_key_enc.is_empty(){returnOk(None);}' \
   "load_config also refuses when provider/model/key are incomplete, not just when disabled"
-must_contain "$GD_FLAT" 'let config=crate::services::ai_diagnosis::load_config(&state.db,&state.config.jwt_secret).await?.ok_or_else(||{err(StatusCode::BAD_REQUEST,"AIdiagnosisisnotconfigured.SetaproviderandAPIkeyinSettings→Services.",)})?;' \
-  "explain_history refuses with a clear message when AI diagnosis is not configured, rather than calling a provider with an empty key"
-
 # ── §3 — manual trigger only: exactly one call site, exactly one route ──
-echo "── §3 nothing calls the LLM except the one operator-triggered endpoint ──"
+echo "── §3 the LLM service has no callers left (R5 orphaned it with git deploys) ──"
 call_sites=$(grep -rho 'ai_diagnosis::explain_failure(' --include=*.rs "$BE" | wc -l | tr -d ' ')
-if [ "$call_sites" -eq 1 ]; then
-  ok "ai_diagnosis::explain_failure has exactly 1 call site (no auto-trigger path)"
+if [ "$call_sites" -eq 0 ]; then
+  ok "ai_diagnosis::explain_failure has 0 call sites — a future caller must be a deliberate decision, not an auto-trigger"
 else
-  bad "ai_diagnosis::explain_failure has $call_sites call sites — expected exactly 1 (a new site may be an auto-trigger, spending the operator's credits without a click)"
+  bad "ai_diagnosis::explain_failure has $call_sites call sites — expected 0 (a new site may be an auto-trigger, spending the operator's credits without a click)"
 fi
 route_sites=$(grep -c '/history/{history_id}/explain' "$MOD_RS" || true)
-if [ "$route_sites" -eq 1 ]; then
-  ok "the explain route is registered exactly once"
+if [ "$route_sites" -eq 0 ]; then
+  ok "the explain route is gone with git_deploys"
 else
-  bad "expected exactly 1 registration of the explain route, found $route_sites"
+  bad "expected 0 registrations of the explain route, found $route_sites"
 fi
-must_contain "$GD_FLAT" 'require_admin(&claims.role)?;letdeploy:(Uuid,String)=sqlx::query_as("SELECTid,nameFROMgit_deploysWHEREid=$1ANDuser_id=$2",)' \
-  "explain_history requires admin and scopes the git_deploy lookup to the caller's own user_id"
-must_contain "$GD_FLAT" 'ifentry.status!="failed"{returnErr(err(StatusCode::BAD_REQUEST,"Onlyfaileddeployscanbeexplained",));}' \
-  "explain_history refuses to run on anything but a failed deploy"
 
 # ── §4 — redaction runs unconditionally, before truncation, before the network call ──
 echo "── §4 redaction is unconditional, not a setting ──"
@@ -134,20 +124,6 @@ done
 must_contain "$AI_FLAT" 'constMAX_OUTPUT_CHARS:usize=8000;' "output is truncated to a bounded size before it reaches any provider"
 
 # ── §5 — the frontend button only appears on a failed entry, and never auto-fires ──
-echo "── §5 frontend: manual button, gated on failed status ──"
-FE_GD_FLAT=$(perl -0777 -pe 's{/\*.*?\*/}{}gs' "$GIT_DEPLOYS_TSX" | tr -d ' \t\n')
-must_contain "$FE_GD_FLAT" 'entry.status==="failed"&&(<button' \
-  "the Explain with AI button is gated on entry.status === \"failed\""
-must_contain "$FE_GD_FLAT" 'onClick={(e)=>{e.stopPropagation();setExpandedLog(entry.id);explainWithAi(entry.id);}}' \
-  "the button calls explainWithAi only from an explicit onClick, not an effect"
-n_auto=$(grep -cE 'useEffect\(.*explainWithAi' "$GIT_DEPLOYS_TSX" || true)
-if [ "$n_auto" -eq 0 ]; then
-  ok "explainWithAi is never called from a useEffect (no fire-on-load/fire-on-render path)"
-else
-  bad "explainWithAi is referenced inside a useEffect — it may fire without a click"
-fi
-
-# ── §6 — the settings control actually sends the keys (§9 shape, this feature only) ──
 echo "── §6 the Settings.tsx control sends all four keys ──"
 FE_SET_FLAT=$(perl -0777 -pe 's{/\*.*?\*/}{}gs' "$SETTINGS_TSX" | tr -d ' \t\n')
 for k in ai_diagnosis_enabled ai_diagnosis_provider ai_diagnosis_model; do

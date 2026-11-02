@@ -38,16 +38,20 @@ APPS_SVC=panel/agent/src/services/docker_apps.rs
 NGINX_SVC=panel/agent/src/services/nginx.rs
 NGINX_ROUTE=panel/agent/src/routes/nginx.rs
 TRAEFIK=panel/agent/src/services/traefik.rs
-GITDEP=panel/backend/src/routes/git_deploys.rs
-SITES=panel/backend/src/routes/sites.rs
 MIG_SVC=panel/agent/src/services/migration.rs
-MIG_ROUTE=panel/agent/src/routes/migration.rs
-MIG_BE=panel/backend/src/routes/migration.rs
 
-for f in "$APPS_UI" "$APPS_BE" "$APPS_SVC" "$NGINX_SVC" "$NGINX_ROUTE" "$TRAEFIK" \
-         "$GITDEP" "$SITES" "$MIG_SVC" "$MIG_ROUTE" "$MIG_BE"; do
+for f in "$APPS_UI" "$APPS_BE" "$APPS_SVC" "$NGINX_SVC" "$NGINX_ROUTE" "$TRAEFIK"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
+
+# R6 merge (2026-11-02): the migration-wizard agent engine
+# (services/migration.rs) was deleted with routes/migration.rs. The three
+# MIG_SVC blocks below are tombstones: their properties die with the file.
+if [ -f "$MIG_SVC" ]; then
+  bad "services/migration.rs still exists — deleted in the R6 merge"
+else
+  ok "services/migration.rs is gone (R6 merge)"
+fi
 
 # Comments out, CODE INTACT.
 #
@@ -224,83 +228,6 @@ if S=$(subj "$APPS_BE"); then
   fi
 fi
 
-if S=$(subj "$GITDEP"); then
-  # v2.168.0: raw `ssl_email` presence stopped being the truth once
-  # `provided` mode could withhold it entirely (a certificate-registry
-  # deploy has no ACME address at all) — deploy_url now takes the EFFECTIVE
-  # mode (`stacks::effective_tls_mode`), still resolved in this one place.
-  W=$(win "$S" 'fn deploy_url\(domain: &str, tls_mode: &str\)' 6)
-  if derives "$W" 'tls_mode == "acme" \|\| tls_mode == "provided"'; then
-    ok "git deploys resolve their URL in one place, from the effective TLS mode"
-  else
-    bad "deploy_url is gone or no longer branches on the effective TLS mode"
-  fi
-  N=$(count "$S" 'format!\("https://\{?\}?"?, ?domain')
-  if [ "$N" = "0" ]; then
-    ok "no git-deploy path hardcodes https://<domain>"
-  else
-    bad "$N git-deploy path(s) hardcode https://<domain> again"
-  fi
-  # Taking the finished URL is what prevents a NEW caller reintroducing the
-  # hardcode: there is no domain parameter left to build one from.
-  if has "$S" 'async fn set_github_status\(.*target_url: Option<String>\)'; then
-    ok "set_github_status takes a finished URL, not a domain"
-  else
-    bad "set_github_status takes a domain again — a caller can hardcode the scheme"
-  fi
-  # Every call site must route through the resolver. Two of the seven (the
-  # success branches, which know what the agent actually served once
-  # `provided` mode can be refused and fall back to plain HTTP) pass
-  # `actual_mode` instead of the merely-requested `effective_mode` — still
-  # the SAME function, never a second hardcoded scheme.
-  #
-  # A caller may also route through a variable computed ONCE via deploy_url
-  # and reused across several calls (the preview-deploy path added at s484,
-  # `github_target`) — same safety property, a DRYer shape. Credit it only
-  # if that variable's OWN definition resolves through deploy_url, never by
-  # name alone — otherwise a future `let github_target = domain.to_string()`
-  # would satisfy this arm while reintroducing exactly the hardcoded scheme
-  # deploy_url exists to prevent.
-  CALLS=$(count "$S" 'set_github_status\(')
-  DIRECT_RESOLVED=$(count "$S" 'deploy_url\(d, (effective_mode|actual_mode)\)')
-  SHARED_RESOLVED=0
-  if has "$S" 'github_target[ ]*=[ ]*preview_domain\.as_deref\(\)\.map\(\|d\|[ ]*deploy_url\(d, (effective_mode|actual_mode)\)\)'; then
-    SHARED_RESOLVED=$(count "$S" 'set_github_status\([^)]*github_target')
-  fi
-  RESOLVED=$((DIRECT_RESOLVED + SHARED_RESOLVED))
-  # CALLS counts the definition too, so callers = CALLS - 1.
-  if [ "$RESOLVED" -ge "$((CALLS - 1))" ]; then
-    ok "all $((CALLS - 1)) set_github_status callers resolve through deploy_url"
-  else
-    bad "only $RESOLVED of $((CALLS - 1)) set_github_status callers resolve through deploy_url"
-  fi
-fi
-
-if S=$(subj "$SITES"); then
-  # A domain rename must change the domain and nothing else. Rebuilding the URL
-  # from a literal scheme is the defect; preserving the existing one is the fix.
-  if has "$S" 'let new_url = format!\("https://\{new_domain\}"\)'; then
-    bad "the rename path rewrites monitor URLs to https again"
-  else
-    ok "the rename path does not rewrite the monitor's scheme"
-  fi
-  if has "$S" "WHEN url LIKE 'http://%'"; then
-    ok "the rename preserves whichever scheme the monitor already had"
-  else
-    bad "the rename no longer preserves the monitor's existing scheme"
-  fi
-  # NEGATIVE-CONTROL, deliberately kept. sites.rs' OTHER auto-monitor is created
-  # disabled and is only ever enabled by the SSL-provisioning paths, so its
-  # https:// is correct by construction and must NOT be "fixed". This arm fails
-  # if someone deletes the enabled=FALSE that makes it correct.
-  if has "$S" "'pending', FALSE, 'http'"; then
-    ok "the site-creation monitor is still created disabled (its https is earned)"
-  else
-    bad "the site-creation monitor is no longer created disabled — its https is now a guess"
-  fi
-fi
-
-echo
 echo "== §B  the importer and the vhost agree on where a site lives =="
 
 if S=$(subj "$NGINX_SVC"); then
@@ -311,128 +238,21 @@ if S=$(subj "$NGINX_SVC"); then
   fi
 fi
 
-# Both callers must ASK, rather than each re-deriving the runtime match.
-for f in "$NGINX_ROUTE" "$MIG_SVC"; do
-  if S=$(subj "$f"); then
-    # Bound, not merely called: a discarded `let _ = document_root_for(..)`
-    # beside a hand-built path satisfies a presence grep (probe P4). Read with a
-    # line of leading context, because one caller wraps the binding onto its own
-    # line — a single-line pattern misses it and reds correct code.
-    W=$(grep -B1 -E 'document_root_for' <<< "$S" || true)
-    if [ -n "$W" ] && has "$W" 'let [a-z_]+ *=' && ! has "$W" 'let _ *='; then
-      ok "$(basename "$f") binds its document root from document_root_for"
-    else
-      bad "$(basename "$f") derives the document root itself again"
-    fi
-    if has "$S" '"proxy" \| "node" \| "python"'; then
-      bad "$(basename "$f") re-spells the runtime rule instead of asking"
-    else
-      ok "$(basename "$f") does not re-spell the runtime rule"
-    fi
-  fi
-done
+# R6 merge: the document-root loop above asserted the migration service
+# asked document_root_for instead of re-deriving the runtime rule.
+# The service file is deleted with the wizard; document_root_for
+# itself survives (asserted above against NGINX_SVC) for its remaining
+# caller in app_process.rs. Deleted, not weakened: no importer
+# remains to re-derive the rule.
 
-if S=$(subj "$MIG_SVC"); then
-  # The analyser steps into a nested archive; both importers must step in too.
-  N=$(count "$S" 'find_backup_root\(&format!\("\{MIGRATION_DIR\}-\{migration_id\}"\)\)')
-  if [ "$N" -ge 2 ]; then
-    ok "both importers resolve the archive root the way the analyser did"
-  else
-    bad "only $N of 2 importers resolve the archive root through find_backup_root"
-  fi
-  if has "$S" 'let extract_root = format!\("\{MIGRATION_DIR\}-\{migration_id\}"\);'; then
-    bad "an importer rebuilds the archive root without stepping into the nest"
-  else
-    ok "no importer rebuilds the archive root by hand"
-  fi
-  # Absolute doc_roots cannot survive import_site_files' own traversal guard, so
-  # no parser may emit one.
-  # Keyed on the CAPABILITY, not on one spelling of the defect. The first draft
-  # forbade `doc_root: doc_root.to_string_lossy`, and probe P6 walked straight
-  # past it by writing `doc_root.display().to_string()` instead — the same
-  # spelling-bound-negative disease as lesson #122. What a correct parser must
-  # DO is pass the path through `relative_to`; what it must never do is hand a
-  # `Path` conversion straight to the field.
-  PARSERS_OK=1
-  for fn in parse_plesk parse_hestiacp; do
-    W=$(fnbody "$S" "$fn")
-    derives "$W" 'relative_to\(&doc_root, root\)' || PARSERS_OK=0
-  done
-  if [ "$PARSERS_OK" = "1" ]; then
-    ok "every path-walking parser makes its doc_root archive-relative"
-  else
-    bad "a path-walking parser no longer makes its doc_root archive-relative"
-  fi
-  # FLATTENED (#383). rustfmt puts a long method chain on its own indented lines,
-  # so `doc_root:` and its `.display()` land on DIFFERENT lines and a line-oriented
-  # grep sees neither. Gap BOUNDED to one statement (`[^;{}]`), never `.*`.
-  SFLAT=$(tr '\n' ' ' <<< "$S" | tr -s ' ')
-  if has "$SFLAT" 'doc_root: *[^;{}]{0,160}\. *(display\(\)|to_string_lossy\(\)|to_str\(\)|into_os_string\(\))'; then
-    bad "a parser hands a filesystem path straight to doc_root — import rejects it as traversal"
-  else
-    ok "no parser hands a filesystem path straight to doc_root"
-  fi
-  # The general property behind both arms above, and the one probe P14 used to
-  # get past them: an inventory path is joined ONTO the archive root by the
-  # importer, so it must never already contain it. Interpolating `{root}` is
-  # absolute by another name.
-  # FLATTENED (#383) — same subject, same reason: rustfmt breaks a long `format!(`
-  # so the field name and its literal land on different lines. `[^,]*` still bounds
-  # the match to the field's own initializer, so no `.*` is introduced.
-  if has "$SFLAT" '(doc_root|file): *[^,]*\{root\}'; then
-    bad "a parser embeds the archive root in a path the importer will join onto it"
-  else
-    ok "no parser embeds the archive root in an inventory path"
-  fi
-  if has "$S" 'fn relative_to'; then
-    ok "there is one helper making inventory paths archive-relative"
-  else
-    bad "relative_to is gone"
-  fi
-  # A bare filename resolves one level above the directory it was found in.
-  # Property, not spelling: the emitted value must CARRY A DIRECTORY. The first
-  # draft forbade the literal `file: name,` and probe P9 walked past it with
-  # `file: name.clone()`. What matters is that a separator is present, because
-  # `import_database` joins this onto the archive root.
-  DBS_OK=1
-  for fn in parse_cpanel parse_plesk parse_hestiacp; do
-    W=$(fnbody "$S" "$fn")
-    derives "$W" 'file: format!\("[a-z_]+/' || DBS_OK=0
-  done
-  if [ "$DBS_OK" = "1" ]; then
-    ok "every parser carries the database's directory"
-  else
-    bad "a parser emits a database path with no directory — import looks one level too high"
-  fi
-fi
+# R6 merge: the archive-root / parser blocks asserted the migration
+# importers resolved archive roots and emitted archive-relative paths.
+# The importer file is deleted with the wizard. Deleted, not weakened:
+# there is no importer left whose paths could escape the archive.
 
-if S=$(subj "$MIG_BE"); then
-  # Scoped to the IMPORT body. `"runtime": runtime` also appears in the nginx
-  # body a few lines up, so an unscoped grep stays green with the import body
-  # empty — which is exactly what it did on the pre-fix tree when this arm was
-  # first written (lesson #125: an arm satisfied by unrelated code is not an arm).
-  IMPORT_BODY=$(grep -A8 -E 'let import_body = serde_json::json!' <<< "$S" || true)
-  if [ -n "$IMPORT_BODY" ] && has "$IMPORT_BODY" '"runtime": runtime'; then
-    ok "the panel tells the importer which runtime the vhost was created with"
-  else
-    bad "the import request no longer carries the runtime"
-  fi
-fi
-
-if S=$(subj "$MIG_ROUTE"); then
-  # The s288 lesson: a key the sender spells differently from the reader is a
-  # silent default, not an error. Pin the reader's key name.
-  if has "$S" 'body\["runtime"\]'; then
-    ok "the agent reads the same runtime key the panel sends"
-  else
-    bad "the agent no longer reads the runtime key the panel sends"
-  fi
-  if has "$S" 'import_site_files\(migration_id, domain, source_dir, runtime\)'; then
-    ok "the runtime reaches import_site_files"
-  else
-    bad "the runtime does not reach import_site_files"
-  fi
-fi
+# R6 merge (2026-11-02): the runtime block above asserted import_site_files
+# took runtime as a typed parameter. The service file is deleted with the
+# wizard, so the key-spelling lesson dies with it. Deleted, not weakened.
 
 echo
 echo "──────────────────────────────────────────"

@@ -197,7 +197,7 @@ pub struct ProvisionOpts<'a> {
     ///
     /// ⛔ FALSE IS THE SAFE VALUE, AND ABSENT MEANS FALSE. Both writers take
     /// `Option<&ProvisionOpts>` and several callers pass `None` — the compose
-    /// deploy, the git build. Those are exactly the callers that never asked the
+    /// deploy. Those are exactly the callers that never asked the
     /// issuer question, so `None` must fail CLOSED or the guard protects only
     /// the doors that did not need it.
     ///
@@ -413,7 +413,10 @@ pub const CA_DECLINED: &str = "[ca] ";
 
 /// The same idea for the OTHER party the DNS-01 door talks to.
 ///
-/// `provision_cert_dns01` has three ways to fail, not two: the CA can decline,
+/// The DNS-01 writer that used this marker was removed with site issuance
+/// (R6); the marker is retained so the panel's `dns_provider_failed` parsing
+/// keeps one spelling. That writer had three ways to fail, not two: the CA
+/// could decline,
 /// this machine can break, and — uniquely on this door — the DNS provider can
 /// refuse. A token without `DNS:Edit` is the commonest real failure here, and it
 /// is the operator's to fix, so hiding it behind an incident id wastes the one
@@ -577,240 +580,6 @@ pub async fn provision_cert(
     })
 }
 
-/// Provision a Let's Encrypt certificate using DNS-01 challenge via Cloudflare.
-/// Supports wildcard certificates (*.domain + domain).
-pub async fn provision_cert_dns01(
-    account: &Account,
-    domain: &str,
-    cf_zone_id: &str,
-    cf_api_token: &str,
-    cf_api_email: Option<&str>,
-    wildcard: bool,
-    opts: Option<&ProvisionOpts<'_>>,
-) -> Result<CertInfo, String> {
-    let label = if wildcard { "wildcard" } else { "dns01" };
-    tracing::info!("Provisioning SSL ({label}) for {domain}");
-
-    // ⛔ THE CHOKE POINT, and this writer needs it MORE than its sibling. For a
-    //    wildcard the caller hands us the zone APEX, and the apex directory is
-    //    what every sibling vhost in that zone points at — so an unguarded order
-    //    here replaces one certificate and takes an unbounded number of sites
-    //    with it. `domain` is both what we check and what we write, by
-    //    construction, so the two can never name different files.
-    if !opts.map(|o| o.replace_foreign).unwrap_or(false) {
-        if let Some(issuer) = foreign_installed_issuer(domain).await {
-            tracing::warn!("Refusing ACME {label} order for {domain}: installed certificate is from {issuer}");
-            return Err(foreign_cert_refusal(domain, &issuer));
-        }
-    }
-
-    // Build identifiers
-    let mut ids = vec![Identifier::Dns(domain.to_string())];
-    if wildcard {
-        ids.push(Identifier::Dns(format!("*.{domain}")));
-    }
-
-    let mut new_order = NewOrder::new(&ids);
-    if let Some(o) = opts {
-        if let Some(p) = o.profile {
-            new_order = new_order.profile(p);
-        }
-        if let Some(pem) = o.replaces_pem {
-            match cert_identifier_from_pem(pem) {
-                Ok(owned) => new_order = new_order.replaces(owned),
-                Err(e) => tracing::warn!("ARI replaces skipped ({domain}): {e}"),
-            }
-        }
-    }
-    let profile_used = opts.and_then(|o| o.profile).map(String::from);
-    let mut order = account
-        .new_order(&new_order)
-        .await
-        .map_err(|e| format!("{CA_DECLINED}The CA refused the certificate order: {e}"))?;
-
-    let state = order.state();
-    if !matches!(state.status, OrderStatus::Pending | OrderStatus::Ready) {
-        return Err(format!("{CA_DECLINED}The CA returned an unexpected order status: {:?}", state.status));
-    }
-
-    // Build Cloudflare client
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("HTTP client: {e}"))?;
-    let cf_api = "https://api.cloudflare.com/client/v4";
-    let mut headers = reqwest::header::HeaderMap::new();
-    if let Some(email) = cf_api_email {
-        headers.insert(
-            "X-Auth-Email",
-            email.parse().map_err(|_| {
-                format!("{DNS_PROVIDER_DECLINED}The Cloudflare account email for this zone is not a usable header value")
-            })?,
-        );
-        headers.insert(
-            "X-Auth-Key",
-            cf_api_token.parse().map_err(|_| {
-                format!("{DNS_PROVIDER_DECLINED}The Cloudflare API key for this zone is not a usable header value")
-            })?,
-        );
-    } else {
-        headers.insert(
-            "Authorization",
-            format!("Bearer {cf_api_token}").parse().map_err(|_| {
-                format!("{DNS_PROVIDER_DECLINED}The Cloudflare API token for this zone is not a usable header value")
-            })?,
-        );
-    }
-
-    let mut created_records: Vec<String> = Vec::new();
-
-    if matches!(state.status, OrderStatus::Pending) {
-        let mut authorizations = order.authorizations();
-        while let Some(result) = authorizations.next().await {
-            let mut authz = match result {
-                Ok(a) => a,
-                Err(e) => {
-                    cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!("{CA_DECLINED}The CA would not return an authorization: {e}"));
-                }
-            };
-
-            match authz.status {
-                AuthorizationStatus::Valid => continue,
-                AuthorizationStatus::Pending => {}
-                status => {
-                    cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!("{CA_DECLINED}The CA returned an unexpected authorization status: {status:?}"));
-                }
-            }
-
-            let mut challenge = match authz.challenge(ChallengeType::Dns01) {
-                Some(c) => c,
-                None => {
-                    cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!(
-                        "{CA_DECLINED}The CA offered no DNS-01 challenge for this domain"
-                    ));
-                }
-            };
-
-            let key_auth = challenge.key_authorization();
-            let txt_value = key_auth.dns_value();
-
-            // Create TXT record: _acme-challenge.{domain}
-            let record_name = format!("_acme-challenge.{domain}");
-            tracing::info!("DNS-01: creating TXT {record_name} = {txt_value}");
-
-            let resp = match client
-                .post(&format!("{cf_api}/zones/{cf_zone_id}/dns_records"))
-                .headers(headers.clone())
-                .json(&serde_json::json!({
-                    "type": "TXT",
-                    "name": &record_name,
-                    "content": &txt_value,
-                    "ttl": 120,
-                }))
-                .send()
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!("{DNS_PROVIDER_DECLINED}Cloudflare could not be reached to publish the challenge record: {e}"));
-                }
-            };
-
-            let resp_json: serde_json::Value = match resp.json().await {
-                Ok(j) => j,
-                Err(e) => {
-                    cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!("{DNS_PROVIDER_DECLINED}Cloudflare returned a response that could not be read: {e}"));
-                }
-            };
-
-            if resp_json.get("success").and_then(|v| v.as_bool()) != Some(true) {
-                cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                let errs = resp_json.get("errors").cloned().unwrap_or_default();
-                return Err(format!("{DNS_PROVIDER_DECLINED}Cloudflare refused to create the challenge record: {errs}"));
-            }
-
-            if let Some(rid) = resp_json.pointer("/result/id").and_then(|v| v.as_str()) {
-                created_records.push(rid.to_string());
-            }
-
-            // Wait for DNS propagation (Cloudflare is fast, but ACME servers cache)
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-
-            if let Err(e) = challenge.set_ready().await {
-                cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                return Err(format!("{CA_DECLINED}The CA would not accept the challenge as ready: {e}"));
-            }
-        }
-    }
-
-    // Poll until order is ready (120s timeout for DNS propagation)
-    use instant_acme::RetryPolicy;
-    let timeout = std::time::Duration::from_secs(120);
-    let poll_result = order.poll_ready(&RetryPolicy::new().timeout(timeout)).await;
-
-    // Always clean up TXT records
-    cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-
-    poll_result.map_err(|e| format!("{CA_DECLINED}The CA did not validate the DNS-01 challenge: {e}"))?;
-
-    // Finalize
-    let private_key_pem = order
-        .finalize()
-        .await
-        .map_err(|e| format!("{CA_DECLINED}The CA would not finalize the order: {e}"))?;
-
-    let cert_chain_pem = order
-        .poll_certificate(&RetryPolicy::new().timeout(timeout))
-        .await
-        .map_err(|e| format!("{CA_DECLINED}The CA would not hand back the certificate: {e}"))?;
-
-    // Save cert (use base domain for directory)
-    let cert_dir = format!("{SSL_DIR}/{domain}");
-    tokio::fs::create_dir_all(&cert_dir)
-        .await
-        .map_err(|e| format!("Create cert dir: {e}"))?;
-
-    let cert_path = format!("{cert_dir}/fullchain.pem");
-    let key_path = format!("{cert_dir}/privkey.pem");
-
-    tokio::fs::write(&cert_path, &cert_chain_pem)
-        .await
-        .map_err(|e| format!("Write cert: {e}"))?;
-    // Write the private key 0600-at-creation (no world-readable 0644 window).
-    write_key_file(&key_path, &private_key_pem).await?;
-
-    let expiry = get_cert_expiry(&cert_path).await;
-    tracing::info!("SSL ({label}) provisioned for {domain}");
-
-    Ok(CertInfo { cert_path, key_path, expiry, profile: profile_used })
-}
-
-/// Clean up Cloudflare TXT records created during DNS-01 challenge.
-async fn cleanup_cf_records(
-    client: &reqwest::Client,
-    cf_api: &str,
-    zone_id: &str,
-    headers: &reqwest::header::HeaderMap,
-    record_ids: &[String],
-) {
-    for rid in record_ids {
-        match client
-            .delete(&format!("{cf_api}/zones/{zone_id}/dns_records/{rid}"))
-            .headers(headers.clone())
-            .send()
-            .await
-        {
-            Ok(_) => tracing::info!("DNS-01: cleaned up TXT record {rid}"),
-            Err(e) => tracing::warn!("DNS-01: failed to clean up TXT {rid}: {e}"),
-        }
-    }
-}
-
 /// Get certificate expiry date from PEM file.
 async fn get_cert_expiry(cert_path: &str) -> Option<String> {
     let pem_data = tokio::fs::read(cert_path).await.ok()?;
@@ -827,7 +596,7 @@ async fn get_cert_expiry(cert_path: &str) -> Option<String> {
 /// ⛔ THIS IS THE LAST GATE BEFORE AN ACME ORDER OVERWRITES A FILE. It is placed
 /// at the two write primitives rather than at their callers because the callers
 /// are not a list anybody can keep: twenty-six reachable call sites across the
-/// panel, the CLI, git deploys, template apps and Compose stacks reach these two
+/// panel, the CLI, template apps and Compose stacks reach these two
 /// functions, and before v2.162.0 exactly three of them asked this question. A
 /// per-caller guard is a census that goes stale the next time somebody adds a
 /// deploy path — which is how the Compose-stack door shipped without one.
@@ -975,16 +744,16 @@ pub async fn list_cert_status() -> Vec<CertStatus> {
 /// The two halves belong together. The HTTPS template redirects `:80` to `:443`,
 /// so from the moment this returns, the stored URL is the only thing deciding
 /// what the site tells visitors to use. Every path that gives a site a
-/// certificate — first provision, manual retry, DNS-01, an uploaded custom cert,
-/// renewal, git deploys, Docker apps — comes through here, which is why the
+/// certificate — first provision via Docker-app auto-SSL, renewal — comes
+/// through here, which is why the
 /// promotion lives here and not in any one of them.
 pub async fn enable_ssl_for_site(
     templates: &Tera,
     domain: &str,
     site_config: &SiteConfig,
 ) -> Result<crate::services::wordpress::CanonicalUrlOutcome, String> {
-    // Every caller (provision, upload_cert, renew, DNS-01, Docker-app auto-SSL,
-    // git-deploy auto-SSL) funnels through here — locking once here, rather than
+    // Every caller (renew, Docker-app auto-SSL) funnels through here — locking
+    // once here, rather than
     // in each of the 6 callers, is what makes them all mutually exclusive on the
     // same domain. See site_lock's module doc.
     let _guard = crate::site_lock::lock_site(domain).await;

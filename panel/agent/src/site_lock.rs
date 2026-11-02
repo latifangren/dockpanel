@@ -18,8 +18,8 @@
 //!
 //! ⚠ Do not acquire a second lock from inside a function that already holds
 //! one for the same key — `tokio::sync::Mutex` is not reentrant and a nested
-//! same-key acquire deadlocks. `git_build::deploy_or_update` calls
-//! `blue_green_update` internally; only the outer call takes the lock.
+//! same-key acquire deadlocks. When an outer operation delegates to a helper
+//! that takes the lock itself, only the outer call takes it.
 //!
 //! A second loose-ends audit found Docker-app domain exposure/teardown and
 //! volume restore (`routes/docker_apps.rs::expose_domain`/`unexpose_domain`,

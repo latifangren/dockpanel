@@ -45,17 +45,15 @@ ok()  { printf '\033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
 bad() { printf '\033[31m✗\033[0m %s — %s\n' "$1" "$2"; FAIL=$((FAIL+1)); }
 eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$3', got '$2'"; }
 
+# R5 (2026-11-02): §2-§6 pinned git_deploys.rs/GitDeploys.tsx; deleted with the
+# feature. §1's derivation now covers the surviving routes/pages.
+
 # ugrep's --ignore-files shim honours .gitignore, so use the real binary.
 G=/usr/bin/grep
 
-GD=panel/backend/src/routes/git_deploys.rs
-GDUI=panel/frontend/src/pages/GitDeploys.tsx
 BACKEND=panel/backend/src/routes
 SPA=panel/frontend/src/pages
 
-for f in "$GD" "$GDUI"; do
-  [ -f "$f" ] || { bad "subject present" "$f is missing"; }
-done
 
 echo "── §1 the class: a COALESCE self-guard must not meet a null-for-empty form field"
 
@@ -117,9 +115,7 @@ pairs=$(printf '%s\n' "$nulled" \
 #   ── on a CREATE payload, where null is the correct spelling of "not set".
 #      A create has no stored value to preserve, so there is nothing to fold onto
 #      and nothing an operator could be trying to clear.
-#        domain@Apps.tsx, ssl_email@Apps.tsx            compose-stack create
-#        panel_name@Resellers.tsx, logo_url@Resellers.tsx,
-#        accent_color@Resellers.tsx                     reseller create (the
+#        logo_url@Resellers.tsx                         reseller create (the
 #                                                       UPDATE beside it sends
 #                                                       the operator's blank)
 #        allowed_images@ContainerPolicies.tsx           policy create, ditto
@@ -127,13 +123,8 @@ pairs=$(printf '%s\n' "$nulled" \
 #        keyword@Monitors.tsx                           monitors have no edit form
 #                                                       at all — `api.put` there
 #                                                       sends only { enabled }
-#   ── deliberate on an UPDATE, and the only ones:
-#        github_token@GitDeploys.tsx   the GET masks a stored token, so the box is
-#                                      blank on every ordinary edit; "" would mean
-#                                      "cleared" on a form that clears itself, and
-#                                      every save would delete the token.
-#        domain@Apps.tsx (2nd),        s414's Stack EDIT modal (PUT /stacks/{id}),
-#        ssl_email@Apps.tsx (2nd)      alongside the pre-existing CREATE occurrence
+#   (R2/R3: the reseller accent_color/panel_name and stack domain/ssl_email pairs
+#    left with resellers.rs/sites.rs — their guarded columns no longer exist.)
 #                                      of each. Both verified SAFE against the
 #                                      ACTUAL target column — stacks.rs, not the
 #                                      git_deploys.rs column this arm's bare
@@ -168,88 +159,12 @@ pairs=$(printf '%s\n' "$nulled" \
 # of these pages carry a create AND an update payload, and an allow-list entry
 # earned by the create would otherwise excuse the update regrowing one. Most
 # expected counts are 1 — the create occurrence — so any OTHER count in the same
-# file fails here unless written above. `domain@GitDeploys.tsx` must never appear
-# at all: that clear is REFUSED rather than folded away (§5).
-EXPECTED_PAIRS="accent_color@Resellers.tsx=1 alert_discord_url@Monitors.tsx=1 alert_slack_url@Monitors.tsx=1 allowed_images@ContainerPolicies.tsx=1 domain@Apps.tsx=2 github_token@GitDeploys.tsx=1 keyword@Monitors.tsx=1 logo_url@Resellers.tsx=1 panel_name@Resellers.tsx=1 ssl_email@Apps.tsx=2"
-eq "§1 the only null-for-empty fields left on a COALESCE-guarded column are the ten with written reasons" \
+# file fails here unless written above.
+EXPECTED_PAIRS="alert_discord_url@Monitors.tsx=1 alert_slack_url@Monitors.tsx=1 allowed_images@ContainerPolicies.tsx=1 keyword@Monitors.tsx=1 logo_url@Resellers.tsx=1"
+eq "§1 the only null-for-empty fields left on a COALESCE-guarded column are the five with written reasons" \
    "$pairs" "$EXPECTED_PAIRS"
 
 echo
-echo "── §2 the three-state contract, pinned per column"
-
-# Keyed on the whole operation in its closed form. A bare column name would be
-# satisfied by the comment block above the statement (s381 #627).
-for col in ssl_email pre_build_cmd post_deploy_cmd deploy_cron; do
-  n=$("$G" -c "$col = CASE WHEN \$[0-9]* = '' THEN NULL ELSE COALESCE(\$[0-9]*, $col) END" "$GD" || true)
-  eq "§2 $col distinguishes an absent key from an emptied box" "$n" "1"
-done
-
-# The reverted form must be gone, not merely outnumbered.
-for col in ssl_email pre_build_cmd post_deploy_cmd deploy_cron; do
-  n=$("$G" -cE "^ +$col = COALESCE\(\\\$[0-9]+, $col\), \\\\$" "$GD" || true)
-  eq "§2 $col no longer carries the plain self-guard" "$n" "0"
-done
-
-echo
-echo "── §3 the empty string is a wire sentinel and is never stored"
-
-n=$("$G" -c 'fn blank_to_none' "$GD" || true)
-eq "§3 the normaliser exists" "$n" "1"
-
-# create and update post the SAME payload object, so create receives the blanks
-# too. Each of the four columns must go through the normaliser on the way in.
-for col in ssl_email pre_build_cmd post_deploy_cmd deploy_cron; do
-  n=$("$G" -c "blank_to_none(body\.$col\.as_deref())" "$GD" || true)
-  eq "§3 create normalises a blank $col to NULL" "$n" "1"
-done
-
-# The domain arm had the same defect and is easy to reintroduce, because the
-# obvious `None => body.domain.clone()` reads as a no-op.
-n=$("$G" -c 'None => body\.domain\.clone()' "$GD" || true)
-eq "§3 create does not round-trip a blank domain back into the column" "$n" "0"
-
-echo
-echo "── §4 blank is absent at the two readers that hand a value to the agent"
-
-n=$("$G" -c 'b\.domain\.filter(|d| !d\.trim()\.is_empty())' "$GD" || true)
-eq "§4 a blank domain does not become a vhost named '.conf'" "$n" "1"
-n=$("$G" -c 'b\.ssl_email\.filter(|e| !e\.trim()\.is_empty())' "$GD" || true)
-eq "§4 a blank ssl_email does not open an ACME order with no account address" "$n" "1"
-
-echo
-echo "── §5 removing a domain is refused, and the refusal says why"
-
-n=$("$G" -c 'Removing the domain is not supported yet' "$GD" || true)
-eq "§5 the refusal exists" "$n" "1"
-# It must name the domain it is refusing to drop; a generic sentence sends the
-# operator looking for a setting instead of telling them what is in the way.
-n=$("$G" -c 'cur_domain\.as_deref()\.unwrap_or("")' "$GD" || true)
-eq "§5 the refusal names the vhost that would be left behind" "$n" "1"
-
-# And it must only fire when a domain is actually stored — a deploy that never
-# had one submits "" on every ordinary save, and refusing those would make the
-# form unusable for every domainless deploy.
-# Whitespace-insensitive on purpose. The first cut of this arm spelled the chain
-# on one line; rustfmt then wrapped it across four and turned my own arm red for
-# a change that altered nothing (s374 #585). Match the OPERATION with the
-# newlines and indentation squeezed out, so the formatter cannot move it.
-flat=$(tr -d ' \n' < "$GD")
-n=$(printf '%s' "$flat" | "$G" -c 'cur_domain.as_deref().map(|c|!c.trim().is_empty()).unwrap_or(false)' || true)
-eq "§5 the refusal is conditional on a domain being stored" "$n" "1"
-
-echo
-echo "── §6 the form sends the operator's blank rather than a null"
-
-for f in domain ssl_email pre_build_cmd post_deploy_cmd deploy_cron; do
-  n=$("$G" -cE "^ +$f: form[A-Za-z]+\.trim\(\),$" "$GDUI" || true)
-  eq "§6 $f is sent as typed" "$n" "1"
-done
-# The one that must NOT be converted, and the reason is in the file beside it.
-n=$("$G" -c 'github_token: formGithubToken\.trim() || null,' "$GDUI" || true)
-eq "§6 github_token still preserves on blank, because the GET masks it" "$n" "1"
-
-echo
-
 if [ "$FAIL" -eq 0 ]; then
   printf '\033[32mPASS %d  FAIL %d\033[0m\n' "$PASS" "$FAIL"
 else

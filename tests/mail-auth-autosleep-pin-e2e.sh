@@ -29,7 +29,6 @@
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MAIL="$REPO/panel/agent/src/routes/mail.rs"
 NGINX="$REPO/panel/agent/src/routes/nginx.rs"
 HEALER="$REPO/panel/backend/src/services/auto_healer.rs"
 APPS_API="$REPO/panel/backend/src/routes/docker_apps.rs"
@@ -43,30 +42,9 @@ has()  { if grep -q "$2" "$3"; then ok "$1"; else bad "$1"; fi; }
 hasnt(){ if grep -q "$2" "$3"; then bad "$1"; else ok "$1"; fi; }
 
 echo
-echo "A. Dovecot can actually read its own password file"
-# The whole defect in one line: the mode must not be owner-only, because the
-# reader is not the owner.
-has  "the passwd-file is written 0640, not owner-only" \
-     'from_mode(0o640)' "$MAIL"
-hasnt "no caller writes the passwd-file owner-only any more" \
-     'DOVECOT_USERS, *"" *, *0o600\|DOVECOT_USERS, &dovecot_lines.join("\\\\n"), 0o600' "$MAIL"
-has  "the group is handed to dovecot" \
-     'args(\["root:dovecot"' "$MAIL"
-# Ownership is set on the temp file, so the real path is never momentarily
-# published with permissions that lock auth out.
-if awk '/async fn write_dovecot_users/,/^}/' "$MAIL" \
-   | grep -n 'root:dovecot\|rename' | head -2 | paste -sd' ' - \
-   | grep -c 'root:dovecot.*rename' >/dev/null; then
-  ok "ownership is set BEFORE the atomic rename"
-else
-  bad "ownership is set BEFORE the atomic rename"
-fi
-has  "both writers go through the one helper" \
-     'write_dovecot_users("")' "$MAIL"
-has  "…including the account-sync writer" \
-     'write_dovecot_users(&dovecot_lines' "$MAIL"
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
+# Section A pinned the agent Dovecot writer in routes/mail.rs, deleted in R4. Sections B/C survive.
 
-echo
 echo "B. Auto-sleep observes real traffic"
 has  "the agent reports when a domain last served a request" \
      '/nginx/last-activity/{domain}' "$NGINX"

@@ -26,6 +26,12 @@
 # -> deploy.rs::atomic_deploy (its own inline clone, not a clone_or_pull
 # call at all).
 #
+# R6 (2026-11-02): atomic_deploy was deleted with the deploy hosting
+# surface, so its two arms (D5/D6) are deleted below, not weakened. The
+# git_build arms (D1/D2) were already red before R6 — git_build.rs was
+# deleted in the R5 working tree and this pin was never updated for it;
+# left as-is for the coordinator (R5 pin debt, not R6).
+#
 # §A the ssrf_guard module exists, is registered, and carries every
 #    internal-address range this class of guard needs (including the cloud
 #    metadata block, the most commonly abused SSRF target).
@@ -98,7 +104,6 @@ DEPLOY_C=$(code "$DEPLOY")
 
 GB_CLONE_BODY=$(fnbody "$GITBUILD_C" "clone_or_pull")
 DEP_CLONE_BODY=$(fnbody "$DEPLOY_C" "clone_or_pull")
-DEP_ATOMIC_BODY=$(fnbody "$DEPLOY_C" "atomic_deploy")
 
 # ── §A the guard module exists and covers the internal-address ranges ────
 echo "── §A ssrf_guard exists and knows the ranges that matter most ──"
@@ -169,8 +174,9 @@ else
   bad "C1 ssrf_guard is not registered — it exists on disk but is unreachable from the crate"
 fi
 
-# ── §D all three reachable clone paths call the guard, in position ────────
-echo "── §D all 3 reachable clone paths call the guard BEFORE spawning git ──"
+# ── §D the reachable clone paths call the guard, in position ──────────────
+# (R6: 3 paths became 2 — atomic_deploy deleted; git_build path deleted in R5.)
+echo "── §D the reachable clone paths call the guard BEFORE spawning git ──"
 
 if has "$GB_CLONE_BODY" 'ssrf_guard::validate_repo_url_not_internal\(repo_url\)\.await\?'; then
   ok "D1 git_build.rs::clone_or_pull calls the guard"
@@ -196,17 +202,7 @@ else
   bad "D4 deploy.rs::clone_or_pull's guard runs after (or never before) the subprocess spawn"
 fi
 
-if has "$DEP_ATOMIC_BODY" 'ssrf_guard::validate_repo_url_not_internal\(repo_url\)\.await\?'; then
-  ok "D5 deploy.rs::atomic_deploy calls the guard (its own inline clone, not a clone_or_pull call)"
-else
-  bad "D5 deploy.rs::atomic_deploy does not call the guard — its inline clone would stay unguarded"
-fi
-
-if before "$DEP_ATOMIC_BODY" "validate_repo_url_not_internal" "cmd.output()"; then
-  ok "D6 deploy.rs::atomic_deploy validates before spawning the git subprocess"
-else
-  bad "D6 deploy.rs::atomic_deploy's guard runs after (or never before) the subprocess spawn"
-fi
+# R6: D5/D6 deleted with deploy.rs::atomic_deploy (see header note).
 
 echo
 echo "=================================================="

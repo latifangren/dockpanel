@@ -87,7 +87,6 @@ SSL=panel/backend/src/routes/ssl.rs
 SITES=panel/backend/src/routes/sites.rs
 MON=panel/backend/src/routes/monitors.rs
 HELP=panel/backend/src/helpers.rs
-MAIL=panel/backend/src/routes/mail.rs
 ROUTER=panel/backend/src/routes/mod.rs
 ADIAG=panel/agent/src/services/diagnostics.rs
 ASSL=panel/agent/src/services/ssl.rs
@@ -98,7 +97,7 @@ CERTS=panel/frontend/src/pages/Certificates.tsx
 DIAGPAGE=panel/frontend/src/pages/Diagnostics.tsx
 DOCS=docs/guides/security-hardening.md
 
-for f in "$SCAN" "$HEAL" "$SYS" "$SSL" "$SITES" "$MON" "$HELP" "$MAIL" "$ROUTER" "$ADIAG" \
+for f in "$SCAN" "$HEAL" "$SYS" "$SSL" "$SITES" "$MON" "$HELP" "$ROUTER" "$ADIAG" \
          "$ASSL" "$ASSLR" "$ASEC" "$MIG" "$CERTS" "$DIAGPAGE" "$DOCS"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
@@ -108,7 +107,7 @@ done
 # the POST-comment-strip subject, because that is what the arms actually read —
 # a file that is all comments would otherwise pass a line-count guard and then
 # satisfy every absence arm vacuously.
-for pair in "$SCAN:6000" "$HEAL:20000" "$SYS:3000" "$SSL:12000" "$SITES:60000" "$MAIL:20000" \
+for pair in "$SCAN:6000" "$HEAL:20000" "$SYS:3000" "$SSL:12000" "$SITES:60000" \
             "$MON:12000" "$HELP:20000" "$ROUTER:40000" "$ADIAG:14000" \
             "$ASSL:8000" "$ASSLR:6000" "$ASEC:8000" "$CERTS:4000" "$DIAGPAGE:3000"; do
   f=${pair%:*}; min=${pair##*:}
@@ -119,7 +118,6 @@ done
 F_SCAN=$(subj "$SCAN"); F_HEAL=$(subj "$HEAL"); F_SYS=$(subj "$SYS")
 F_SSL=$(subj "$SSL");   F_SITES=$(subj "$SITES"); F_MON=$(subj "$MON")
 F_HELP=$(subj "$HELP"); F_ROUTER=$(subj "$ROUTER"); F_ADIAG=$(subj "$ADIAG")
-F_MAIL=$(subj "$MAIL")
 F_ASSL=$(subj "$ASSL"); F_ASSLR=$(subj "$ASSLR"); F_MIG=$(subj "$MIG")
 F_CERTS=$(subj "$CERTS"); F_DIAGPAGE=$(subj "$DIAGPAGE")
 
@@ -496,8 +494,7 @@ eq "F6b and its Compose-stack and Docker-app siblings ask too — the same loop,
    "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(&member.agent,domain).await')" "2"
 eq "F7 the auto-healer asks" \
    "$(occ "$F_HEAL" 'crate::helpers::foreign_cert_issuer(&agent,domain).await')" "1"
-eq "F7b the mail host door asks" \
-   "$(occ "$F_MAIL" 'crate::helpers::foreign_cert_issuer(agent,domain).await')" "1"
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
 # …and each one STOPS. A guard that computes a verdict and proceeds anyway is the
 # shape a careless edit leaves behind.
 eq "F8 the scanner stops rather than renewing" \

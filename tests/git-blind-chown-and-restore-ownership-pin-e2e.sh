@@ -16,11 +16,10 @@
 #       node/proxy/python import; harmless no-op for php/static (dest nests
 #       under `public/`, one level below where clone_or_pull's `.git` lives),
 #       fixed uniformly rather than conditioned on runtime.
-#   G6  services/cms.rs::chown_site — the shared helper behind 5 CMS
-#       installers (Laravel/Drupal/Joomla/Symfony/CodeIgniter); prospective
-#       (no caller has a `.git` present at call time today) but the directory
-#       becomes www-data-owned afterward, so a future app compromise could
-#       plant one.
+#   G6  services/cms.rs::chown_site — DELETED in R6 (cms.rs + all 5 installers).
+#   G5/G7/G8 — DELETED in the R6 merge (services/migration.rs +
+#   routes/backups.rs + the site arms of services/backups.rs). Deleted, not
+#   weakened: the site-restore/import surfaces no longer exist.
 #
 # Completeness-critic finding, off the original topic menu, REALIZED not
 # prospective (the mirror-image bug: missing chown, not over-broad chown):
@@ -47,11 +46,10 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[0;31m✗\033[0m %s\n' "$1"; }
 #
 # NOT the naive "sed-quit-at-first-#[cfg(test)]" shape other suites in this
 # tree use — services/backups.rs has #[cfg(test)]-attributed function
-# VARIANTS (test-safe path resolvers) at lines 23-29, ~650 lines before its
-# real `#[cfg(test)] mod db_payload_tests` at line 930. That is exactly the
-# class reference_dockpanel_ops_p7 documents (s447: "the trigger is ANY
-# #[cfg(test)] token, not just a mod tests block") — quitting at the first
-# token would blank restore_inner (line 680) and everything after it. Only
+# VARIANTS (test-safe path resolvers) before its real test module. That is
+# exactly the class reference_dockpanel_ops_p7 documents (s447: "the trigger
+# is ANY #[cfg(test)] token, not just a mod tests block") — quitting at the
+# first token would blank real code below the cfg-gated helpers. Only
 # exit at a #[cfg(test)] line immediately followed by `mod ` — a real test
 # module, not a cfg-gated function/const variant.
 code() {
@@ -78,13 +76,17 @@ APP_PROCESS=panel/agent/src/services/app_process.rs
 STAGING=panel/agent/src/services/staging.rs
 NGINX_ROUTE=panel/agent/src/routes/nginx.rs
 MIGRATION=panel/agent/src/services/migration.rs
-CMS=panel/agent/src/services/cms.rs
 BACKUPS_ROUTE=panel/agent/src/routes/backups.rs
 BACKUPS_SVC=panel/agent/src/services/backups.rs
 DEPLOY=panel/agent/src/services/deploy.rs
 
-for f in "$APP_PROCESS" "$STAGING" "$NGINX_ROUTE" "$MIGRATION" "$CMS" "$BACKUPS_ROUTE" "$BACKUPS_SVC" "$DEPLOY"; do
+for f in "$APP_PROCESS" "$STAGING" "$NGINX_ROUTE" "$BACKUPS_SVC" "$DEPLOY"; do
   [ -f "$f" ] || { echo "missing source file: $f"; exit 1; }
+done
+# R6 merge: the migration engine and the site-backup routes are deleted;
+# their bug classes die with them (sections 3 and 5 below are tombstones).
+for f in "$MIGRATION" "$BACKUPS_ROUTE"; do
+  [ -f "$f" ] && { echo "should be deleted in R6: $f"; exit 1; }
 done
 
 # Every UPHELD site's fix is the same shape: skip `.git` in the main chown
@@ -123,48 +125,24 @@ assert_split_chown "$STAGING" "fn clone_files" "clone_files"
 assert_split_chown "$STAGING" "fn sync_files" "sync_files"
 
 echo
-echo "── 3. G4: routes/nginx.rs::clone_site — .git-aware chown ──"
-# s459: clone_site no longer reimplements this inline — it now delegates the
-# whole copy+chown step to staging.rs::clone_files (consolidating the
-# duplicate implementation this file's own header already flagged as "a
-# second, independent implementation of the same clone-a-site feature", see
-# pkg-rs-and-clone-dedup-hardening-pin-e2e.sh for the dedup's own pins). The
-# .git-aware split-chown invariant itself is still fully covered — by G2
-# above, against the function that now actually performs the work. What's
-# left to pin here is that clone_site still gets there via real delegation,
-# not a silent regression to some other, unaudited shape.
-if bodyhas "$NGINX_ROUTE" "fn clone_site" "services::staging::clone_files("; then
-  ok "clone_site: delegates to staging::clone_files (the .git-aware chown itself is pinned via G2 above, against the function that now performs it)"
-else
-  bad "clone_site: no longer delegates to staging::clone_files — either the .git-aware fix was removed or it moved to an unaudited third shape; re-verify by hand"
-fi
+# R6 (2026-11-02): G4 pinned routes/nginx.rs::clone_site's delegation to
+# staging::clone_files. clone_site was deleted in the R6 nginx split; the
+# .git-aware chown itself is still pinned via G2 above, against staging.
+
+echo "── 3. G5: DELETED in the R6 merge ──"
+# services/migration.rs was deleted with the migration wizard's agent engine.
+# Deleted, not weakened: import_site_files no longer exists.
 
 echo
-echo "── 4. G5: migration.rs::import_site_files — .git-aware chown, applied uniformly ──"
-assert_split_chown "$MIGRATION" "fn import_site_files" "import_site_files"
+# R6 (2026-11-02): G6 pinned services/cms.rs::chown_site and its 5 installer
+# callers. cms.rs was deleted in R6. Deleted, not weakened: the helper and
+# every installer it served no longer exist.
 
-echo
-echo "── 5. G6: cms.rs::chown_site — one shared-helper fix covers all 5 installers ──"
-assert_split_chown "$CMS" "fn chown_site" "chown_site"
-for site in install_laravel install_drupal install_joomla install_symfony install_codeigniter; do
-  if bodyhas "$CMS" "fn $site" "chown_site("; then
-    ok "$site still routes ownership through the shared chown_site helper"
-  else
-    bad "$site no longer calls chown_site — it may have its own unguarded chown now"
-  fi
-done
-
-echo
-echo "── 6. REFUTED sites: confirmed no-ops must stay untouched (negative controls) ──"
-# nginx.rs's two fastcgi-cache-dir chowns and its single-file .env chown are
-# none of them recursive against a site tree — a .git guard here would be a
-# tell that someone "fixed" something that was never broken. Assert the
-# ORIGINAL one-line chown shape survives unmodified.
-if hasre "$NGINX_ROUTE" 'safe_command\("chown"\)\s*$|safe_command_sync\("chown"\)'; then
-  ok "nginx.rs still has plain (non-git-aware) chown calls for the cache-dir/.env sites"
-else
-  bad "nginx.rs's non-site-dir chown calls are gone entirely — re-verify site 4/6/7 weren't touched by mistake"
-fi
+echo "── 4. REFUTED sites: confirmed no-ops must stay untouched (negative controls) ──"
+# R6 (2026-11-02): the nginx.rs negative control is deleted with the R6 nginx
+# split — its cache-dir/.env one-line chown calls (HEAD routes/nginx.rs:2073)
+# died with the handlers that held them; zero chown calls remain in the file.
+# Verified, not assumed: no mistaken edit, the handlers are gone.
 if bodyhasre "$APP_PROCESS" "fn create_app_service" 'OsStr::new\(\"\.git\"\)'; then :; fi # already asserted above
 # diagnostics.rs's create-root fix only ever runs against a directory it just
 # created empty — it should have NO .git-skip logic (there is nothing to skip).
@@ -178,30 +156,31 @@ if [ -f "$DIAG" ]; then
 fi
 
 echo
-echo "── 7. G7/G8: routes/backups.rs — the plain restore paths now re-secure ownership ──"
-if bodyhas "$BACKUPS_ROUTE" "^async fn restore\(" "chown_restored_tree("; then
-  ok "restore() now calls chown_restored_tree after a successful file restore"
+echo "── 5. G7/G8: DELETED in the R6 merge ──"
+# routes/backups.rs and the site arms of services/backups.rs are deleted with
+# the site-backup surface. Deleted, not weakened: no site restore path
+# remains to re-secure ownership on. The surviving backup surface is
+# volume/DB only: the shared BackupInfo shape, the sha256 integrity helper,
+# and the secure-tree startup repair.
+if has "$BACKUPS_SVC" 'pub struct BackupInfo'; then
+  ok "BackupInfo survives for the volume/DB backup paths"
 else
-  bad "restore() no longer calls chown_restored_tree — restored sites will come back root-owned"
+  bad "BackupInfo is gone — the volume/DB backup paths share this struct"
 fi
-if bodyhas "$BACKUPS_ROUTE" "async fn restore_file" "chown_restored_tree("; then
-  ok "restore_file() now calls chown_restored_tree after a successful single-file restore"
+if has "$BACKUPS_SVC" 'fn compute_file_sha256'; then
+  ok "compute_file_sha256 survives for the volume/DB backup paths"
 else
-  bad "restore_file() no longer calls chown_restored_tree"
+  bad "compute_file_sha256 is gone — the volume/DB backup paths share this helper"
 fi
-# The helper itself, and its original caller, must be untouched by this fix.
-if bodyhasre "$BACKUPS_ROUTE" "fn chown_restored_tree" 'OsStr::new\(\"\.git\"\)'; then
-  ok "chown_restored_tree itself is untouched — still .git-aware"
+if has "$BACKUPS_SVC" 'fn secure_backup_tree'; then
+  ok "secure_backup_tree survives (startup repair of the backup tree)"
 else
-  bad "chown_restored_tree lost its own .git guard"
+  bad "secure_backup_tree is gone — the backup tree is no longer re-secured on startup"
 fi
-# The underlying extraction flags that CAUSE the root-ownership are the
-# reason this fix is needed at all — if they're gone, the bug (and the
-# reason for this pin) may no longer apply, which is worth knowing either way.
-if bodyhas "$BACKUPS_SVC" "fn restore_inner" "no-same-owner"; then
-  ok "restore_inner still extracts with --no-same-owner (confirms the fix is still needed, not stale)"
+if has "$BACKUPS_SVC" 'fn restore_inner'; then
+  bad "restore_inner survived the R6 merge — the site restore arm should be gone"
 else
-  bad "restore_inner no longer passes --no-same-owner — re-verify whether chown_restored_tree calls are still necessary"
+  ok "restore_inner is gone with the site restore arms"
 fi
 
 echo

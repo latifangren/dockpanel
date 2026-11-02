@@ -313,62 +313,26 @@ eq "E3 the file-read probe takes its anonymous volumes with them" \
 # A CLASS arm: it enumerates every INSERT INTO databases in the tree rather than
 # naming the one that was wrong, and fails on an implausibly small subject.
 DB_INSERTS=$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | wc -l)
-if [ "$DB_INSERTS" -ge 3 ]; then
-  ok "F0 discovered $DB_INSERTS INSERT INTO databases sites (>= 3 known to exist)"
+# R5: floor re-derived 3 -> 1; the migration wizard's INSERT left with it
+# and databases.rs holds the only surviving one. 0 still means the scan broke.
+if [ "$DB_INSERTS" -ge 1 ]; then
+  ok "F0 discovered $DB_INSERTS INSERT INTO databases sites (>= 1 known to exist)"
 else
   bad "F0 only $DB_INSERTS INSERT INTO databases sites" "the scan broke; F1 is vacuous"
 fi
 eq "F1 every INSERT INTO databases names the NOT NULL site_id" \
    "$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | $G -cv "site_id")" "0"
-eq "F2 the import's insert is checked rather than discarded" \
-   "$(/usr/bin/sed -n '/Insert the DB record/,/Create database container via agent/p' panel/backend/src/routes/migration.rs | $G -c 'fetch_optional')" "1"
-# The insert now runs BEFORE the agent call (s444: reordered so the port's own
-# unique index adjudicates a racing pick before either side reaches the agent,
-# rather than after — see F7/F8 below), which flips WHICH side of a failure
-# needs cleanup. A DB-insert conflict can no longer orphan a container, because
-# no container has been created yet at that point. What can now happen is the
-# reverse: the row lands (claiming the port and name) and THEN the agent call
-# fails — so the row, not a container, is what has to be taken back down.
-eq "F3 a database whose container creation fails has its row taken back down" \
-   "$(/usr/bin/sed -n '/agent.post("\/databases", Some(create_body))/,/^            };/p' panel/backend/src/routes/migration.rs | $G -c 'DELETE FROM databases WHERE id = \$1')" "1"
-# The site a database belongs to is resolved BEFORE the container is created, or
-# the failure it prevents has already happened by the time it is detected.
-RESOLVE_LINE=$($G -n "Which site does this database belong to" panel/backend/src/routes/migration.rs | cut -d: -f1)
-CREATE_LINE=$($G -n 'agent.post("/databases"' panel/backend/src/routes/migration.rs | cut -d: -f1)
-if [ -n "$RESOLVE_LINE" ] && [ -n "$CREATE_LINE" ] && [ "$RESOLVE_LINE" -lt "$CREATE_LINE" ]; then
-  ok "F4 the site is resolved before the container is created"
-else
-  bad "F4 the site resolution moved after the container creation" "resolve=$RESOLVE_LINE create=$CREATE_LINE"
-fi
-
 # The wizard must not offer a location the agent structurally cannot read. The
 # unit runs `PrivateTmp=yes`, so an archive copied to the host's /tmp — the
 # obvious place, and the one this guard used to name — is invisible to it, and
 # the very next line answered "File not found" for a file plainly on disk.
 # Driven at s369: the identical archive fails from /tmp and analyzes from
 # /var/backups/.
-eq "F5 the migration path guard no longer offers /tmp" \
-   "$($G -c 'starts_with("/tmp/")' panel/agent/src/routes/migration.rs)" "0"
-eq "F5b …and it is still guarded to /var/backups (control: the check exists)" \
-   "$($G -c 'starts_with("/var/backups/")' panel/agent/src/routes/migration.rs)" "2"
+# R6 (2026-11-02): F5/F5b pinned the path guard in routes/migration.rs, deleted
+# in the R6 migration split. Deleted, not weakened: the guarded import path
+# no longer exists. F5c (the PrivateTmp reason) survives below.
 eq "F5c the agent unit really does have a private /tmp, which is why" \
    "$($G -c '^PrivateTmp=yes' panel/agent/dockpanel-agent.service 2>/dev/null || $G -rc 'PrivateTmp=yes' panel/agent/src/ scripts/ 2>/dev/null | awk -F: '{s+=$2} END{print (s>0)?1:0}')" "1"
-# "Container running" is not "database usable": mariadb:11 refuses the app user
-# while it initialises, so a fixed sleep produced `Access denied` — a
-# credentials message for a timing problem.
-eq "F6 the engine wait is a poll, not a fixed sleep" \
-   "$(/usr/bin/sed -n '/Waiting for {db_name} engine/,/Import SQL dump via agent/p' panel/backend/src/routes/migration.rs | $G -c 'ENGINE_READY_TIMEOUT_SECS')" "2"
-eq "F6b the probe goes through the engine, not just docker" \
-   "$(/usr/bin/sed -n '/Waiting for {db_name} engine/,/Import SQL dump via agent/p' panel/backend/src/routes/migration.rs | $G -c '/databases/query')" "1"
-# …and it has to carry a real statement and real credentials, or the agent
-# rejects the body, every poll fails, and the wait degrades back to a timeout
-# that reports nothing. An arm that only checks the ENDPOINT survives a broken
-# payload (found by mutation, s369).
-eq "F6c the probe carries a statement the engine can answer" \
-   "$(/usr/bin/sed -n '/Waiting for {db_name} engine/,/Import SQL dump via agent/p' panel/backend/src/routes/migration.rs | $G -cE '\"sql\": \"SELECT 1\"')" "1"
-eq "F6d …and the credentials the container was created with" \
-   "$(/usr/bin/sed -n '/Waiting for {db_name} engine/,/Import SQL dump via agent/p' panel/backend/src/routes/migration.rs | $G -cE '\"(container|engine|database|user|password)\":')" "5"
-
 # ── §G Update does not also START an app the operator stopped (s369) ────────
 #
 # All three recreate doors started the new container unconditionally, so

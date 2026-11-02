@@ -21,8 +21,9 @@
 # (security_scanner.rs, database.rs, migration.rs, and git_build.rs's OWN
 # docker-build call three lines below its unpatched git fetch) — this suite
 # originally pinned the six sites the p189 fixes missed:
-#   git_build.rs  : git fetch (clone_or_pull's pull branch)
-#   git_build.rs  : git clone (clone_or_pull's fresh-clone branch)
+#   git_build.rs  : git fetch / git clone - REMOVED in R5 with the feature
+#                   (git-deploy-only; deploy.rs's independent clone_or_pull
+#                   below is the surviving implementation).
 #   deploy.rs     : git fetch (its OWN, independent clone_or_pull — a second
 #                   implementation of the same idea, not a call into git_build.rs)
 #   deploy.rs     : git clone (same function, fresh-clone branch)
@@ -66,14 +67,11 @@
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GIT_BUILD_SVC="$REPO/panel/agent/src/services/git_build.rs"
 DEPLOY_SVC="$REPO/panel/agent/src/services/deploy.rs"
 BACKUPS_SVC="$REPO/panel/agent/src/services/backups.rs"
 REMOTE_BACKUP_SVC="$REPO/panel/agent/src/services/remote_backup.rs"
 DATABASE_BACKUP_SVC="$REPO/panel/agent/src/services/database_backup.rs"
-MAIL_ROUTE="$REPO/panel/agent/src/routes/mail.rs"
 WORDPRESS_SVC="$REPO/panel/agent/src/services/wordpress.rs"
-WORDPRESS_ROUTE="$REPO/panel/agent/src/routes/wordpress.rs"
 BACKUPS_ROUTE="$REPO/panel/agent/src/routes/backups.rs"
 SAFE_CMD="$REPO/panel/agent/src/safe_cmd.rs"
 
@@ -154,12 +152,6 @@ else
 fi
 
 echo
-echo "== B. git_build.rs clone_or_pull: both network legs are annotated =="
-windowHasKillOnDrop "$GIT_BUILD_SVC" '"-C", &repo_dir, "fetch", "origin", branch' \
-  "git_build.rs's git fetch (pull branch) carries kill_on_drop(true)"
-windowHasKillOnDrop "$GIT_BUILD_SVC" '"clone", "--branch", branch, "--single-branch", "--depth", "50",' \
-  "git_build.rs's git clone (fresh-clone branch) carries kill_on_drop(true)"
-
 echo
 echo "== C. deploy.rs's OWN, independent clone_or_pull: both network legs are annotated =="
 windowHasKillOnDrop "$DEPLOY_SVC" '"-C", &site_dir, "fetch", "origin", branch' \
@@ -168,11 +160,16 @@ windowHasKillOnDrop "$DEPLOY_SVC" '"clone", "--branch", branch, "--single-branch
   "deploy.rs's git clone (fresh-clone branch) carries kill_on_drop(true)"
 
 echo
-echo "== D. backups.rs: the staged tar under its 300s timeout is annotated =="
-windowHasKillOnDrop "$BACKUPS_SVC" 'safe_command("tar").args(&tar_args)' \
-  "backups.rs's tar czf carries kill_on_drop(true)"
+echo "== D. DELETED in the R6 merge: backups.rs's staged tar belonged to create_backup =="
+# R6 merge (2026-11-02): create_backup and its tar czf were deleted with the
+# site-backup surface. Deleted, not weakened: no tar call remains in the
+# slimmed services/backups.rs (only the sha256sum integrity helper).
+if grep -q 'safe_command("tar")' "$BACKUPS_SVC" 2>/dev/null; then
+  bad "a tar call survived in services/backups.rs — re-scope this section"
+else
+  ok "no tar call remains in services/backups.rs (site-backup tar path deleted)"
+fi
 
-echo
 echo "== E. remote_backup.rs: s3_curl (the one runner behind test_s3/list_s3/delete_s3/upload) is annotated =="
 windowHasKillOnDrop "$REMOTE_BACKUP_SVC" 'safe_command("curl").args(&full)' \
   "remote_backup.rs's s3_curl carries kill_on_drop(true)"
@@ -201,14 +198,10 @@ scopedChainHasKillOnDrop "$DATABASE_BACKUP_SVC" 'pub async fn restore_mongo(' 'p
   "restore_mongo's docker exec (mongorestore) carries kill_on_drop(true)"
 
 echo
-echo "== G. mail.rs: the mailbox backup/restore tar children are annotated (found off-menu by the s451 completeness critic — inlined in a route handler, invisible to every services/-scoped grep for this bug class) =="
-windowHasKillOnDrop "$MAIL_ROUTE" '"czf", &backup_file,' \
-  "mail.rs's mailbox_backup tar czf carries kill_on_drop(true)"
-windowHasKillOnDrop "$MAIL_ROUTE" '"xzf", backup_file,' \
-  "mail.rs's mailbox_restore tar xzf carries kill_on_drop(true)"
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
+# Section G pinned agent mail.rs's mailbox tar children, deleted in R4.
 
-echo
-echo "== H. wordpress.rs: the crate's single wp-cli choke point + its own 5 pre-existing subprocess sites are all annotated (s452 dockpanel-fanout run wf_72e4e04f-373, rotation target wp_vulnerability.rs) =="
+echo "== H. wordpress.rs: the crate's single wp-cli choke point is annotated (s452 dockpanel-fanout run wf_72e4e04f-373, rotation target wp_vulnerability.rs; its install/snapshot/rollback/health sites were deleted in R6) =="
 # wp_at_root's own doc comment already says every wp-cli invocation in this
 # crate goes through it — which means it was ALSO the single highest-leverage
 # gap: no timeout at all (so no kill_on_drop could matter until one was added
@@ -217,93 +210,52 @@ echo "== H. wordpress.rs: the crate's single wp-cli choke point + its own 5 pre-
 # apply_hardening, via set_wp_constant) in one place.
 windowHasKillOnDrop "$WORDPRESS_SVC" 'cmd.stdout(Stdio::piped())' \
   "wordpress.rs's wp_at_root (the crate's single wp-cli choke point) carries kill_on_drop(true)"
-# install()'s two raw wp-cli calls predate wp_at_root and bypass it entirely —
-# a second hand-rolled implementation, the exact shape wp_at_root's own doc
-# comment warns went wrong once already, just for THIS bug class instead.
-windowHasKillOnDrop "$WORDPRESS_SVC" '&format!("--dbname={db_name}")' \
-  "wordpress.rs's install() wp config create carries kill_on_drop(true)"
-windowHasKillOnDrop "$WORDPRESS_SVC" '&format!("--admin_password={admin_pass}")' \
-  "wordpress.rs's install() wp core install carries kill_on_drop(true)"
-# These three already had a tokio::time::timeout wrap (120s/120s/15s) before
-# this session — the exact "timeout doesn't actually stop the thing" shape:
-# the future gets dropped on expiry, but without kill_on_drop the child
-# (a tar extracting into a live site's document root, or a sudo'd wp-cli
-# eval) keeps running orphaned rather than being bounded by the timeout that
-# looked like it would stop it.
-windowHasKillOnDrop "$WORDPRESS_SVC" '"czf", &snapshot_path, "-C", "/var/www"' \
-  "wordpress.rs's create_update_snapshot tar czf carries kill_on_drop(true)"
-windowHasKillOnDrop "$WORDPRESS_SVC" '"xzf", snapshot_path, "-C", "/var/www"' \
-  "wordpress.rs's rollback_from_snapshot tar xzf carries kill_on_drop(true)"
-windowHasKillOnDrop "$WORDPRESS_SVC" '"-u", "www-data", WP_CLI, "eval"' \
-  "wordpress.rs's health_check sudo wp-cli eval carries kill_on_drop(true)"
+# R6 (2026-11-02): install(), create_update_snapshot, rollback_from_snapshot
+# and health_check were deleted with the WordPress hosting surface in R6.
+# Deleted, not weakened: only wp_at_root (above) survives in wordpress.rs.
 
 echo
-echo "== J. backups.rs (services): the 4 sites the s452 fix to THIS SAME FILE (site D above) did not cover are annotated (s453 dockpanel-fanout run wf_a5d044b9-fa0, rotation target services/backups.rs + routes/backups.rs) =="
-# extract_payload / restore_inner / list_backup_files / restore_single_file all
-# wrap tar in tokio::time::timeout without kill_on_drop — the D-above fix only
-# ever covered create_backup's OWN tar czf, not these four siblings in the
-# same file.
-windowHasKillOnDrop "$BACKUPS_SVC" '"xzf", archive,' \
-  "backups.rs's extract_payload tar xzf carries kill_on_drop(true)"
-windowHasKillOnDrop "$BACKUPS_SVC" '"--exclude", PAYLOAD_DIR,' \
-  "backups.rs's restore_inner tar xzf (into the live webroot) carries kill_on_drop(true)"
-windowHasKillOnDrop "$BACKUPS_SVC" '"tzf", filepath_str' \
-  "backups.rs's list_backup_files tar tzf carries kill_on_drop(true)"
-windowHasKillOnDrop "$BACKUPS_SVC" '"xzf", backup_str,' \
-  "backups.rs's restore_single_file tar xzf (into the live webroot) carries kill_on_drop(true)"
-
-echo
-echo "== K. routes/backups.rs: the post-restore chown no longer hands the application .git (setup-critic finding, s453 — routes/backups.rs:340 was 1 of 8 .git-blind recursive site-root chowns tracked since p108/s377; the other 7 remain open, filed as their own future rotation target) =="
-if grep -q 'fn chown_restored_tree' "$BACKUPS_ROUTE" 2>/dev/null \
-  && { grep -A20 'fn chown_restored_tree' "$BACKUPS_ROUTE" 2>/dev/null | grep -c '\.git' >/dev/null; }; then
-  ok "routes/backups.rs defines chown_restored_tree, and it names .git explicitly (skips it in the www-data chown, re-secures it to root)"
+echo "== J. DELETED in the R6 merge: the four sibling tar sites in services/backups.rs =="
+# R6 merge (2026-11-02): extract_payload, restore_inner, list_backup_files and
+# restore_single_file were deleted with the site-backup surface. Deleted, not
+# weakened: no site tar path remains to annotate.
+if grep -qE 'fn (extract_payload|restore_inner|list_backup_files|restore_single_file)' "$BACKUPS_SVC" 2>/dev/null; then
+  bad "a site tar helper survived in services/backups.rs — re-scope this section"
 else
-  bad "routes/backups.rs's chown_restored_tree is missing or no longer mentions .git — re-scope this pin"
-fi
-if grep -q 'chown_restored_tree(&format!("/var/www/{domain}"))' "$BACKUPS_ROUTE" 2>/dev/null; then
-  ok "restore calls chown_restored_tree instead of a blanket chown -R"
-else
-  bad "restore no longer visibly calls chown_restored_tree — re-scope this pin"
+  ok "all four site tar helpers are gone from services/backups.rs"
 fi
 
-echo
-echo "== I. reachability: git legs, the database-backup dump/restore entrypoints, the mailbox tar entrypoints, and the wordpress.rs subprocess sites all sit behind live, unauthenticated-beyond-the-flat-token HTTP endpoints =="
+echo "== K. DELETED in the R6 merge: routes/backups.rs and its post-restore chown =="
+# R6 merge (2026-11-02): routes/backups.rs was deleted with the site-backup
+# surface, taking chown_restored_tree with it. Deleted, not weakened: no site
+# restore path remains to re-secure ownership on.
+if [ -f "$BACKUPS_ROUTE" ]; then
+  bad "routes/backups.rs still exists — deleted in the R6 merge"
+else
+  ok "routes/backups.rs is gone (site restore surface deleted)"
+fi
+
+echo "== I. reachability: the database-backup dump/restore entrypoints and the backups route entrypoints all sit behind live, unauthenticated-beyond-the-flat-token HTTP endpoints =="
 # Not a security claim on their own (this suite is a reliability/operational-
 # honesty pin, matching how the finding itself was framed) — just confirming
 # the routes that reach the fixed functions still exist, so this suite does
 # not silently stop meaning anything if a route gets renamed out from under it.
-if grep -q '"/git/clone"\|clone_or_pull' "$REPO/panel/agent/src/routes/git_build.rs" 2>/dev/null; then
-  ok "git_build.rs's route table still reaches clone_or_pull"
-else
-  bad "git_build.rs's route table no longer visibly reaches clone_or_pull — re-scope this pin"
-fi
-if grep -q 'clone_or_pull' "$REPO/panel/agent/src/routes/deploy.rs" 2>/dev/null; then
-  ok "deploy.rs's route table still reaches its own clone_or_pull"
-else
-  bad "deploy.rs's route table no longer visibly reaches clone_or_pull — re-scope this pin"
-fi
+# R6 (2026-11-02): routes/deploy.rs was deleted in R6; the clone_or_pull
+# implementation itself survives in services/deploy.rs and is pinned in §C.
 if grep -q 'dump_mysql\|dump_postgres\|dump_mongo\|restore_mysql\|restore_postgres\|restore_mongo' "$REPO/panel/agent/src/routes/database_backup.rs" 2>/dev/null; then
   ok "database_backup.rs's route table still reaches the dump/restore functions"
 else
   bad "database_backup.rs's route table no longer visibly reaches the dump/restore functions — re-scope this pin"
 fi
-if grep -q '"/mail/backup"' "$MAIL_ROUTE" 2>/dev/null && grep -q '"/mail/restore"' "$MAIL_ROUTE" 2>/dev/null; then
-  ok "mail.rs's route table still registers /mail/backup and /mail/restore"
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
+# R6 (2026-11-02): routes/wordpress.rs was deleted in R6 with the
+# WordPress hosting surface. Deleted, not weakened.
+# R6 merge (2026-11-02): routes/backups.rs was deleted with the site-backup
+# surface; the browse/restore-file routes die with it. Deleted, not weakened.
+if [ -f "$BACKUPS_ROUTE" ]; then
+  bad "routes/backups.rs still exists — deleted in the R6 merge"
 else
-  bad "mail.rs's route table no longer visibly registers /mail/backup or /mail/restore — re-scope this pin"
-fi
-if grep -q '"/wordpress/{domain}/install"' "$WORDPRESS_ROUTE" 2>/dev/null \
-  && grep -q '"/wordpress/{domain}/update-with-rollback"' "$WORDPRESS_ROUTE" 2>/dev/null \
-  && grep -q '"/wordpress/{domain}/harden"' "$WORDPRESS_ROUTE" 2>/dev/null; then
-  ok "wordpress.rs's route table still registers install, update-with-rollback, and harden (the routes that reach wp_at_root, the two install() calls, and both snapshot/rollback tars)"
-else
-  bad "wordpress.rs's route table no longer visibly registers install, update-with-rollback, or harden — re-scope this pin"
-fi
-if grep -q '"/backups/{domain}/browse/{filename}"' "$BACKUPS_ROUTE" 2>/dev/null \
-  && grep -q '"/backups/{domain}/restore-file/{filename}"' "$BACKUPS_ROUTE" 2>/dev/null; then
-  ok "routes/backups.rs's route table still registers browse and restore-file (the routes that reach every site fixed in section J/K)"
-else
-  bad "routes/backups.rs's route table no longer visibly registers browse or restore-file — re-scope this pin"
+  ok "routes/backups.rs is gone (browse/restore-file routes deleted with it)"
 fi
 
 echo

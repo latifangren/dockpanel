@@ -20,11 +20,8 @@ Notifications screen is built from. The categories the panel raises today:
 | `alert` | A threshold alert fires or resolves — disk, CPU, memory, a server going offline, a service stopping, a container crash-looping |
 | `monitor` | An uptime monitor goes down, comes back up, or misses a heartbeat |
 | `security` | A login from an address not seen before, a canary file being touched, an emergency lockdown, a password reset, a completed security scan |
-| `deploy` | A deploy finishes, fails, or succeeds while the site answers 5xx; a Git deploy, rollback or auto-rollback |
-| `site` | A site is created, deleted, renamed, enabled or disabled, or its cache/WAF settings change |
 | `incident` | An incident is created or resolved |
 | `backup` | Sites go 48 hours or more without a backup |
-| `ssl` | A certificate is renewed automatically |
 | `auto_heal` | The auto-healer restarts a service, exhausts its retries, or reclaims disk |
 | `system` | A container is put to sleep for being idle |
 

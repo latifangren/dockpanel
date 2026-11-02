@@ -224,7 +224,8 @@ TOTAL=$(echo "$LINKS" | sed -n 's/^TOTAL=\([0-9]*\).*/\1/p')
 ALLOWED=$(echo "$LINKS" | sed -n 's/.*ALLOWED=\([0-9]*\).*/\1/p')
 NMISS=$(echo "$LINKS" | /usr/bin/grep -c "^MISSING" || true)
 
-if [ -z "${TOTAL:-}" ] || [ "${TOTAL:-0}" -lt 20 ]; then
+# R5: floor re-derived 20 -> 17; git_deploys.rs carried the other producers.
+if [ -z "${TOTAL:-}" ] || [ "${TOTAL:-0}" -lt 17 ]; then
   bad "N3 found only ${TOTAL:-0} notify_panel call sites — the parse is wrong, not the code"
 else
   ok "N3 parsed $TOTAL notify_panel call sites"
@@ -310,10 +311,8 @@ nav = open(sys.argv[1]).read()
 admin_only = {m.group(1) for m in re.finditer(r'to:\s*"([^"]+)"[^}]*adminOnly:\s*true', nav)}
 if len(admin_only) < 3:
     print("NAV-PARSE-FAILED"); raise SystemExit
-# `git_deploys` rows are created behind `require_admin` and store the creating
-# admin's id, so `Some(user_id)` there is always an administrator. Recorded so it
-# stays a decision rather than an oversight.
-ALLOW = {("routes/git_deploys.rs", "/git-deploys")}
+# R5: the git_deploys allow-list entry left with the feature; no door is exempt.
+ALLOW = set()
 bad, checked = [], 0
 for dirpath, _, files in os.walk(sys.argv[2]):
     for fn in files:

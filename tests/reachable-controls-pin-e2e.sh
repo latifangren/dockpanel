@@ -46,7 +46,6 @@ ge()  { [ "$2" -ge "$3" ] 2>/dev/null && ok "$1" || bad "$1" "expected at least 
 # real binary explicitly (dockpanel-ops-p2, s357).
 G=/usr/bin/grep
 
-MAIL=panel/backend/src/routes/mail.rs
 MAILUI=panel/frontend/src/pages/Mail.tsx
 WPUI=panel/frontend/src/pages/WordPressToolkit.tsx
 MONITORS=panel/backend/src/routes/monitors.rs
@@ -57,48 +56,22 @@ VAULTUI=panel/frontend/src/pages/SecretsManager.tsx
 SECRETS=panel/backend/src/routes/secrets.rs
 DBUI=panel/frontend/src/pages/Databases.tsx
 
-for f in "$MAIL" "$MAILUI" "$WPUI" "$MONITORS" "$SETTINGS" "$TERMUI" "$EXTUI" "$VAULTUI" "$SECRETS" "$DBUI"; do
+for f in "$MAILUI" "$WPUI" "$MONITORS" "$SETTINGS" "$TERMUI" "$EXTUI" "$VAULTUI" "$SECRETS" "$DBUI"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
 
 # An arm that measures an empty subject prints green for every absence below, so
 # each subject is asserted before it is measured (lesson #143).
-for pair in "$MAIL:1500" "$MAILUI:800" "$WPUI:300" "$SETTINGS:2500" "$TERMUI:800"; do
+for pair in "$MAILUI:800" "$WPUI:300" "$SETTINGS:2500" "$TERMUI:800"; do
   f=${pair%:*}; min=${pair##*:}
   n=$($G -c '' "$f")
   [ "$n" -gt "$min" ] && ok "A0 subject extracted — $f is $n lines" \
     || bad "A0 subject extracted" "$f is only $n lines — arms over it examined nothing"
 done
 
-echo "── B. A blacklist verdict is only as good as the zones that answered ──"
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
+# Section B pinned the DNSxL blacklist handler in routes/mail.rs, deleted in R4. B5/B6 (Mail.tsx) survive.
 
-# B1: the RFC 5782 control probe. Every DNSxL must list 127.0.0.2, so a query for
-# it has a KNOWN correct answer — that is what separates "asked and told no" from
-# "could not ask". Keyed on the reversed literal, which cannot appear in prose by
-# accident.
-eq "B1 each zone is probed with an answer known in advance" \
-   "$($G -c '2\.0\.0\.127\.' "$MAIL")" "1"
-
-# B2: the verdict is not computed from the listing count alone. ABSENCE arm, so it
-# needs a positive control (B2-control) proving the file is really being read.
-eq "B2 the verdict is not decided by the listing count alone" \
-   "$($G -c '"clean": listed_count == 0' "$MAIL")" "0"
-
-eq "B2-control the handler still reports a listing count" \
-   "$($G -c 'let listed_count' "$MAIL")" "1"
-
-# B3: a zone that did not answer is carried as unknown rather than folded into
-# either verdict.
-ge "B3 the response distinguishes a zone that could not be reached" \
-   "$($G -c '"checked": checked' "$MAIL")" "1"
-
-# B4: the load-bearing line — "clean" requires that EVERY zone actually answered,
-# not merely that none of them said yes. Keyed on that comparison because it is
-# unique to this handler; both `"unknown"` and `"status": status` also occur
-# elsewhere in this file for unrelated reasons, and an arm on either would have been
-# measuring that other code instead of this decision.
-eq "B4 a clean verdict requires every zone to have answered" \
-   "$($G -c 'checked_count == results.len()' "$MAIL")" "1"
 
 # B5: the card must render that third state rather than painting it as one of the
 # two it already had. THREE independent sites decide it — the status dot, the text

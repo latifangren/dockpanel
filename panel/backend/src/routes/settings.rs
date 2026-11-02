@@ -6,7 +6,7 @@ use axum::{
 use std::collections::HashMap;
 
 use crate::auth::{AdminUser, ServerScope};
-use crate::error::{internal_error, err, agent_error, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -144,12 +144,17 @@ pub async fn list(
 ///
 /// No `ServerScope`. Every key in `ALLOWED_KEYS` is panel-global — there is one
 /// `settings` table and no per-server variant of any row in it — so the caller's
-/// `X-Server-Id` header never had a bearing on what this handler writes. It did
-/// have two effects, both wrong. It decided which single host received the SMTP
-/// configuration below, including the decrypted password; and because
-/// `ServerScope` resolves the agent eagerly and fails the request when it can't,
-/// saving ANY setting — a panel rename, a security toggle — returned 502 whenever
-/// the member selected in the server picker happened to be down.
+/// `X-Server-Id` header never had a bearing on what this handler writes.
+/// Saving SMTP keys writes only the `settings` rows: delivery is panel-side,
+/// `services::email` reads these keys and sends via lettre directly, so there
+/// is no per-host configuration to scope. R4 removed the fleet push that used
+/// to follow a save — it posted the decrypted password to the agent's
+/// `/smtp/configure` (msmtp config, so PHP `mail()`/sendmail work on the host),
+/// which is hosting mail, not notification delivery. Because `ServerScope`
+/// resolves the agent eagerly and fails the request when it can't, saving ANY
+/// setting — a panel rename, a security toggle — returned 502 whenever the
+/// member selected in the server picker happened to be down; with no agent
+/// call left in this handler, that failure mode is gone with the push.
 pub async fn update(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
@@ -271,251 +276,7 @@ pub async fn update(
 
     tracing::info!("Settings updated by {}: {} keys", claims.email, body.len());
 
-    let mut resp = serde_json::json!({ "ok": true });
-
-    // If SMTP keys were updated, push config to every host that sends mail
-    let smtp_keys = ["smtp_host", "smtp_port", "smtp_username", "smtp_password", "smtp_from", "smtp_from_name", "smtp_encryption"];
-    if body.keys().any(|k| smtp_keys.contains(&k.as_str())) {
-        // Fetch all SMTP settings to send complete config
-        let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings WHERE key LIKE 'smtp_%'")
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| internal_error("update settings", e))?;
-
-        let map: HashMap<String, String> = rows.into_iter().map(|r| (r.key, r.value)).collect();
-
-        let host = map.get("smtp_host").cloned().unwrap_or_default();
-        if !host.is_empty() {
-            let port_str = map.get("smtp_port").cloned().unwrap_or_else(|| "587".to_string());
-            let port: u16 = port_str.parse().unwrap_or(587);
-
-            // Decrypt smtp_password before sending to agent
-            let smtp_password_raw = map.get("smtp_password").cloned().unwrap_or_default();
-            let smtp_password = crate::services::secrets_crypto::decrypt_credential_or_legacy(
-                &smtp_password_raw, &state.config.jwt_secret,
-            );
-
-            let agent_body = serde_json::json!({
-                "host": host,
-                "port": port,
-                "username": map.get("smtp_username").cloned().unwrap_or_default(),
-                "password": smtp_password,
-                "from": map.get("smtp_from").cloned().unwrap_or_default(),
-                "from_name": map.get("smtp_from_name").cloned().unwrap_or_else(|| "DockPanel".to_string()),
-                "encryption": map.get("smtp_encryption").cloned().unwrap_or_else(|| "starttls".to_string()),
-            });
-
-            let push = push_smtp_to_fleet(&state, agent_body).await;
-            if let Some(w) = push.warning() {
-                tracing::warn!("{w}");
-                resp["warning"] = serde_json::json!(w);
-            }
-            resp["smtp"] = push.to_json();
-        }
-    }
-
-    Ok(Json(resp))
-}
-
-/// Where the SMTP configuration actually landed, host by host.
-///
-/// Three lists rather than a ratio, because the three outcomes are three
-/// different problems and only a NAME is actionable. A host that refused the
-/// config is broken now; a host that was never asked is invisible until its
-/// first unsent mail; and a host that took it is the only one an operator may
-/// assume anything about.
-struct SmtpPush {
-    /// Hosts that took the configuration.
-    configured: Vec<String>,
-    /// Hosts that were asked and refused, with the agent's reason.
-    failed: Vec<(String, String)>,
-    /// Hosts the registry would not resolve an agent for, with their status.
-    not_asked: Vec<(String, String)>,
-}
-
-impl SmtpPush {
-    fn total(&self) -> usize {
-        self.configured.len() + self.failed.len() + self.not_asked.len()
-    }
-
-    /// One sentence for the operator, or `None` when every host took it.
-    ///
-    /// It says how many of how many, then names the rest. "Saved" on its own is
-    /// the claim that has to stop being made: the write to `settings` always
-    /// succeeds, and it is the only part of this operation the old response
-    /// described.
-    fn warning(&self) -> Option<String> {
-        if self.failed.is_empty() && self.not_asked.is_empty() {
-            return None;
-        }
-        let listed = |v: &[(String, String)]| {
-            v.iter()
-                .map(|(name, why)| format!("{name} ({why})"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let mut parts = Vec::new();
-        if !self.failed.is_empty() {
-            parts.push(format!("rejected by {}", listed(&self.failed)));
-        }
-        if !self.not_asked.is_empty() {
-            parts.push(format!("never reached {}", listed(&self.not_asked)));
-        }
-        Some(format!(
-            "SMTP settings saved, but they reached only {} of {} servers — {}. \
-             Mail sent from the others will keep using whatever they were last given; \
-             save SMTP again once they are back online.",
-            self.configured.len(),
-            self.total(),
-            parts.join("; "),
-        ))
-    }
-
-    fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "configured": self.configured,
-            "failed": self.failed.iter()
-                .map(|(server, error)| serde_json::json!({ "server": server, "error": error }))
-                .collect::<Vec<_>>(),
-            "not_asked": self.not_asked.iter()
-                .map(|(server, status)| serde_json::json!({ "server": server, "status": status }))
-                .collect::<Vec<_>>(),
-        })
-    }
-}
-
-/// Push SMTP configuration at every member of the fleet.
-///
-/// The setting is panel-global, so its destination is too. This used to post to
-/// the single agent `ServerScope` resolved from the caller's `X-Server-Id`
-/// header, which produced both halves of the same defect: the DECRYPTED password
-/// landed on whichever box the browser happened to have in its picker, and every
-/// other member was never configured at all — so mail from those hosts failed for
-/// ever, reported by nothing but a `tracing::warn!`. Same shape as
-/// `mail::sync_mail_config`, which syncs Postfix maps to one header-chosen host.
-///
-/// ⚠ This is the panel's ONLY caller of the agent's `/smtp/configure`. Nothing
-/// re-pushes on check-in or on server registration, so a member that is offline
-/// at save time stays unconfigured until an operator saves SMTP again. That is
-/// precisely why a host that could not be asked comes back as a named result
-/// instead of being skipped quietly — the report is the only reconciliation there
-/// is.
-async fn push_smtp_to_fleet(state: &AppState, agent_body: serde_json::Value) -> SmtpPush {
-    let fleet = state.agents.online_fleet().await;
-
-    let mut push = SmtpPush {
-        configured: Vec::new(),
-        failed: Vec::new(),
-        not_asked: Vec::new(),
-    };
-
-    for member in &fleet {
-        match member.agent.post("/smtp/configure", Some(agent_body.clone())).await {
-            Ok(_) => push.configured.push(member.name.clone()),
-            Err(e) => {
-                tracing::warn!(
-                    "SMTP configure failed on {} ({}): {e}",
-                    member.name,
-                    member.id
-                );
-                push.failed.push((member.name.clone(), e.to_string()));
-            }
-        }
-    }
-
-    // `online_fleet` yields only servers that are online AND resolve to an agent;
-    // it skips the rest rather than substituting, which is right for a background
-    // loop and not enough here. An operator pressing Save is entitled to know that
-    // a registered server was left out, so the ones it skipped are counted by
-    // difference — no second predicate to drift away from the first.
-    let asked: Vec<uuid::Uuid> = fleet.iter().map(|m| m.id).collect();
-    push.not_asked = sqlx::query_as(
-        "SELECT name, status FROM servers WHERE NOT (id = ANY($1)) ORDER BY name",
-    )
-    .bind(asked.as_slice())
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
-
-    push
-}
-
-/// POST /api/settings/smtp/test — Send a test email (admin only).
-///
-/// Deliberately single-host, unlike the save above, and that is a difference in
-/// the QUESTION rather than an inconsistency. Saving is a fleet-wide change and
-/// has to reach every host that will send mail; a test asks whether ONE host can
-/// send, and fanning it out would put N copies of the same message in the
-/// operator's inbox and take as long as the slowest box to answer. The caller's
-/// selected server is the right subject for that question.
-///
-/// It is only defensible while the answer says which host it came from, so the
-/// reply names it. An unattributed "Email sent" read as a claim about the panel
-/// is how one box's success came to stand for the fleet's in the first place.
-pub async fn test_email(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(server_id, agent): ServerScope,
-    Json(body): Json<HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-
-    let to = body.get("to").cloned().unwrap_or_else(|| claims.email.clone());
-    if to.is_empty() || !to.contains('@') {
-        return Err(err(StatusCode::BAD_REQUEST, "Valid email address required"));
-    }
-
-    // Get stored from address
-    let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings WHERE key LIKE 'smtp_%'")
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| internal_error("test email", e))?;
-
-    let map: HashMap<String, String> = rows.into_iter().map(|r| (r.key, r.value)).collect();
-    let from = map.get("smtp_from").cloned().unwrap_or_default();
-    let from_name = map.get("smtp_from_name").cloned().unwrap_or_else(|| "DockPanel".to_string());
-
-    if from.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "SMTP not configured — save SMTP settings first"));
-    }
-
-    let agent_body = serde_json::json!({
-        "to": to,
-        "from": from,
-        "from_name": from_name,
-    });
-
-    // Resolved before the send so the answer can be attributed even when the row
-    // has since gone; a missing name is left off rather than guessed, because
-    // "sent from <the wrong host>" would be worse than saying nothing.
-    let server_row: Option<(String,)> = sqlx::query_as("SELECT name FROM servers WHERE id = $1")
-        .bind(server_id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-    let server_name = server_row.map(|(n,)| n);
-
-    let result = agent
-        .post("/smtp/test", Some(agent_body))
-        .await
-        .map_err(|e| agent_error("SMTP test email", e))?;
-
-    let message = result.get("message").and_then(|v| v.as_str()).unwrap_or("Email sent");
-    let message = match &server_name {
-        Some(name) => format!("{message} (sent from {name})"),
-        None => message.to_string(),
-    };
-
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "smtp.test",
-        Some("settings"), None, Some(&to), None, claims.key_id,
-    ).await;
-
-    Ok(Json(serde_json::json!({
-        "ok": true,
-        "message": message,
-        "server": server_name,
-    })))
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// POST /api/settings/test-webhook — Test Slack/Discord webhook

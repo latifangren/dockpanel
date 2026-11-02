@@ -291,39 +291,6 @@ const SUSPICIOUS_PATTERNS: &[&str] = &[
     "crontab -e", "crontab -r",
 ];
 
-/// Validate a command for use in docker exec hooks (git deploy post-deploy commands).
-/// Rejects shell metacharacters and dangerous patterns but allows general commands.
-pub fn is_safe_hook_command(command: &str) -> bool {
-    if command.trim().is_empty() {
-        return false;
-    }
-    // Reject newlines
-    if command.contains('\n') || command.contains('\r') || command.contains('\0') {
-        return false;
-    }
-    // Reject shell metacharacters that enable injection
-    let forbidden_chars = ['`', '$', '|', ';', '&', '<', '>', '\\', '!', '{', '}'];
-    for ch in &forbidden_chars {
-        if command.contains(*ch) {
-            return false;
-        }
-    }
-    // Reject known dangerous patterns. Routed through `normalize_for_blocklist`
-    // like every sibling in this file — otherwise `r'm' -rf /` contains no
-    // "rm -rf /" substring and passes this scan, then `sh -c` (the real
-    // shell `git_build.rs::run_hook` execs it through) strips the quotes and
-    // runs exactly that.
-    let lower = normalize_for_blocklist(command).to_lowercase();
-    let dangerous = ["rm -rf /", "mkfs", "dd if=", "> /dev/", "eval ", "exec ",
-                      "/etc/shadow", "/etc/passwd", "shutdown", "reboot"];
-    for pattern in &dangerous {
-        if lower.contains(pattern) {
-            return false;
-        }
-    }
-    true
-}
-
 /// Check if a command is suspicious (should trigger alert, even if allowed on server terminals).
 pub fn is_suspicious_command(cmd: &str) -> bool {
     if cmd.trim().is_empty() {
@@ -502,6 +469,7 @@ mod tests {
         assert!(is_safe_terminal_command("")); // empty is OK
     }
 
+
     #[test]
     fn test_safe_exec_start() {
         assert!(is_safe_exec_start("node server.js", "node").is_ok());
@@ -522,23 +490,4 @@ mod tests {
         assert!(is_safe_exec_start("node server.js %t", "node").is_err());
     }
 
-    #[test]
-    fn test_hook_command_quote_split_evasion_rejected() {
-        // Completeness critic's s454 find: `is_safe_hook_command` was the one
-        // function in this file NOT routed through `normalize_for_blocklist`,
-        // so the same quote-splitting evasion the cron/terminal/suspicious
-        // checks already close was still open on the git-deploy hook sink
-        // (`sh -c` in `routes/git_build.rs::run_hook`).
-        assert!(!is_safe_hook_command("rm -rf /"));
-        assert!(!is_safe_hook_command("r'm' -rf /"));
-        assert!(!is_safe_hook_command("r\"m\" -rf /"));
-        assert!(!is_safe_hook_command("cat /etc/pa''sswd"));
-        assert!(!is_safe_hook_command("sh'u'tdown -h now"));
-        // Sanity: the unobfuscated forms were already (and must remain) rejected.
-        assert!(!is_safe_hook_command("cat /etc/passwd"));
-        assert!(!is_safe_hook_command("reboot"));
-        // Legitimate hook commands must still pass.
-        assert!(is_safe_hook_command("npm run build"));
-        assert!(is_safe_hook_command("composer install --no-dev"));
-    }
 }

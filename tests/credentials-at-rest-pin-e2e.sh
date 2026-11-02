@@ -33,7 +33,6 @@ eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$3', got '$2'"; }
 # real binary explicitly (dockpanel-ops-p2, s357).
 G=/usr/bin/grep
 
-GITD=panel/backend/src/routes/git_deploys.rs
 SERVERS=panel/backend/src/routes/servers.rs
 AGENT=panel/backend/src/services/agent.rs
 HELPERS=panel/backend/src/helpers.rs
@@ -41,57 +40,25 @@ REENC=panel/backend/src/services/credential_reencrypt.rs
 SETTINGS=panel/backend/src/routes/settings.rs
 BACKUP_DEST=panel/backend/src/routes/backup_destinations.rs
 
-for f in "$GITD" "$SERVERS" "$AGENT" "$HELPERS" "$REENC" "$SETTINGS" "$BACKUP_DEST" README.md SECURITY.md; do
+for f in "$SERVERS" "$AGENT" "$HELPERS" "$REENC" "$SETTINGS" "$BACKUP_DEST" README.md SECURITY.md; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
 
 # An arm that measures an empty subject prints green for every absence below, so
 # each subject is asserted before it is measured (lesson #143).
-for pair in "$GITD:3000" "$SERVERS:400" "$AGENT:1200"; do
+for pair in "$SERVERS:400" "$AGENT:1200"; do
   f=${pair%:*}; floor=${pair##*:}
   n=$($G -c '' "$f")
   [ "$n" -gt "$floor" ] && ok "S0 subject extracted — $f is $n lines" \
     || bad "S0 subject extracted" "$f is only $n lines (floor $floor) — arms over it examine nothing"
 done
 
-echo "── B. git_deploys.github_token ─────────────────────────────────────────"
+echo "── B. the shared decrypting choke point in helpers ──────────────────────"
 
 # B0 (was A2c): the Cloudflare half in helpers still has its own choke point.
 # Kept here after §A (cdn_zones) was removed in R2 — its subject is helpers.rs, not cdn.rs.
 eq "B0 the Cloudflare choke point in helpers still decrypts" \
    "$($G -c 'decrypt_credential_from_env(token)' "$HELPERS")" "1"
-
-eq "B1 both writers bind through the shared encrypting helper" \
-   "$($G -c 'encrypt_stored_token(body\.github_token\.as_deref()' "$GITD")" "2"
-GH_PLAIN=$($G -cE '\.bind\((&body\.github_token|body\.github_token\.as_deref\(\))\)' "$GITD")
-if [ "$GH_PLAIN" = "0" ]; then
-  ok "B1b no writer binds the plaintext github_token"
-else
-  bad "B1b no writer binds the plaintext github_token" "found $GH_PLAIN — the column would hold cleartext"
-fi
-
-# B2: the sentinel guard. Every handler now returns the masked row, so a client
-# that submits the form it was served sends ●●●●●●●● back. Storing that would
-# replace a working token with eight circles; encrypting it would be worse, since
-# the result looks like a legitimate credential to every later read. v2.48.3
-# shipped this class of bug once already.
-eq "B2 the mask sentinel is refused by the writer-side helper" \
-   "$($G -c 't == GITHUB_TOKEN_MASK' "$GITD")" "1"
-eq "B2b the mask and the guard read the same constant" \
-   "$($G -c 'GITHUB_TOKEN_MASK' "$GITD")" "3"
-
-# B3: the single sink. All seven read sites reach `set_github_status`, directly
-# or through a spawned task, and the token never leaves the backend.
-eq "B3 the sink decrypts" \
-   "$($G -c 'decrypt_credential_from_env(token)' "$GITD")" "1"
-AGENT_SEES_TOKEN=$($G -rc 'github_token' panel/agent/src 2>/dev/null | $G -cv ':0$')
-if [ "${AGENT_SEES_TOKEN:-0}" = "0" ]; then
-  ok "B3b the github token never leaves the backend"
-else
-  bad "B3b the github token never leaves the backend" "the agent tree references it — the sink is not the only reader"
-fi
-eq "B3-control the agent tree IS being read (a token name that does appear there)" \
-   "$([ "$($G -rc 'agent.token' panel/agent/src 2>/dev/null | $G -cv ':0$')" -ge 1 ] && echo yes || echo no)" "yes"
 
 echo "── C. servers.agent_token ──────────────────────────────────────────────"
 
@@ -138,18 +105,6 @@ eq "C3 the dial-out decrypt is the legacy-tolerant variant" \
 eq "C4 config.jwt_secret IS the JWT_SECRET environment variable" \
    "$($G -c 'let jwt_secret = std::env::var("JWT_SECRET").expect(' panel/backend/src/config.rs)" "1"
 
-echo "── D. The wire: every row-returning handler masks ──────────────────────"
-
-# D1: DERIVED, not listed. The population is every handler that returns a
-# GitDeploy row; each must mask before it answers. A hand list of handler names
-# is the defect this ship is about, one level up.
-RETURNS=$($G -cE '^\) -> Result<(\(StatusCode, )?Json<(Vec<)?GitDeploy>' "$GITD")
-MASKS=$($G -c 'mask_github_token(' "$GITD")
-# masks = one call per returning handler, plus the definition
-eq "D1 every GitDeploy-returning handler masks" "$MASKS" "$((RETURNS + 1))"
-[ "$RETURNS" -ge 4 ] && ok "D1-control the handler population is $RETURNS, not empty" \
-  || bad "D1-control the handler population" "found $RETURNS — the signature grep matched nothing"
-
 echo "── E. The published sentence and the columns are one edit ──────────────"
 
 # E1: the claim. This is the arm that would have caught the original defect: the
@@ -161,22 +116,20 @@ eq "E1 README still publishes the at-rest claim" \
 eq "E1b SECURITY.md still publishes it unqualified" \
    "$($G -c 'All stored credentials encrypted with AES-256-GCM' SECURITY.md)" "1"
 
-# E2: the two columns this ship added are in the sweep's own registry. A
+# E2: the surviving column this ship added is in the sweep's own registry.
+# (git_deploys.github_token left with the feature in R5.) A
 # module named without its subject is the half-edit `subject_tokens_match_the_sweep`
 # rejects in Rust; this is the source-level mirror, so the pair cannot be
 # separated by an edit that never runs cargo test.
-for sub in '("git_deploys", "id", "github_token")' '("servers", "id", "agent_token")'; do
+for sub in '("servers", "id", "agent_token")'; do
   # COUNT, never forbid: the file's own doc comment spells one of these
   # declarations in prose, so an absence test could not fail (s376 #386 family).
   n=$($G -cF "    $sub," "$REENC")
   eq "E2 the sweep re-keys $sub" "$n" "1"
 done
-eq "E2b each new column's module names it in COVERED_MODULES" \
-   "$($G -cE '\("(git_deploys|servers|agent)", "(git_deploys\.github_token|servers\.agent_token)"\),' "$REENC")" "3"
+eq "E2b each surviving column's module names it in COVERED_MODULES" \
+   "$($G -cE '\("(servers|agent)", "servers\.agent_token"\),' "$REENC")" "2"
 
-# E3: the module list is DERIVED from the crate, not typed. Pinned because the
-# earlier cut walked a two-element literal and asserted that literal against
-# itself — a tautology a mutation walked straight through.
 eq "E3 the writer census walks the crate root, not a directory list" \
    "$($G -c 'join("src");' "$REENC")" "1"
 eq "E3b it descends" "$($G -c 'stack.push(path);' "$REENC")" "1"

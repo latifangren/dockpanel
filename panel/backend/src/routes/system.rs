@@ -10,7 +10,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
-use crate::error::{agent_error, err, internal_error, ApiError};
+use crate::error::{agent_error, ApiError};
 use crate::provision::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -482,8 +482,8 @@ pub(crate) async fn install_service_with_log(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = Uuid::new_v4();
 
-    // One line here covers every service install and uninstall route plus both
-    // PHP routes — they all funnel through this helper.
+    // One line here covers every service install and uninstall route — they
+    // all funnel through this helper.
     crate::helpers::register_provision_log(
         &state.provision_logs,
         &state.deploy_owners,
@@ -580,14 +580,6 @@ pub(crate) async fn install_service_with_log(
     }))))
 }
 
-pub async fn install_php(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "PHP", "/services/install/php", None).await
-}
-
 pub async fn install_certbot(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
@@ -607,7 +599,7 @@ pub async fn install_ufw(
 /// GET /api/services/install/{install_id}/log — SSE stream of install progress.
 ///
 /// Despite the path, this is the panel's general provisioning stream: the UI
-/// points backup ids, restore ids, site-deploy ids, mail-install ids and
+/// points backup ids, restore ids, site-deploy ids and
 /// system-update ids at it as well as service installs. So it cannot authorize
 /// by feature — and it used to authorize by nothing at all. It took `AdminUser`,
 /// discarded the claims, and looked the id up bare, which handed any key any
@@ -746,146 +738,6 @@ pub async fn disable_auto_updates(
 // panel's real IP restriction is a setting enforced at every session-minting door in
 // `auth.rs`, and it now owns the single operator control on the Account tab.
 //
-pub async fn install_powerdns(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(server_id, agent): ServerScope,
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    // pdns_api_url/pdns_api_key live in the global `settings` table (no per-server
-    // row), but installation is per-server (this handler is ServerScope-scoped, same
-    // as Redis/Fail2Ban/Cloudflare Tunnel). Installing on a second server would
-    // silently overwrite the first server's credentials — every existing PowerDNS
-    // zone would then point at the wrong authoritative server with no error anywhere.
-    // `pdns_server_id` records which server currently owns the saved credentials;
-    // absent means either no install yet or a pre-existing install from before this
-    // check shipped (grandfathered — not blocked).
-    let owner: Option<(String,)> = sqlx::query_as(
-        "SELECT value FROM settings WHERE key = 'pdns_server_id'",
-    )
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("check pdns owner", e))?;
-    if let Some((owner_id_str,)) = owner {
-        if let Ok(owner_id) = owner_id_str.parse::<Uuid>() {
-            if owner_id != server_id {
-                let owner_name: Option<(String,)> = sqlx::query_as(
-                    "SELECT name FROM servers WHERE id = $1",
-                )
-                .bind(owner_id)
-                .fetch_optional(&state.db)
-                .await
-                .map_err(|e| internal_error("look up pdns owner server", e))?;
-                let label = owner_name.map(|(n,)| n).unwrap_or_else(|| owner_id.to_string());
-                return Err(err(
-                    StatusCode::CONFLICT,
-                    &format!(
-                        "PowerDNS is already configured for server '{label}'. Uninstall it there first — installing on a second server would overwrite those credentials and orphan its DNS zones."
-                    ),
-                ));
-            }
-        }
-    }
-
-    // Optional {"backend":"sqlite"|"pgsql"} forwarded to the agent (issue #63).
-    // Absent/invalid → None, so the agent applies its pgsql default (back-compat).
-    let forward_body = serde_json::from_slice::<serde_json::Value>(&body).ok()
-        .and_then(|v| v.get("backend").and_then(|b| b.as_str()).map(str::to_string))
-        .filter(|b| b == "sqlite" || b == "pgsql")
-        .map(|b| serde_json::json!({ "backend": b }));
-    let install_id = Uuid::new_v4();
-
-    crate::helpers::register_provision_log(
-        &state.provision_logs,
-        &state.deploy_owners,
-        install_id,
-        claims.sub,
-        32,
-    );
-
-    let logs = state.provision_logs.clone();
-    let db = state.db.clone();
-    let jwt_secret = state.config.jwt_secret.clone();
-    let user_id = claims.sub;
-    let email = claims.email.clone();
-    let key_id = claims.key_id;
-    let ip = crate::routes::client_ip(&headers);
-
-    tokio::spawn(async move {
-        let emit = |step: &str, lbl: &str, status: &str, msg: Option<String>| {
-            let ev = ProvisionStep {
-                step: step.into(),
-                label: lbl.into(),
-                status: status.into(),
-                message: msg,
-            };
-            if let Ok(mut map) = logs.lock() {
-                if let Some((history, tx, _)) = map.get_mut(&install_id) {
-                    history.push(ev.clone());
-                    let _ = tx.send(ev);
-                }
-            }
-        };
-
-        emit("install", "Installing PowerDNS", "in_progress", None);
-
-        // `post_long` for the same reason as the mail installers — this is an apt install
-        // plus a service start, and 60s is not a budget for that.
-        match agent
-            .post_long("/services/install/powerdns", forward_body, 900)
-            .await
-        {
-            Ok(result) => {
-                // Auto-save API URL and key to settings
-                if let (Some(url), Some(key)) = (
-                    result.get("api_url").and_then(|v| v.as_str()),
-                    result.get("api_key").and_then(|v| v.as_str()),
-                ) {
-                    let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_url', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
-                        .bind(url)
-                        .execute(&db)
-                        .await;
-                    let encrypted_key = crate::services::secrets_crypto::encrypt_credential(key, &jwt_secret)
-                        .unwrap_or_else(|_| key.to_string());
-                    let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_key', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
-                        .bind(&encrypted_key)
-                        .execute(&db)
-                        .await;
-                    let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_server_id', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
-                        .bind(server_id.to_string())
-                        .execute(&db)
-                        .await;
-                }
-
-                emit("install", "Installing PowerDNS", "done", None);
-                emit("complete", "PowerDNS installed", "done", None);
-                activity::log_activity(
-                    &db, user_id, &email, "service.install",
-                    Some("system"), Some("powerdns"), None, ip.as_deref(), key_id,
-                ).await;
-                crate::services::security_hardening::audit_log(
-                    &db, "service.install", Some(&email), ip.as_deref(),
-                    Some("system"), Some("powerdns"), None, None, "warning", key_id,
-                ).await;
-                tracing::info!("Service installed: PowerDNS");
-            }
-            Err(e) => {
-                emit("install", "Installing PowerDNS", "error", Some(format!("{e}")));
-                emit("complete", "Install failed", "error", None);
-                tracing::error!("Service install failed: PowerDNS: {e}");
-            }
-        }
-
-        tokio::time::sleep(Duration::from_secs(30)).await;
-        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
-    });
-
-    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
-        "install_id": install_id,
-        "message": "PowerDNS installation started",
-    }))))
-}
 
 /// GET /api/system/disk-io — Proxy to agent's disk I/O stats (admin only).
 pub async fn disk_io(
@@ -936,22 +788,6 @@ pub async fn install_nodejs(
     install_service_with_log(&state, agent, claims.sub, &claims.email, "Node.js", "/services/install/nodejs", None).await
 }
 
-pub async fn install_composer(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Composer", "/services/install/composer", None).await
-}
-
-pub async fn install_waf(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "WAF (ModSecurity)", "/services/install/waf", None).await
-}
-
 pub async fn install_cloudflared(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
@@ -961,14 +797,6 @@ pub async fn install_cloudflared(
 }
 
 // ── Service uninstallers (proxy to agent, async with SSE progress) ───────
-
-pub async fn uninstall_php(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "PHP (uninstall)", "/services/uninstall/php", None).await
-}
 
 pub async fn uninstall_certbot(
     State(state): State<AppState>,
@@ -994,104 +822,6 @@ pub async fn uninstall_fail2ban(
     install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban (uninstall)", "/services/uninstall/fail2ban", None).await
 }
 
-pub async fn uninstall_powerdns(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(server_id, agent): ServerScope,
-    headers: axum::http::HeaderMap,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    // Custom (not the shared install_service_with_log helper) because a successful
-    // uninstall must also free the `pdns_server_id` ownership slot install_powerdns
-    // guards on — otherwise uninstalling here would leave this server permanently
-    // recorded as the owner and block ever installing PowerDNS anywhere else.
-    let install_id = Uuid::new_v4();
-
-    crate::helpers::register_provision_log(
-        &state.provision_logs,
-        &state.deploy_owners,
-        install_id,
-        claims.sub,
-        32,
-    );
-
-    let logs = state.provision_logs.clone();
-    let db = state.db.clone();
-    let user_id = claims.sub;
-    let email = claims.email.clone();
-    let key_id = claims.key_id;
-    let ip = crate::routes::client_ip(&headers);
-
-    tokio::spawn(async move {
-        let emit = |step: &str, lbl: &str, status: &str, msg: Option<String>| {
-            let ev = ProvisionStep {
-                step: step.into(),
-                label: lbl.into(),
-                status: status.into(),
-                message: msg,
-            };
-            if let Ok(mut map) = logs.lock() {
-                if let Some((history, tx, _)) = map.get_mut(&install_id) {
-                    history.push(ev.clone());
-                    let _ = tx.send(ev);
-                }
-            }
-        };
-
-        emit("install", "Uninstalling PowerDNS", "in_progress", None);
-
-        match agent
-            .post_long("/services/uninstall/powerdns", None, INSTALL_AGENT_TIMEOUT_SECS)
-            .await
-        {
-            Ok(_) => {
-                // Only clear the saved credentials if THIS server is the recorded
-                // owner (or no owner was ever recorded — pre-existing install from
-                // before pdns_server_id shipped). Uninstalling on a server that never
-                // owned the install must not wipe another server's live credentials.
-                let owner: Result<Option<(String,)>, _> = sqlx::query_as(
-                    "SELECT value FROM settings WHERE key = 'pdns_server_id'",
-                )
-                .fetch_optional(&db)
-                .await;
-                let owned_by_this_server = match owner {
-                    Ok(Some((id_str,))) => id_str.parse::<Uuid>().map(|id| id == server_id).unwrap_or(true),
-                    Ok(None) => true,
-                    Err(_) => false,
-                };
-                if owned_by_this_server {
-                    let _ = sqlx::query("DELETE FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key', 'pdns_server_id')")
-                        .execute(&db)
-                        .await;
-                }
-
-                emit("install", "Uninstalling PowerDNS", "done", None);
-                emit("complete", "PowerDNS uninstalled", "done", None);
-                activity::log_activity(
-                    &db, user_id, &email, "service.uninstall",
-                    Some("system"), Some("powerdns"), None, ip.as_deref(), key_id,
-                ).await;
-                crate::services::security_hardening::audit_log(
-                    &db, "service.uninstall", Some(&email), ip.as_deref(),
-                    Some("system"), Some("powerdns"), None, None, "warning", key_id,
-                ).await;
-                tracing::info!("Service uninstalled: PowerDNS");
-            }
-            Err(e) => {
-                emit("install", "Uninstalling PowerDNS", "error", Some(format!("{e}")));
-                emit("complete", "Uninstall failed", "error", None);
-                tracing::error!("Service uninstall failed: PowerDNS: {e}");
-            }
-        }
-
-        tokio::time::sleep(Duration::from_secs(30)).await;
-        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
-    });
-
-    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
-        "install_id": install_id,
-        "message": "PowerDNS uninstallation started",
-    }))))
-}
 
 pub async fn uninstall_redis(
     State(state): State<AppState>,
@@ -1107,22 +837,6 @@ pub async fn uninstall_nodejs(
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     install_service_with_log(&state, agent, claims.sub, &claims.email, "Node.js (uninstall)", "/services/uninstall/nodejs", None).await
-}
-
-pub async fn uninstall_composer(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Composer (uninstall)", "/services/uninstall/composer", None).await
-}
-
-pub async fn uninstall_waf(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "WAF (uninstall)", "/services/uninstall/waf", None).await
 }
 
 pub async fn uninstall_cloudflared(

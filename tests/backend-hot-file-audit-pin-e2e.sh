@@ -93,8 +93,6 @@ fnbody() {
   ' <<< "$1"
 }
 
-DNS=panel/backend/src/routes/dns.rs
-DNS_C=$(code "$DNS")
 SECURITY=panel/backend/src/routes/security.rs
 SECURITY_C=$(code "$SECURITY")
 DATABASES=panel/backend/src/routes/databases.rs
@@ -104,8 +102,6 @@ PANEL_UPDATE_C=$(code "$PANEL_UPDATE")
 UPDATE=panel/backend/src/routes/update.rs
 UPDATE_C=$(code "$UPDATE")
 
-UPDATE_RECORD_BODY=$(fnbody "$DNS_C" "update_record")
-DELETE_RECORD_BODY=$(fnbody "$DNS_C" "delete_record")
 COMPLIANCE_BODY=$(fnbody "$SECURITY_C" "compliance_report")
 DB_LIST_BODY=$(fnbody "$DATABASES_C" "list")
 DB_CREDENTIALS_BODY=$(fnbody "$DATABASES_C" "credentials")
@@ -117,30 +113,7 @@ START_UPDATE_BODY=$(fnbody "$PANEL_UPDATE_C" "start_panel_update")
 ROLLBACK_BODY=$(fnbody "$PANEL_UPDATE_C" "rollback_to_snapshot")
 APPLY_FLEET_BODY=$(fnbody "$UPDATE_C" "apply_fleet")
 
-# ── §A dns.rs: record_id validated before URL interpolation ─────────────
-echo "── §A dns.rs: CF record_id is allowlisted (32-char hex) before use ──"
-
-if has "$UPDATE_RECORD_BODY" 'record_id\.len\(\) != 32' && has "$UPDATE_RECORD_BODY" 'is_ascii_hexdigit'; then
-  ok "A1 update_record validates record_id as 32-char hex on the cloudflare arm"
-else
-  bad "A1 update_record's cloudflare arm no longer validates record_id shape"
-fi
-
-if has "$DELETE_RECORD_BODY" 'record_id\.len\(\) != 32' && has "$DELETE_RECORD_BODY" 'is_ascii_hexdigit'; then
-  ok "A2 delete_record validates record_id as 32-char hex on the cloudflare arm"
-else
-  bad "A2 delete_record's cloudflare arm no longer validates record_id shape"
-fi
-
-# Positive control: the PowerDNS arm's record_id (a hex-encoded composite of
-# variable length, decoded via pdns_parse_record_id) must NOT be forced
-# through the same fixed-32-hex check — it was never the bug and a blanket
-# fix would break every PowerDNS record update/delete.
-if has "$UPDATE_RECORD_BODY" 'pdns_parse_record_id'; then
-  ok "A3 (control) update_record's powerdns arm still parses record_id via pdns_parse_record_id"
-else
-  bad "A3 (control) powerdns record parsing regressed"
-fi
+# R4 (2026-11-02): this section pinned mail/DNS hosting code removed in R4; deleted, not weakened.
 
 # ── §B security.rs: compliance_report escapes scan-derived HTML ─────────
 echo "── §B security.rs: compliance_report HTML-escapes findings before interpolation ──"

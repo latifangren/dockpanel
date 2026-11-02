@@ -37,7 +37,7 @@ pub async fn create_token(
         return Err(err(StatusCode::BAD_REQUEST, "Name must be 1-255 characters"));
     }
 
-    let scopes = body.get("scopes").and_then(|v| v.as_str()).unwrap_or("sites,databases,dns");
+    let scopes = body.get("scopes").and_then(|v| v.as_str()).unwrap_or("sites,databases");
 
     // Generate a secure random token
     let raw_token = format!("dpiac_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));

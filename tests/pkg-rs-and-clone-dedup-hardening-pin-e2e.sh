@@ -81,11 +81,9 @@ bodyhasre() { [ -n "$(fnbody "$1" "$2" | grep -E -- "$3")" ]; }
 
 PKG=panel/agent/src/services/pkg.rs
 SAFE_CMD=panel/agent/src/safe_cmd.rs
-NGINX_ROUTE=panel/agent/src/routes/nginx.rs
-STAGING=panel/agent/src/services/staging.rs
 INSTALL_AGENT_SH=scripts/install-agent.sh
 
-for f in "$PKG" "$SAFE_CMD" "$NGINX_ROUTE" "$STAGING" "$INSTALL_AGENT_SH"; do
+for f in "$PKG" "$SAFE_CMD" "$INSTALL_AGENT_SH"; do
   [ -f "$f" ] || { echo "missing source file: $f"; exit 1; }
 done
 
@@ -201,37 +199,10 @@ do
   fi
 done
 
-echo
-echo "── 4. F3: nginx.rs::clone_site delegates to staging.rs::clone_files ──"
-if bodyhas "$NGINX_ROUTE" "^async fn clone_site" "services::staging::clone_files("; then
-  ok "clone_site calls services::staging::clone_files"
-else
-  bad "clone_site no longer calls services::staging::clone_files — the dedup may have regressed"
-fi
-if bodyhasre "$NGINX_ROUTE" "^async fn clone_site" '"rsync"'; then
-  bad "clone_site still has its own inline rsync call — the duplicate implementation was not actually removed"
-else
-  ok "clone_site no longer runs its own inline rsync (control: real dedup, not just an added delegate call)"
-fi
-if bodyhasre "$NGINX_ROUTE" "^async fn clone_site" 'www-data:www-data'; then
-  bad "clone_site still has its own inline chown-to-www-data logic — the duplicate implementation was not actually removed"
-else
-  ok "clone_site no longer runs its own inline chown (control: chown logic now lives only in clone_files)"
-fi
-# clone_files itself must be untouched — the delegation target, not the
-# thing being changed.
-if hasre "$STAGING" 'pub async fn clone_files\(source_domain: &str, target_domain: &str\)'; then
-  ok "staging.rs::clone_files signature is unchanged (control: delegation target untouched)"
-else
-  bad "staging.rs::clone_files signature changed — re-check the delegation call still matches"
-fi
-# clone_site's own post-copy work (the one thing that should NOT have moved
-# into clone_files) must still be present.
-if bodyhas "$NGINX_ROUTE" "^async fn clone_site" '"du"'; then
-  ok "clone_site still computes size via du (control: route-specific tail preserved)"
-else
-  bad "clone_site's own du -sb size computation is missing"
-fi
+# R6 (2026-11-02): section 4 pinned nginx.rs::clone_site's delegation to
+# staging.rs::clone_files. clone_site was deleted in the R6 nginx split.
+# Deleted, not weakened: the delegating function no longer exists. (The
+# delegation target, staging.rs::clone_files, survives untouched.)
 
 echo
 echo "── 5. F4: install-agent.sh checks firewalld's ACTIVE STATE before ufw ──"

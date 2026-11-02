@@ -192,33 +192,23 @@ async fn main() {
         .merge(routes::ssl_registry::router())
         .merge(routes::database::router())
         .merge(routes::files::router())
-        .merge(routes::backups::router())
         .merge(routes::logs::router())
         .merge(routes::docker_apps::router())
         .merge(routes::image_scan::router())
         .merge(routes::sbom::router())
         .merge(routes::security::router())
         .merge(routes::crons::router())
-        .merge(routes::php::router())
         .merge(routes::remote_backup::router())
         .merge(routes::database_backup::router())
         .merge(routes::volume_backup::router())
         .merge(routes::backup_verify::router())
         .merge(routes::backup_drill::router())
-        .merge(routes::deploy::router())
-        .merge(routes::git_build::router())
-        .merge(routes::smtp::router())
-        .merge(routes::wordpress::router())
-        .merge(routes::cms::router())
         .merge(routes::staging::router())
         .merge(routes::services::router())
         .merge(routes::iac::router())
         .merge(routes::updates::router())
         .merge(routes::panel_update::router())
         .merge(routes::diagnostics::router())
-        .merge(routes::mail::router())
-        .merge(routes::sftp::router())
-        .merge(routes::migration::router())
         .merge(routes::service_installer::router())
         .merge(routes::server_utils::router())
         .merge(routes::traefik::router())
@@ -273,13 +263,6 @@ async fn main() {
         }
     };
     tracing::info!("Agent TLS cert fingerprint (SHA-256): {cert_fingerprint}");
-
-    // Bring a pre-existing /webmail/ nginx fragment up to the current template.
-    // The fragment is written only on the Install click, so without this an
-    // existing install never receives a fix to its contents — which is how
-    // s262's header fix reached no box at all until s270. No-op when webmail
-    // was never installed.
-    tokio::spawn(routes::mail::heal_webmail_nginx());
 
     // Same shape, one file over: the agent's OWN unit is written only by an
     // installer, so the sandbox `install-agent.sh` never applied could not

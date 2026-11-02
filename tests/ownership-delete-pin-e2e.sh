@@ -45,7 +45,6 @@ OWN=panel/agent/src/services/ownership.rs
 APPS_ROUTE=panel/agent/src/routes/docker_apps.rs
 APPS_SVC=panel/agent/src/services/docker_apps.rs
 TRAEFIK=panel/agent/src/services/traefik.rs
-GIT_BUILD=panel/agent/src/services/git_build.rs
 APP_PROC=panel/agent/src/services/app_process.rs
 NGINX_ROUTE=panel/agent/src/routes/nginx.rs
 SSL_ROUTE=panel/agent/src/routes/ssl.rs
@@ -57,14 +56,11 @@ CRONS_AGENT=panel/agent/src/routes/crons.rs
 # regression, and repointing it is the fix rather than relaxing it.
 CRONTAB_SVC=panel/agent/src/services/crontab.rs
 CRONS_BE=panel/backend/src/routes/crons.rs
-GIT_BE=panel/backend/src/routes/git_deploys.rs
-GIT_ROUTE=panel/agent/src/routes/git_build.rs
 SITES_BE=panel/backend/src/routes/sites.rs
 WP=panel/agent/src/services/wordpress.rs
 
-for f in "$APPS_ROUTE" "$APPS_SVC" "$TRAEFIK" "$GIT_BUILD" "$APP_PROC" \
-         "$NGINX_ROUTE" "$SSL_ROUTE" "$CRONS_AGENT" "$CRONS_BE" "$SITES_BE" "$WP" \
-         "$GIT_BE" "$GIT_ROUTE"; do
+for f in "$APPS_ROUTE" "$APPS_SVC" "$TRAEFIK" "$APP_PROC" \
+         "$NGINX_ROUTE" "$SSL_ROUTE" "$CRONS_AGENT" "$CRONS_BE" "$SITES_BE" "$WP"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -140,7 +136,7 @@ echo
 
 # ── stripper self-check ────────────────────────────────────────────────
 echo "§0 the harness measures its own preprocessing"
-stripper_self_check "$APPS_ROUTE" "$APPS_SVC" "$TRAEFIK" "$GIT_BUILD" "$APP_PROC" \
+stripper_self_check "$APPS_ROUTE" "$APPS_SVC" "$TRAEFIK" "$APP_PROC" \
                     "$NGINX_ROUTE" "$SSL_ROUTE" "$CRONS_AGENT" "$SITES_BE" "$WP"
 
 # ── §A the shared answer, and that it fails closed ─────────────────────
@@ -312,36 +308,6 @@ if [ -n "$OAD_ASSIGN" ] && has "$OAD_ASSIGN" 'binds' && live "$RI"; then
   ok "B4 owns_app_dir is ASSIGNED from the container's bind mounts"
 else
   bad "B4 owns_app_dir must be assigned from binds — a name label is not ownership"
-fi
-
-# B5 — the unattended one.
-#
-# ⚠ These arms USED to read `cleanup_container`'s own body. The teardown was
-# extracted to `release_domain_artifacts` so the DELETE path and the RENAME path
-# could not answer the ownership question differently — and that extraction reds
-# an arm scoped to the old home, correctly. Repointed, and SPLIT: the checks are
-# pinned where they now live, AND the delete path is pinned to route through
-# them. A helper's own arm never pins its call site (lesson #732); asserting
-# only the first half would leave `cleanup_container` free to stop calling it.
-GB=$(subj "$GIT_BUILD") || GB=""
-RDA=$(fnbody "$GB" "release_domain_artifacts")
-CC=$(fnbody "$GB" "cleanup_container")
-if [ "$(wc -l <<< "$RDA")" -lt 5 ]; then
-  bad "B5 release_domain_artifacts body resolved ($(wc -l <<< "$RDA") lines — subject lost)"
-elif derives "$RDA" 'ownership::app_vhost'; then
-  ok "B5 the git domain teardown proves the vhost is still its own"
-else
-  bad "B5 git domain teardown deletes a vhost on a label, from a 5-minute background sweep"
-fi
-if derives "$RDA" 'ownership::cert_dir_in_use_elsewhere'; then
-  ok "B6 the git domain teardown leaves a shared cert directory alone"
-else
-  bad "B6 git domain teardown must not delete a cert dir another vhost still uses"
-fi
-if derives "$CC" 'release_domain_artifacts'; then
-  ok "B6b cleanup_container routes its teardown through the guarded helper"
-else
-  bad "B6b cleanup_container no longer calls release_domain_artifacts — the guard is bypassed"
 fi
 
 # B7/B8 — the non-injective systemd unit name. '.'->'-' is not injective because
@@ -574,65 +540,6 @@ fi
 # ── summary ────────────────────────────────────────────────────────────
 echo
 echo
-echo "== §H  a RENAME releases the domain it walked away from =="
-
-# The defect: a Git Deploy that changed its domain released the CLAIM on the old
-# name (domain_claim derives occupancy from the live row) while the old vhost
-# kept proxying to the still-running container under a certificate that kept
-# renewing. Another tenant could claim the name and be answered by the previous
-# tenant's application. The refusal on CLEARING a domain even advised operators
-# into it: "Enter a different domain to move the deploy".
-if GBE=$(subj "$GIT_BE"); then
-  UPD=$(fnbody "$GBE" "update")
-  if [ "$(wc -l <<< "$UPD")" -lt 20 ]; then
-    bad "H1 git_deploys::update body resolved ($(wc -l <<< "$UPD") lines — subject lost)"
-  else
-    if has "$UPD" '/git/release-domain'; then
-      ok "H1 a rename asks the host to release the old domain"
-    else
-      bad "H1 a rename leaves the old vhost + certificate serving, and frees the name"
-    fi
-
-    # It must send the OLD domain. Sending the new one would tear down the vhost
-    # the rename just created — the failure mode is louder but it is still a fix
-    # that deletes the wrong thing, so pin the argument, not just the call.
-    if has "$UPD" 'domain.*:.*old_domain'; then
-      ok "H2 the release names the OLD domain"
-    else
-      bad "H2 the release must name the OLD domain, not the new one"
-    fi
-
-    # Without the port, ownership::app_vhost cannot tell "still ours" from
-    # "re-claimed since" — and it fails CLOSED, so omitting it makes H1 inert
-    # while leaving every arm above green.
-    if has "$UPD" 'host_port'; then
-      ok "H3 the release carries the port that proves the vhost is still this deploy's"
-    else
-      bad "H3 the release omits host_port — the ownership gate then fails closed and H1 is inert"
-    fi
-  fi
-else
-  bad "H1 $GIT_BE is readable"
-fi
-
-if GR=$(subj "$GIT_ROUTE"); then
-  RD=$(fnbody "$GR" "release_domain")
-  if [ "$(wc -l <<< "$RD")" -lt 5 ]; then
-    bad "H4 agent release_domain body resolved ($(wc -l <<< "$RD") lines — subject lost)"
-  elif derives "$RD" 'is_safe_nginx_domain'; then
-    ok "H4 the agent validates the domain before touching a path built from it"
-  else
-    bad "H4 the agent route builds a filesystem path from an unvalidated domain"
-  fi
-  if derives "$RD" 'release_domain_artifacts'; then
-    ok "H5 the agent route routes through the guarded teardown"
-  else
-    bad "H5 the agent route must not delete a vhost without the ownership gate"
-  fi
-else
-  bad "H4 $GIT_ROUTE is readable"
-fi
-
 if [ "$SKIP" -gt 0 ]; then
   echo "ownership-delete pin: $PASS passed, $FAIL failed, $SKIP skipped"
 else

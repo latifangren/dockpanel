@@ -2,7 +2,7 @@ use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, Json as AxumJson},
     http::StatusCode,
-    routing::{get, post, delete},
+    routing::{post, delete},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -54,7 +54,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/crons/sync", post(sync_crons))
         .route("/crons/run", post(run_cron))
-        .route("/crons/list", get(list_crons))
         .route("/crons/remove/{id}", delete(remove_cron))
 }
 
@@ -209,40 +208,6 @@ async fn run_cron(
         output: Some(truncated),
         exit_code: output.status.code(),
     }))
-}
-
-/// GET /crons/list — Read dockpanel crons from system crontab.
-async fn list_crons() -> Result<Json<Vec<serde_json::Value>>, ApiErr> {
-    // Read-only: a failed read destroys nothing here, so it degrades to an empty
-    // listing rather than a 500. The panel's own `crons` rows are the record.
-    let crontab = read_crontab().await.unwrap_or_else(|e| {
-        tracing::warn!("Could not read the crontab to list crons: {e}");
-        String::new()
-    });
-    let crons: Vec<serde_json::Value> = crontab
-        .lines()
-        .filter(|line| line.contains(CRONTAB_MARKER))
-        .filter_map(|line| {
-            // Format: schedule command # dockpanel:id label
-            let marker_pos = line.find(CRONTAB_MARKER)?;
-            let before_marker = &line[..marker_pos].trim();
-            let after_marker = &line[marker_pos + CRONTAB_MARKER.len()..];
-
-            // Split the after_marker into id and label
-            let (id, label) = match after_marker.find(' ') {
-                Some(pos) => (&after_marker[..pos], after_marker[pos + 1..].trim()),
-                None => (after_marker.trim(), ""),
-            };
-
-            Some(serde_json::json!({
-                "id": id,
-                "entry": before_marker,
-                "label": label,
-            }))
-        })
-        .collect();
-
-    Ok(Json(crons))
 }
 
 /// DELETE /crons/remove/{id} — Remove a specific cron by ID from crontab.
