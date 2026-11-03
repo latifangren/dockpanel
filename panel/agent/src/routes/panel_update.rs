@@ -302,7 +302,16 @@ async fn run_update_subprocess(target: String, mode: UpdateMode) {
                 .arg(UPDATE_SCRIPT);
         }
         UpdateMode::AgentOnly => {
-            cmd.arg("--setenv=DOCKPANEL_AGENT_UPDATE_DETACHED=1")
+            // Pin the release repo explicitly, following the backend
+            // panel_update.rs pin: the script defaults to the fork, but
+            // the caller must not rely on the embedded script's default —
+            // an older agent binary embeds the upstream default. This
+            // only takes effect once the new binary is deployed; it does
+            // not rescue an already-deployed old binary. The script
+            // reads DOCKPANEL_GITHUB_REPO only, so no release-repo
+            // variable is set here.
+            cmd.arg("--setenv=DOCKPANEL_GITHUB_REPO=latifangren/dockpanel")
+                .arg("--setenv=DOCKPANEL_AGENT_UPDATE_DETACHED=1")
                 .arg("bash")
                 .arg(AGENT_UPDATE_SCRIPT_PATH);
         }

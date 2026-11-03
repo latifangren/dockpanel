@@ -47,7 +47,7 @@
 # Env:
 #   DOCKPANEL_VERSION                   required, `vX.Y.Z` release tag
 #   DOCKPANEL_AGENT_UPDATE_DETACHED     set by the caller once detached
-#   DOCKPANEL_GITHUB_REPO               optional override (default ovexro/dockpanel)
+#   DOCKPANEL_GITHUB_REPO               optional override (default latifangren/dockpanel)
 #   DOCKPANEL_AGENT_BIN                 optional override of the binary path
 #
 # The result is ALWAYS written to /var/lib/dockpanel/last-agent-update.json,
@@ -60,7 +60,7 @@
 set -euo pipefail
 
 TARGET="${DOCKPANEL_VERSION:?DOCKPANEL_VERSION is required (vX.Y.Z)}"
-GITHUB_REPO="${DOCKPANEL_GITHUB_REPO:-ovexro/dockpanel}"
+GITHUB_REPO="${DOCKPANEL_GITHUB_REPO:-latifangren/dockpanel}"
 AGENT_BIN="${DOCKPANEL_AGENT_BIN:-/usr/local/bin/dockpanel-agent}"
 SOCKET="${DOCKPANEL_AGENT_SOCKET:-/var/run/dockpanel/agent.sock}"
 
