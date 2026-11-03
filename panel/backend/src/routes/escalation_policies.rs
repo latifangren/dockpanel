@@ -290,7 +290,7 @@ pub async fn create_policy(
     let row: PolicyDto = sqlx::query_as(
         "INSERT INTO escalation_policies (user_id, name, steps) \
          VALUES ($1, $2, $3) \
-         RETURNING id, name, steps, created_at, updated_at, 0::bigint AS used_by_rule_count",
+         RETURNING id, name, steps, created_at, updated_at, 0 AS used_by_rule_count",
     )
     .bind(claims.sub)
     .bind(input.name.trim())
@@ -319,7 +319,7 @@ pub async fn update_policy(
 
     let row: Option<PolicyDto> = sqlx::query_as(
         "UPDATE escalation_policies \
-         SET name = $2, steps = $3, updated_at = NOW() \
+         SET name = $2, steps = $3, updated_at = CURRENT_TIMESTAMP \
          WHERE id = $1 AND user_id = $4 \
          RETURNING id, name, steps, created_at, updated_at, \
             COALESCE((SELECT COUNT(*) FROM alert_rules WHERE escalation_policy_id = id), 0) AS used_by_rule_count",

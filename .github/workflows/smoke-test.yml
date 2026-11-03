@@ -133,11 +133,15 @@ jobs:
             # support window, so deb.debian.org/debian-security's Release file is
             # PERMANENTLY expired, not transiently stale — apt refuses to use it by
             # default ("Release file ... is expired"), which no retry count fixes.
-            # This is the standard, narrow workaround for reaching an EOL archive
-            # deliberately; it does not weaken anything on a still-supported distro,
-            # since apt only ever has an expired Release file to complain about here.
+            # Point bullseye to archive.debian.org where its packages and security pool reside.
+            if [ -f /etc/os-release ] && grep -q 'VERSION_CODENAME=bullseye' /etc/os-release; then
+              cat > /etc/apt/sources.list <<'SOURCES'
+deb http://archive.debian.org/debian bullseye main contrib non-free
+deb http://archive.debian.org/debian-security bullseye-security main contrib non-free
+SOURCES
+            fi
             apt-get update -qq -o Acquire::Check-Valid-Until=false
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates file >/dev/null
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Acquire::Check-Valid-Until=false curl ca-certificates file >/dev/null
           elif command -v dnf >/dev/null 2>&1; then
             # --allowerasing is load-bearing on amazonlinux:2023: the image ships
             # curl-minimal, which CONFLICTS with the full curl package, and dnf

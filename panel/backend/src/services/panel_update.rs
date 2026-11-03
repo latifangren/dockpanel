@@ -364,7 +364,7 @@ pub async fn start_panel_update(
     // Concurrent-apply guard (in-process + DB).
     //
     // TOCTOU fix (v2.216.0 audit): the guard used to be read-check-then-later-write,
-    // with `create_snapshot`'s multi-minute pipeline (binary copy, pg_dump, tar,
+    // with `create_snapshot`'s multi-minute pipeline (binary copy, db snapshot, tar,
     // sha256) running entirely inside the gap — two requests arriving within that
     // window (a double-click, a client retry, two admin sessions) both passed the
     // check and both spawned their own `create_snapshot` + detached `update.sh`.
@@ -842,7 +842,7 @@ pub async fn build_fleet_plan(
     let rows: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT id, name, agent_version FROM servers \
          WHERE ($2 OR user_id = $1) \
-           AND last_seen_at > NOW() - INTERVAL '5 minutes' \
+           AND last_seen_at > datetime('now', '-5 minutes') \
            AND is_local = false \
          ORDER BY last_seen_at DESC",
     )
@@ -994,7 +994,7 @@ pub async fn execute_fleet_plan(
     };
 
     let _ = sqlx::query(
-        "UPDATE fleet_update_runs SET finished_at = NOW(), outcome = $1 WHERE id = $2",
+        "UPDATE fleet_update_runs SET finished_at = CURRENT_TIMESTAMP, outcome = $1 WHERE id = $2",
     )
     .bind(outcome)
     .bind(run_id)

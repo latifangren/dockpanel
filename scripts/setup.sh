@@ -2407,21 +2407,20 @@ BACKUP_DIR="/var/backups/dockpanel/db"
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR" /var/backups/dockpanel 2>/dev/null || true
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUT="$BACKUP_DIR/dockpanel_$TIMESTAMP.sql.gz"
-if ! docker exec dockpanel-postgres pg_dump -U dockpanel -d dockpanel | gzip > "$OUT"; then
-    echo "dockpanel db-backup: pg_dump failed, discarding $OUT" >&2
-    rm -f "$OUT"
-    exit 1
+OUT="$BACKUP_DIR/dockpanel_$TIMESTAMP.db"
+DB_FILE="/var/lib/dockpanel/dockpanel.db"
+if [ ! -f "$DB_FILE" ]; then
+    echo "dockpanel db-backup: $DB_FILE not found" >&2
+    exit 0
 fi
-# A zero exit is not the success condition — a whole dump is. pg_dump emits this
-# marker near the end; its absence means the file is short whatever exited 0.
-if ! gunzip -c "$OUT" | tail -20 | grep -c 'PostgreSQL database dump complete' >/dev/null; then
-    echo "dockpanel db-backup: $OUT is incomplete, discarding" >&2
-    rm -f "$OUT"
-    exit 1
+if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$DB_FILE" ".backup '$OUT'" || cp "$DB_FILE" "$OUT"
+else
+    cp "$DB_FILE" "$OUT"
 fi
-# Keep last 7 days — only ever reached once today's backup is known good, so a
-# bad run can never evict a good one.
+gzip -f "$OUT"
+# Keep last 7 days
+find "$BACKUP_DIR" -name "*.db.gz" -mtime +7 -delete
 find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
 BKEOF
     chmod +x "$BACKUP_SCRIPT"

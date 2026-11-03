@@ -588,7 +588,7 @@ pub async fn deploy(
                          ON CONFLICT (server_id, domain) DO UPDATE SET \
                            user_id = EXCLUDED.user_id, app_name = EXCLUDED.app_name, \
                            ssl_email = EXCLUDED.ssl_email, tls_mode = EXCLUDED.tls_mode, \
-                           updated_at = NOW()",
+                           updated_at = CURRENT_TIMESTAMP",
                     )
                     .bind(user_id)
                     .bind(server_id)
@@ -615,9 +615,9 @@ pub async fn deploy(
                     let _ = sqlx::query(
                         "INSERT INTO container_sleep_config \
                              (container_id, container_name, domain, gpu_enabled, auto_sleep_enabled, sleep_after_minutes, last_activity_at, server_id) \
-                         VALUES ($1, $2, $3, $4, false, 30, NOW(), $5) \
+                         VALUES ($1, $2, $3, $4, false, 30, CURRENT_TIMESTAMP, $5) \
                          ON CONFLICT (container_id) DO UPDATE SET \
-                             gpu_enabled = $4, container_name = $2, domain = $3, server_id = $5, updated_at = NOW()",
+                             gpu_enabled = $4, container_name = $2, domain = $3, server_id = $5, updated_at = CURRENT_TIMESTAMP",
                     )
                     .bind(new_container_id)
                     .bind(&app_name)
@@ -2265,7 +2265,7 @@ pub async fn create_policy(
          ON CONFLICT (user_id) DO UPDATE SET \
          max_containers = EXCLUDED.max_containers, max_memory_mb = EXCLUDED.max_memory_mb, \
          max_cpu_percent = EXCLUDED.max_cpu_percent, \
-         allowed_images = EXCLUDED.allowed_images, updated_at = NOW() \
+         allowed_images = EXCLUDED.allowed_images, updated_at = CURRENT_TIMESTAMP \
          RETURNING id"
     )
     .bind(user_id)
@@ -2343,7 +2343,7 @@ pub async fn update_policy(
          max_memory_mb = COALESCE($2, max_memory_mb), \
          max_cpu_percent = COALESCE($3, max_cpu_percent), \
          allowed_images = CASE WHEN $4 = '' THEN NULL ELSE COALESCE($4, allowed_images) END, \
-         updated_at = NOW() \
+         updated_at = CURRENT_TIMESTAMP \
          WHERE user_id = $5"
     )
     .bind(body.max_containers.map(|v| v.max(1).min(1000)))
@@ -2579,9 +2579,9 @@ pub async fn update_sleep_config(
     // writes new rows was never taught to name it.
     sqlx::query(
         "INSERT INTO container_sleep_config (container_id, container_name, domain, auto_sleep_enabled, sleep_after_minutes, last_activity_at, server_id) \
-         VALUES ($1, $2, $3, $4, $5, NOW(), $6) \
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6) \
          ON CONFLICT (container_id) DO UPDATE SET \
-         auto_sleep_enabled = $4, sleep_after_minutes = $5, container_name = $2, domain = $3, server_id = $6, updated_at = NOW()"
+         auto_sleep_enabled = $4, sleep_after_minutes = $5, container_name = $2, domain = $3, server_id = $6, updated_at = CURRENT_TIMESTAMP"
     )
     .bind(&container_id)
     .bind(&container_name)
@@ -2648,8 +2648,8 @@ pub async fn wake_container(
     // on rows it believes are awake). Log it so the desync is at least
     // observable.
     sqlx::query(
-        "UPDATE container_sleep_config SET is_sleeping = false, last_woken_at = NOW(), \
-         last_activity_at = NOW(), updated_at = NOW() WHERE container_id = $1"
+        "UPDATE container_sleep_config SET is_sleeping = false, last_woken_at = CURRENT_TIMESTAMP, \
+         last_activity_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE container_id = $1"
     )
     .bind(&container_id)
     .execute(&state.db)
@@ -2691,8 +2691,8 @@ pub async fn sleep_container(
     // that is actually stopped could read as awake, hiding it from any
     // sleeping-containers view. Log it, matching `wake_container`.
     sqlx::query(
-        "UPDATE container_sleep_config SET is_sleeping = true, last_slept_at = NOW(), \
-         total_sleeps = total_sleeps + 1, updated_at = NOW() WHERE container_id = $1"
+        "UPDATE container_sleep_config SET is_sleeping = true, last_slept_at = CURRENT_TIMESTAMP, \
+         total_sleeps = total_sleeps + 1, updated_at = CURRENT_TIMESTAMP WHERE container_id = $1"
     )
     .bind(&container_id)
     .execute(&state.db)
@@ -2736,7 +2736,7 @@ pub async fn activity_ping(
     }
 
     sqlx::query(
-        "UPDATE container_sleep_config SET last_activity_at = NOW() WHERE container_id = $1"
+        "UPDATE container_sleep_config SET last_activity_at = CURRENT_TIMESTAMP WHERE container_id = $1"
     )
     .bind(&container_id)
     .execute(&state.db)

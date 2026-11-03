@@ -230,7 +230,7 @@ pub async fn create_autoscale(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          ON CONFLICT (container_id) DO UPDATE SET \
          enabled = $3, min_replicas = $4, max_replicas = $5, \
-         cpu_threshold_up = $6, cpu_threshold_down = $7, cooldown_seconds = $8, updated_at = NOW() \
+         cpu_threshold_up = $6, cpu_threshold_down = $7, cooldown_seconds = $8, updated_at = CURRENT_TIMESTAMP \
          RETURNING id"
     )
     .bind(cid).bind(name)
@@ -266,7 +266,7 @@ pub async fn update_autoscale(
          cpu_threshold_up = COALESCE($4, cpu_threshold_up), \
          cpu_threshold_down = COALESCE($5, cpu_threshold_down), \
          cooldown_seconds = COALESCE($6, cooldown_seconds), \
-         updated_at = NOW() \
+         updated_at = CURRENT_TIMESTAMP \
          WHERE id = $7"
     )
     .bind(body.enabled)

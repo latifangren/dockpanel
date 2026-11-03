@@ -203,7 +203,7 @@ pub async fn find_occupant(
         _ => None,
     };
     let stack: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM docker_stacks WHERE lower(domain) = $1 AND ($2::uuid IS NULL OR id <> $2)",
+        "SELECT id FROM docker_stacks WHERE lower(domain) = $1 AND ($2 IS NULL OR id <> $2)",
     )
     .bind(&domain)
     .bind(exclude_stack)

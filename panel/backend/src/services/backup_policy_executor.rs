@@ -262,7 +262,7 @@ async fn tick(db: &SqlitePool, agents: &AgentRegistry, jwt_secret: &str) -> Resu
     // Record backup storage metric for growth tracking. SUM(BIGINT) returns
     // NUMERIC in postgres — cast to bigint so sqlx can decode into i64.
     let total_storage: Option<(i64,)> = sqlx::query_as(
-        "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM ( \
+        "SELECT COALESCE(SUM(size_bytes), 0) FROM ( \
             SELECT size_bytes FROM backups UNION ALL \
             SELECT size_bytes FROM database_backups UNION ALL \
             SELECT size_bytes FROM volume_backups \
@@ -593,7 +593,7 @@ async fn execute_policy(db: &SqlitePool, agents: &AgentRegistry, policy: &Policy
         "failed"
     };
     let _ = sqlx::query(
-        "UPDATE backup_policies SET last_run = NOW(), last_status = $2, updated_at = NOW() WHERE id = $1"
+        "UPDATE backup_policies SET last_run = CURRENT_TIMESTAMP, last_status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1"
     )
     .bind(policy.id).bind(status)
     .execute(db).await;

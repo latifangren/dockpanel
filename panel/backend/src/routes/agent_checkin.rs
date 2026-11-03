@@ -175,7 +175,7 @@ pub async fn checkin(
     sqlx::query(
         "UPDATE servers SET \
          status = 'online', \
-         last_seen_at = NOW(), \
+         last_seen_at = CURRENT_TIMESTAMP, \
          ip_address = COALESCE($2, ip_address), \
          os_info = COALESCE($3, os_info), \
          cpu_cores = COALESCE($4, cpu_cores), \

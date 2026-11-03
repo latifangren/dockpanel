@@ -356,7 +356,7 @@ pub async fn docker_summary(
 /// `servers::list`/`dashboard::fleet_overview` document: `servers.user_id`
 /// names whoever registered the row, not a tenant boundary. Unlike
 /// `fleet_overview`, this route serves every role, so (as in `intelligence`
-/// above) an admin gets the widened `$1::uuid IS NULL OR` fleet-wide read
+/// above) an admin gets the widened `$1 IS NULL OR` fleet-wide read
 /// while a non-admin keeps seeing only the servers they hold.
 pub async fn metrics_history(
     AuthUser(claims): AuthUser,
@@ -365,14 +365,13 @@ pub async fn metrics_history(
     let tenant: Option<uuid::Uuid> = if claims.role == "admin" { None } else { Some(claims.sub) };
     let rows: Vec<(f64, f64, f64, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT \
-            AVG(cpu_pct)::float8 AS cpu_pct, \
-            AVG(mem_pct)::float8 AS mem_pct, \
-            AVG(disk_pct)::float8 AS disk_pct, \
-            date_trunc('hour', created_at) + \
-                (EXTRACT(minute FROM created_at)::int / 15) * INTERVAL '15 minutes' AS bucket \
+            AVG(cpu_pct) AS cpu_pct, \
+            AVG(mem_pct) AS mem_pct, \
+            AVG(disk_pct) AS disk_pct, \
+            datetime((strftime('%s', created_at) / 900) * 900, 'unixepoch') AS bucket \
          FROM metrics_history \
-         WHERE created_at > NOW() - INTERVAL '24 hours' \
-           AND server_id IN (SELECT id FROM servers WHERE $1::uuid IS NULL OR user_id = $1) \
+         WHERE created_at > datetime('now', '-24 hours') \
+           AND server_id IN (SELECT id FROM servers WHERE $1 IS NULL OR user_id = $1) \
          GROUP BY bucket \
          ORDER BY bucket ASC",
     )
@@ -409,16 +408,15 @@ pub async fn gpu_metrics_history(
     let rows: Vec<(i16, f64, f64, f64, Option<f64>, Option<f64>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT \
             gpu_index, \
-            AVG(utilization_pct)::float8 AS utilization, \
-            AVG(memory_used_mb)::float8 AS mem_used, \
-            AVG(memory_total_mb)::float8 AS mem_total, \
-            AVG(temperature_c)::float8 AS temp, \
-            AVG(power_draw_w)::float8 AS power, \
-            date_trunc('hour', created_at) + \
-                (EXTRACT(minute FROM created_at)::int / 15) * INTERVAL '15 minutes' AS bucket \
+            AVG(utilization_pct) AS utilization, \
+            AVG(memory_used_mb) AS mem_used, \
+            AVG(memory_total_mb) AS mem_total, \
+            AVG(temperature_c) AS temp, \
+            AVG(power_draw_w) AS power, \
+            datetime((strftime('%s', created_at) / 900) * 900, 'unixepoch') AS bucket \
          FROM gpu_metrics_history \
-         WHERE created_at > NOW() - INTERVAL '24 hours' \
-           AND server_id IN (SELECT id FROM servers WHERE $1::uuid IS NULL OR user_id = $1) \
+         WHERE created_at > datetime('now', '-24 hours') \
+           AND server_id IN (SELECT id FROM servers WHERE $1 IS NULL OR user_id = $1) \
          GROUP BY gpu_index, bucket \
          ORDER BY bucket ASC, gpu_index ASC",
     )
@@ -455,7 +453,7 @@ pub async fn gpu_metrics_history(
 /// caller's own `user_id` (or their own registered servers) — the same
 /// admin-scoping bug `servers::list`/`dashboard::fleet_overview` document.
 /// As in `metrics_history` above, an admin now gets the fleet-wide feed via
-/// the widened `$1::uuid IS NULL OR` predicate; a non-admin is unchanged.
+/// the widened `$1 IS NULL OR` predicate; a non-admin is unchanged.
 pub async fn timeline(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
@@ -472,7 +470,7 @@ pub async fn timeline(
     // matches fleet_overview's own active_incidents count)
     let incidents: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT severity, title, created_at FROM managed_incidents \
-         WHERE ($1::uuid IS NULL OR user_id = $1) ORDER BY created_at DESC LIMIT 10",
+         WHERE ($1 IS NULL OR user_id = $1) ORDER BY created_at DESC LIMIT 10",
     )
     .bind(tenant)
     .fetch_all(&state.db)
@@ -491,8 +489,8 @@ pub async fn timeline(
     // Recent alerts (fleet-wide for an admin, else filtered by user's servers)
     let alerts: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT severity, title, created_at FROM alerts \
-         WHERE ($1::uuid IS NULL OR user_id = $1) \
-         AND (server_id IS NULL OR server_id IN (SELECT id FROM servers WHERE $1::uuid IS NULL OR user_id = $1)) \
+         WHERE ($1 IS NULL OR user_id = $1) \
+         AND (server_id IS NULL OR server_id IN (SELECT id FROM servers WHERE $1 IS NULL OR user_id = $1)) \
          ORDER BY created_at DESC LIMIT 10",
     )
     .bind(tenant)
@@ -512,7 +510,7 @@ pub async fn timeline(
     // Recent security scans (fleet-wide for an admin, else filtered by user's servers)
     let scans: Vec<(i32, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT critical_count, warning_count, created_at FROM security_scans \
-         WHERE server_id IN (SELECT id FROM servers WHERE $1::uuid IS NULL OR user_id = $1) \
+         WHERE server_id IN (SELECT id FROM servers WHERE $1 IS NULL OR user_id = $1) \
          ORDER BY created_at DESC LIMIT 5",
     )
     .bind(tenant)
@@ -573,7 +571,7 @@ pub async fn fleet_overview(
     let rows: Vec<(uuid::Uuid, String, Option<String>, i64, i64, i64, Option<f32>, Option<f32>, Option<f32>)> = sqlx::query_as(
         "SELECT s.id, s.name, s.ip_address, \
          COALESCE(a.firing, 0) AS firing_alerts, \
-         0::bigint AS site_count, \
+         0 AS site_count, \
          COALESCE(d.db_count, 0) AS db_count, \
          m.cpu_pct, m.mem_pct, m.disk_pct \
          FROM servers s \

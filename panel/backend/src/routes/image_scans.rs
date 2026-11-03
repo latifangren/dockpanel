@@ -400,7 +400,7 @@ pub async fn preflight_gate_image(
     let recent: Option<(i32, i32, i32, i32, i32)> = sqlx::query_as(
         "SELECT critical_count, high_count, medium_count, low_count, unknown_count \
          FROM image_scan_findings \
-         WHERE server_id = $1 AND image = $2 AND scanned_at > NOW() - INTERVAL '7 days' \
+         WHERE server_id = $1 AND image = $2 AND scanned_at > datetime('now', '-7 days') \
          ORDER BY scanned_at DESC LIMIT 1",
     )
     .bind(server_id)

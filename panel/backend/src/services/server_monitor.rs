@@ -30,7 +30,7 @@ pub async fn run(pool: SqlitePool, mut shutdown_rx: tokio::sync::broadcast::Rece
                 match sqlx::query(
                     "UPDATE servers SET status = 'offline' \
                      WHERE status = 'online' AND is_local = false \
-                       AND last_seen_at < NOW() - INTERVAL '2 minutes'",
+                       AND last_seen_at < datetime('now', '-2 minutes')",
                 )
                 .execute(&pool)
                 .await

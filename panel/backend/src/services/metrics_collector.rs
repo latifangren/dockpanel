@@ -95,10 +95,10 @@ pub async fn run(pool: SqlitePool, agents: AgentRegistry, mut shutdown_rx: tokio
 
         // Cleanup: delete records older than 7 days. Unscoped by server on
         // purpose — retention is a property of the table, not of a host.
-        let _ = sqlx::query("DELETE FROM metrics_history WHERE created_at < NOW() - INTERVAL '7 days'")
+        let _ = sqlx::query("DELETE FROM metrics_history WHERE created_at < datetime('now', '-7 days')")
             .execute(&pool)
             .await;
-        let _ = sqlx::query("DELETE FROM gpu_metrics_history WHERE created_at < NOW() - INTERVAL '7 days'")
+        let _ = sqlx::query("DELETE FROM gpu_metrics_history WHERE created_at < datetime('now', '-7 days')")
             .execute(&pool)
             .await;
     }

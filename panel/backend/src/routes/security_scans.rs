@@ -99,7 +99,7 @@ pub async fn trigger_scan(
 
     // Update scan record
     if let Err(e) = sqlx::query(
-        "UPDATE security_scans SET status = 'completed', completed_at = NOW(), \
+        "UPDATE security_scans SET status = 'completed', completed_at = CURRENT_TIMESTAMP, \
          findings_count = $1, critical_count = $2, warning_count = $3, info_count = $4 \
          WHERE id = $5",
     )
@@ -208,7 +208,7 @@ pub async fn trigger_scan(
             if let Err(e) = sqlx::query(
                 "INSERT INTO file_integrity_baselines (server_id, file_path, sha256_hash, file_size) \
                  VALUES ($1, $2, $3, $4) \
-                 ON CONFLICT (server_id, file_path) DO UPDATE SET sha256_hash = $3, file_size = $4, updated_at = NOW()",
+                 ON CONFLICT (server_id, file_path) DO UPDATE SET sha256_hash = $3, file_size = $4, updated_at = CURRENT_TIMESTAMP",
             )
             .bind(server_id)
             .bind(path)
@@ -270,7 +270,7 @@ pub async fn trigger_scan(
         .await;
     }
     if let Err(e) = sqlx::query(
-        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
+        "UPDATE alerts SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP \
          WHERE alert_type = 'security' AND server_id = $1 AND status = 'acknowledged'",
     )
     .bind(server_id)

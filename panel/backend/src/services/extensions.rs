@@ -152,7 +152,7 @@ pub async fn emit_event(pool: &SqlitePool, event_type: &str, data: serde_json::V
 
             // Update extension last_webhook status
             let _ = sqlx::query(
-                "UPDATE extensions SET last_webhook_at = NOW(), last_webhook_status = $1 WHERE id = $2",
+                "UPDATE extensions SET last_webhook_at = CURRENT_TIMESTAMP, last_webhook_status = $1 WHERE id = $2",
             )
             .bind(status)
             .bind(ext_id)
@@ -260,7 +260,7 @@ pub fn fire_event(pool: &SqlitePool, event_type: &str, data: serde_json::Value) 
 
                 let _ = sqlx::query(
                     "UPDATE webhook_routes SET total_forwarded = total_forwarded + 1, \
-                     last_forwarded_at = NOW(), last_status = $2 WHERE id = $1"
+                     last_forwarded_at = CURRENT_TIMESTAMP, last_status = $2 WHERE id = $1"
                 )
                 .bind(route_id).bind(last_status)
                 .execute(&pool_clone).await;

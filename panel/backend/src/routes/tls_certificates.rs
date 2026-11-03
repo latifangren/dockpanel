@@ -490,7 +490,7 @@ pub async fn replace(
     // stored ones unless the agent reports new ones.
     let updated: TlsCertificate = sqlx::query_as(
         "UPDATE tls_certificates SET dns_names = $1, issuer = $2, not_before = $3, not_after = $4, \
-         fingerprint_sha256 = $5, cert_path = $6, key_path = $7, updated_at = NOW() \
+         fingerprint_sha256 = $5, cert_path = $6, key_path = $7, updated_at = CURRENT_TIMESTAMP \
          WHERE id = $8 \
          RETURNING id, user_id, server_id, alias, dns_names, issuer, not_before, not_after, \
          fingerprint_sha256, cert_path, key_path, created_at, updated_at",

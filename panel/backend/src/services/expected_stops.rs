@@ -45,9 +45,9 @@ pub async fn record(
 ) {
     let res = sqlx::query(
         "INSERT INTO container_expected_stops (server_id, container_name, reason, actor_email, stopped_at) \
-         VALUES ($1, $2, $3, $4, NOW()) \
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) \
          ON CONFLICT (server_id, container_name) DO UPDATE SET \
-             reason = $3, actor_email = $4, stopped_at = NOW()",
+             reason = $3, actor_email = $4, stopped_at = CURRENT_TIMESTAMP",
     )
     .bind(server_id)
     .bind(container_name)
@@ -264,7 +264,7 @@ pub async fn resolve_open_container_down(pool: &SqlitePool, server_id: Uuid, con
     // another's cannot close its neighbour's incident.
     for state in ["exited", "dead"] {
         let _ = sqlx::query(
-            "UPDATE managed_incidents SET status = 'resolved', resolved_at = NOW() \
+            "UPDATE managed_incidents SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP \
              WHERE user_id = $1 AND title = $2 AND status NOT IN ('resolved', 'postmortem')",
         )
         .bind(user_id)

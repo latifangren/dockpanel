@@ -1256,7 +1256,7 @@ pub async fn fire_alert_deduped(
     let recent: Option<(i64,)> = sqlx::query_as(&format!(
         "SELECT COUNT(*) FROM alerts \
          WHERE alert_type = $1 AND state_key = $2 \
-         AND created_at > NOW() - INTERVAL '{within_hours} hours'",
+         AND created_at > datetime('now', '-{within_hours} hours')",
     ))
     .bind(alert_type)
     .bind(state_key)
@@ -1511,15 +1511,15 @@ pub async fn resolve_alert(
     // an empty key is still a refusal: that would match every server-wide
     // alert the user has.
     let query = if server_id.is_some() {
-        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
+        "UPDATE alerts SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP \
          WHERE user_id = $1 AND server_id = $2 AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
     } else if !state_key.is_empty() {
         // `$2::uuid` is cast because this arm never references it for anything
         // else, and an unadorned parameter Postgres cannot type is precisely how
         // the slow-response INSERT stayed dead for months (see `uptime.rs`).
         // Keeping the bind keeps one `.bind()` chain for both arms.
-        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
-         WHERE user_id = $1 AND $2::uuid IS NULL AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
+        "UPDATE alerts SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP \
+         WHERE user_id = $1 AND $2 IS NULL AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
     } else {
         tracing::warn!(
             "resolve_alert called for '{alert_type}' with no server_id and no state_key — refusing to resolve unscoped"

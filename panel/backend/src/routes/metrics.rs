@@ -48,7 +48,7 @@ pub async fn server_metrics(
     let points: Vec<MetricPoint> = sqlx::query_as(
         "SELECT value, recorded_at FROM metrics \
          WHERE server_id = $1 AND metric_type = $2 \
-         AND recorded_at > NOW() - ($3 || ' hours')::interval \
+         AND recorded_at > datetime('now', '-' || $3 || ' hours') \
          ORDER BY recorded_at ASC",
     )
     .bind(server_id)
@@ -62,7 +62,7 @@ pub async fn server_metrics(
     let stats: Option<(f64, f64, f64)> = sqlx::query_as(
         "SELECT AVG(value), MIN(value), MAX(value) FROM metrics \
          WHERE server_id = $1 AND metric_type = $2 \
-         AND recorded_at > NOW() - ($3 || ' hours')::interval",
+         AND recorded_at > datetime('now', '-' || $3 || ' hours')",
     )
     .bind(server_id)
     .bind(metric_type)

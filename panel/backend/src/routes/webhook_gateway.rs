@@ -272,7 +272,7 @@ pub async fn set_endpoint_enabled(
     Json(req): Json<SetEnabledRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = sqlx::query(
-        "UPDATE webhook_endpoints SET enabled = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3"
+        "UPDATE webhook_endpoints SET enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3"
     )
     .bind(req.enabled).bind(id).bind(claims.sub)
     .execute(&state.db).await
@@ -576,7 +576,7 @@ pub async fn receive_webhook(
     // Counts every delivery this endpoint recorded, so the "Received" column and
     // the delivery list below it answer for the same population.
     let _ = sqlx::query(
-        "UPDATE webhook_endpoints SET total_received = total_received + 1, last_received_at = NOW() WHERE id = $1"
+        "UPDATE webhook_endpoints SET total_received = total_received + 1, last_received_at = CURRENT_TIMESTAMP WHERE id = $1"
     )
     .bind(endpoint.id)
     .execute(&state.db).await;
@@ -901,7 +901,7 @@ async fn forward_to_route(db: &sqlx::SqlitePool, route: &WebhookRoute, body: &st
     // Update route stats
     let _ = sqlx::query(
         "UPDATE webhook_routes SET total_forwarded = total_forwarded + 1, \
-         last_forwarded_at = NOW(), last_status = $2 WHERE id = $1"
+         last_forwarded_at = CURRENT_TIMESTAMP, last_status = $2 WHERE id = $1"
     )
     .bind(route.id).bind(last_status)
     .execute(db).await;

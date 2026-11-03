@@ -395,7 +395,7 @@ pub async fn test_connection(
             // Update server status to online
             let version = resp.get("version").and_then(|v| v.as_str()).unwrap_or("unknown");
             sqlx::query(
-                "UPDATE servers SET status = 'online', last_seen_at = NOW(), agent_version = $1 WHERE id = $2",
+                "UPDATE servers SET status = 'online', last_seen_at = CURRENT_TIMESTAMP, agent_version = $1 WHERE id = $2",
             )
             .bind(version)
             .bind(id)

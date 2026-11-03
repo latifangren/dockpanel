@@ -1115,8 +1115,8 @@ pub async fn panic_button(
     // admin out too; during a panic that is the correct trade, and an admin can
     // log back in while lockdown keeps everyone else out.
     let revoked = sqlx::query(
-        "INSERT INTO settings (key, value, updated_at) VALUES ('sessions_revoked_at', $1, NOW()) \
-         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+        "INSERT INTO settings (key, value, updated_at) VALUES ('sessions_revoked_at', $1, CURRENT_TIMESTAMP) \
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP",
     )
     .bind(chrono::Utc::now().to_rfc3339())
     .execute(&state.db)
@@ -1319,7 +1319,7 @@ pub async fn approve_user(
     Path(user_id): Path<uuid::Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = sqlx::query(
-        "UPDATE users SET approved = TRUE, approved_at = NOW(), approved_by = $1 WHERE id = $2"
+        "UPDATE users SET approved = TRUE, approved_at = CURRENT_TIMESTAMP, approved_by = $1 WHERE id = $2"
     )
     .bind(claims.sub)
     .bind(user_id)
@@ -1382,7 +1382,7 @@ pub async fn verify_user_email(
     // reset doors, which have always set the pair together: a redeemable link must not
     // outlive the verification it would have performed.
     let result = sqlx::query(
-        "UPDATE users SET email_verified = TRUE, email_token = NULL, updated_at = NOW() WHERE id = $1"
+        "UPDATE users SET email_verified = TRUE, email_token = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1"
     )
     .bind(user_id)
     .execute(&state.db)

@@ -496,7 +496,7 @@ pub(crate) async fn purge_dumps_if_unclaimed(
     // below is exact again.
     let shared: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM databases \
-         WHERE name = $1 AND (server_id = $2 OR $2::uuid IS NULL))",
+         WHERE name = $1 AND (server_id = $2 OR $2 IS NULL))",
     )
     .bind(&name)
     .bind(site_server_id)
@@ -938,22 +938,20 @@ async fn find_available_port(state: &AppState, engine: &str) -> Result<i32, ApiE
         _ => (5433, 5700),
     };
 
-    // Find first unused port in range with a single query
-    let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT s.port FROM generate_series($1::int, $2::int) AS s(port) \
-         WHERE s.port NOT IN (SELECT port FROM databases WHERE port IS NOT NULL) \
-         LIMIT 1"
+    // Find first unused port in range
+    let used_ports: Vec<i32> = sqlx::query_scalar(
+        "SELECT port FROM databases WHERE port IS NOT NULL"
     )
-    .bind(range_start)
-    .bind(range_end)
-    .fetch_optional(&state.db)
+    .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("query", e))?;
 
-    row.map(|(p,)| p).ok_or_else(|| err(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "No available ports for database",
-    ))
+    (range_start..=range_end)
+        .find(|p| !used_ports.contains(p))
+        .ok_or_else(|| err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "No available ports for database",
+        ))
 }
 
 // ─── Point-in-Time Recovery (PITR) ─────────────────────────────
@@ -1046,7 +1044,7 @@ pub async fn update_pitr_config(
         "INSERT INTO db_pitr_config (database_id, pitr_enabled, retention_hours) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (database_id) DO UPDATE SET \
-         pitr_enabled = $2, retention_hours = $3, updated_at = NOW()"
+         pitr_enabled = $2, retention_hours = $3, updated_at = CURRENT_TIMESTAMP"
     )
     .bind(id)
     .bind(enabled)

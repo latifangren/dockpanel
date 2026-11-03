@@ -46,7 +46,7 @@ pub async fn run(pool: SqlitePool, mut shutdown_rx: tokio::sync::broadcast::Rece
             "SELECT id, user_id, url, name, status, alert_email, alert_slack_url, alert_discord_url, \
              monitor_type, port, keyword, keyword_must_contain, check_interval, last_checked_at, custom_headers \
              FROM monitors WHERE enabled = TRUE AND \
-             (monitor_type = 'heartbeat' OR last_checked_at IS NULL OR last_checked_at < NOW() - (check_interval || ' seconds')::interval)",
+             (monitor_type = 'heartbeat' OR last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || check_interval || ' seconds'))",
         )
         .fetch_all(&pool)
         .await
@@ -60,7 +60,7 @@ pub async fn run(pool: SqlitePool, mut shutdown_rx: tokio::sync::broadcast::Rece
 
         // Batch-load users in maintenance windows (avoid N+1 query per monitor)
         let maintenance_users: std::collections::HashSet<uuid::Uuid> = sqlx::query_scalar::<_, uuid::Uuid>(
-            "SELECT DISTINCT user_id FROM maintenance_windows WHERE starts_at <= NOW() AND ends_at >= NOW()"
+            "SELECT DISTINCT user_id FROM maintenance_windows WHERE starts_at <= CURRENT_TIMESTAMP AND ends_at >= CURRENT_TIMESTAMP"
         ).fetch_all(&pool).await.unwrap_or_default().into_iter().collect();
 
         // Process monitors concurrently (max 10 at a time)
@@ -88,7 +88,7 @@ pub async fn run(pool: SqlitePool, mut shutdown_rx: tokio::sync::broadcast::Rece
         if tick_count % 60 == 0 {
             // Purge old check records (keep last 24h)
             if let Err(e) = sqlx::query(
-                "DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '24 hours'",
+                "DELETE FROM monitor_checks WHERE checked_at < datetime('now', '-24 hours')",
             )
             .execute(&pool)
             .await {
@@ -97,7 +97,7 @@ pub async fn run(pool: SqlitePool, mut shutdown_rx: tokio::sync::broadcast::Rece
 
             // Purge old performance metrics (keep last 7 days)
             if let Err(e) = sqlx::query(
-                "DELETE FROM metrics WHERE recorded_at < NOW() - INTERVAL '7 days'",
+                "DELETE FROM metrics WHERE recorded_at < datetime('now', '-7 days')",
             )
             .execute(&pool)
             .await {
@@ -137,7 +137,7 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Sq
 
     // Update monitor status
     if let Err(e) = sqlx::query(
-        "UPDATE monitors SET status = $1, last_checked_at = NOW(), \
+        "UPDATE monitors SET status = $1, last_checked_at = CURRENT_TIMESTAMP, \
          last_response_time = $2, last_status_code = $3 WHERE id = $4",
     )
     .bind(new_status)
@@ -283,7 +283,7 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Sq
     } else if new_status == "up" && monitor.status == "down" {
         // Just recovered — resolve incident
         if let Err(e) = sqlx::query(
-            "UPDATE incidents SET resolved_at = NOW() \
+            "UPDATE incidents SET resolved_at = CURRENT_TIMESTAMP \
              WHERE monitor_id = $1 AND resolved_at IS NULL",
         )
         .bind(monitor.id)
@@ -398,7 +398,7 @@ async fn check_heartbeat(monitor: &MonitorRow, pool: &SqlitePool) {
             }
 
             if let Err(e) = sqlx::query(
-                "UPDATE monitors SET status = 'down', last_checked_at = NOW(), last_response_time = 0, last_status_code = NULL WHERE id = $1",
+                "UPDATE monitors SET status = 'down', last_checked_at = CURRENT_TIMESTAMP, last_response_time = 0, last_status_code = NULL WHERE id = $1",
             )
             .bind(monitor.id)
             .execute(pool)
@@ -804,7 +804,7 @@ async fn resolve_auto_incident(pool: &SqlitePool, monitor: &MonitorRow) -> Resul
 
         // Resolve the incident
         let _ = sqlx::query(
-            "UPDATE managed_incidents SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1"
+            "UPDATE managed_incidents SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1"
         )
         .bind(incident_id)
         .execute(pool).await;

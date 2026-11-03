@@ -192,7 +192,7 @@ async fn auto_restart_services(pool: &SqlitePool, agents: &AgentRegistry) {
                         // show for it. Same unscoped-title-match class as the
                         // incidents.rs and uptime.rs resolves.
                         let _ = sqlx::query(
-                            "UPDATE managed_incidents SET status = 'resolved', updated_at = NOW() \
+                            "UPDATE managed_incidents SET status = 'resolved', updated_at = CURRENT_TIMESTAMP \
                              WHERE user_id = $1 AND title IN ($2, $3) \
                              AND status NOT IN ('resolved', 'postmortem')"
                         )
@@ -255,7 +255,7 @@ async fn auto_restart_services(pool: &SqlitePool, agents: &AgentRegistry) {
             "SELECT COUNT(*) FROM activity_logs \
              WHERE action = 'auto_heal.restart_service' \
              AND target_name = $1 AND server_id = $2 \
-             AND created_at > NOW() - INTERVAL '30 minutes'",
+             AND created_at > datetime('now', '-30 minutes')",
         )
         .bind(service_name)
         .bind(server_id)
@@ -336,7 +336,7 @@ async fn auto_restart_services(pool: &SqlitePool, agents: &AgentRegistry) {
             "SELECT COUNT(*) FROM activity_logs \
              WHERE action = 'auto_heal.restart_service' \
              AND target_name = $1 AND server_id = $2 \
-             AND created_at > NOW() - INTERVAL '10 minutes'",
+             AND created_at > datetime('now', '-10 minutes')",
         )
         .bind(service_name)
         .bind(server_id)
@@ -468,7 +468,7 @@ async fn auto_restart_services(pool: &SqlitePool, agents: &AgentRegistry) {
             let restart_count: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM activity_logs \
                  WHERE action = 'auto_heal.container_restart' AND target_name = $1 AND server_id = $2 \
-                 AND created_at > NOW() - INTERVAL '30 minutes'"
+                 AND created_at > datetime('now', '-30 minutes')"
             ).bind(name).bind(member.id).fetch_one(pool).await.unwrap_or((0,));
 
             if restart_count.0 >= 3 {
@@ -480,7 +480,7 @@ async fn auto_restart_services(pool: &SqlitePool, agents: &AgentRegistry) {
             let recent_heal: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM activity_logs \
                  WHERE action = 'auto_heal.container_restart' AND target_name = $1 AND server_id = $2 \
-                 AND created_at > NOW() - INTERVAL '10 minutes'"
+                 AND created_at > datetime('now', '-10 minutes')"
             ).bind(name).bind(member.id).fetch_one(pool).await.unwrap_or((0,));
 
             if recent_heal.0 > 0 {
@@ -566,7 +566,7 @@ async fn auto_clean_disk(pool: &SqlitePool, agents: &AgentRegistry) {
         let recent: Option<(i64,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM activity_logs \
              WHERE action = 'auto_heal.clean_logs' AND server_id = $1 \
-             AND created_at > NOW() - INTERVAL '1 hour'",
+             AND created_at > datetime('now', '-1 hour')",
         )
         .bind(server_id)
         .fetch_optional(pool)
@@ -726,21 +726,21 @@ async fn send_weekly_digest(pool: &SqlitePool) {
 
     // Gather stats for last 7 days
     let alerts_7d: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM alerts WHERE created_at > NOW() - INTERVAL '7 days'",
+        "SELECT COUNT(*) FROM alerts WHERE created_at > datetime('now', '-7 days')",
     )
     .fetch_one(pool)
     .await
     .unwrap_or((0,));
 
     let backups_7d: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM backups WHERE created_at > NOW() - INTERVAL '7 days'",
+        "SELECT COUNT(*) FROM backups WHERE created_at > datetime('now', '-7 days')",
     )
     .fetch_one(pool)
     .await
     .unwrap_or((0,));
 
     let incidents_7d: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM managed_incidents WHERE created_at > NOW() - INTERVAL '7 days'",
+        "SELECT COUNT(*) FROM managed_incidents WHERE created_at > datetime('now', '-7 days')",
     )
     .fetch_one(pool)
     .await
@@ -752,7 +752,7 @@ async fn send_weekly_digest(pool: &SqlitePool) {
     let deploys_7d: (i64,) = (0,);
 
     let security_scans_7d: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM security_scans WHERE created_at > NOW() - INTERVAL '7 days'",
+        "SELECT COUNT(*) FROM security_scans WHERE created_at > datetime('now', '-7 days')",
     )
     .fetch_one(pool)
     .await
@@ -907,7 +907,7 @@ async fn run_retention_cleanup(pool: &SqlitePool) {
     let monitor_days = get("retention_monitor_days", 7);
 
     // Delete monitor_checks older than configured days (default 7)
-    match sqlx::query(&format!("DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '{monitor_days} days'"))
+    match sqlx::query(&format!("DELETE FROM monitor_checks WHERE checked_at < datetime('now', '-{monitor_days} days')"))
         .execute(pool)
         .await
     {
@@ -924,7 +924,7 @@ async fn run_retention_cleanup(pool: &SqlitePool) {
 
     // Delete resolved alerts older than configured days (default 90)
     match sqlx::query(&format!(
-        "DELETE FROM alerts WHERE status = 'resolved' AND created_at < NOW() - INTERVAL '{alert_days} days'",
+        "DELETE FROM alerts WHERE status = 'resolved' AND created_at < datetime('now', '-{alert_days} days')",
     ))
     .execute(pool)
     .await
@@ -938,7 +938,7 @@ async fn run_retention_cleanup(pool: &SqlitePool) {
     }
 
     // Delete activity_logs older than configured days (default 365)
-    match sqlx::query(&format!("DELETE FROM activity_logs WHERE created_at < NOW() - INTERVAL '{activity_days} days'"))
+    match sqlx::query(&format!("DELETE FROM activity_logs WHERE created_at < datetime('now', '-{activity_days} days')"))
         .execute(pool)
         .await
     {
@@ -954,7 +954,7 @@ async fn run_retention_cleanup(pool: &SqlitePool) {
     }
 
     // Delete system_logs older than configured days (default 30)
-    match sqlx::query(&format!("DELETE FROM system_logs WHERE created_at < NOW() - INTERVAL '{system_log_days} days'"))
+    match sqlx::query(&format!("DELETE FROM system_logs WHERE created_at < datetime('now', '-{system_log_days} days')"))
         .execute(pool)
         .await
     {
@@ -970,42 +970,42 @@ async fn run_retention_cleanup(pool: &SqlitePool) {
     }
 
     // Extension events: configured days (default 90)
-    let ext_events_deleted = sqlx::query(&format!("DELETE FROM extension_events WHERE delivered_at < NOW() - INTERVAL '{scan_days} days'"))
+    let ext_events_deleted = sqlx::query(&format!("DELETE FROM extension_events WHERE delivered_at < datetime('now', '-{scan_days} days')"))
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if ext_events_deleted > 0 {
         tracing::info!("Retention: deleted {ext_events_deleted} extension events (>{scan_days} days)");
     }
 
     // GAP 18: Webhook gateway deliveries: configured days (default 7)
-    let wh_deleted = sqlx::query(&format!("DELETE FROM webhook_deliveries WHERE received_at < NOW() - INTERVAL '{webhook_days} days'"))
+    let wh_deleted = sqlx::query(&format!("DELETE FROM webhook_deliveries WHERE received_at < datetime('now', '-{webhook_days} days')"))
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if wh_deleted > 0 {
         tracing::info!("Retention: deleted {wh_deleted} webhook deliveries (>{webhook_days} days)");
     }
 
     // Backup verifications: configured days (default 90)
-    let bv_deleted = sqlx::query(&format!("DELETE FROM backup_verifications WHERE created_at < NOW() - INTERVAL '{scan_days} days'"))
+    let bv_deleted = sqlx::query(&format!("DELETE FROM backup_verifications WHERE created_at < datetime('now', '-{scan_days} days')"))
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if bv_deleted > 0 {
         tracing::info!("Retention: deleted {bv_deleted} backup verifications (>{scan_days} days)");
     }
 
     // User sessions: 24 hours since last seen (JWT expires after 2h, but clean stale records)
-    let sess_deleted = sqlx::query("DELETE FROM user_sessions WHERE last_seen_at < NOW() - INTERVAL '24 hours'")
+    let sess_deleted = sqlx::query("DELETE FROM user_sessions WHERE last_seen_at < datetime('now', '-24 hours')")
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if sess_deleted > 0 {
         tracing::info!("Retention: deleted {sess_deleted} expired user sessions (>24h)");
     }
 
     // Panel notifications: configured days (default 30)
-    let notif_deleted = sqlx::query(&format!("DELETE FROM panel_notifications WHERE created_at < NOW() - INTERVAL '{notification_days} days'"))
+    let notif_deleted = sqlx::query(&format!("DELETE FROM panel_notifications WHERE created_at < datetime('now', '-{notification_days} days')"))
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if notif_deleted > 0 {
         tracing::info!("Retention: deleted {notif_deleted} panel notifications (>{notification_days} days)");
     }
 
     // GAP 66: Clean expired token blacklist entries
-    let bl_deleted = sqlx::query("DELETE FROM token_blacklist WHERE expires_at < NOW()")
+    let bl_deleted = sqlx::query("DELETE FROM token_blacklist WHERE expires_at < CURRENT_TIMESTAMP")
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if bl_deleted > 0 {
         tracing::info!("Retention: deleted {bl_deleted} expired token blacklist entries");
@@ -1107,7 +1107,7 @@ async fn run_retention_cleanup(pool: &SqlitePool) {
 
     // Clean suspicious_events older than 90 days
     let sus_deleted = sqlx::query(
-        "DELETE FROM suspicious_events WHERE created_at < NOW() - INTERVAL '90 days'"
+        "DELETE FROM suspicious_events WHERE created_at < datetime('now', '-90 days')"
     ).execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if sus_deleted > 0 {
         tracing::info!("Retention: deleted {sus_deleted} old suspicious_events (>90 days)");
@@ -1181,52 +1181,25 @@ async fn run_retention_cleanup(pool: &SqlitePool) {
         }
     }
 
-    // DB auto-backup: done via direct pg_dump (doesn't need agent client)
+    // DB auto-backup: done via SQLite VACUUM INTO online snapshot
     if super::security_hardening::get_setting_bool(pool, "security_db_backup_enabled", true).await {
         tracing::info!("Triggering DockPanel DB auto-backup...");
-        // `bash` and `set -o pipefail` are both load-bearing (lesson #51). The exit
-        // status of `pg_dump | gzip` is *gzip's*, and gzip compresses a truncated
-        // stream and exits 0 — so under the previous `sh -c` (which is dash here,
-        // and has no pipefail) a pg_dump that died halfway was written out, this
-        // arm matched, and the healer logged "DB auto-backup completed" over a
-        // backup that could never be restored. Sibling of the panel_snapshot.rs
-        // dump fixed in v2.11.5; this call site was missed then.
-        let backup_file = format!(
-            "/var/backups/dockpanel/dockpanel-db-{}.sql.gz",
-            chrono::Utc::now().format("%Y%m%d_%H%M%S")
-        );
-        // `umask 077` is load-bearing and is NOT tidiness: the `>` redirect
-        // creates the file 0666 & ~umask, so without it this dump — the whole
-        // panel database, `servers.agent_token` in cleartext included — lands
-        // 0644 on a host that also runs other people's PHP as www-data.
-        match safe_command("bash")
-            .args(["-c", &format!(
-                "set -o pipefail; umask 077; docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > {backup_file}"
-            )])
-            .output().await
-        {
-            Ok(o) if o.status.success() => {
-                // A zero exit is not the success condition — a whole dump is
-                // (lesson #51 rule 4). pg_dump emits this marker last, so its
-                // absence means the file is short whatever the statuses claimed.
-                // This gates the retention prune below on purpose: pruning to 7
-                // after writing a corrupt backup would evict a GOOD one to make
-                // room for a useless one.
-                let complete = safe_command("bash")
-                    .args(["-c", &format!("gunzip -c {backup_file} | tail -20")])
-                    .output().await
-                    .map(|t| String::from_utf8_lossy(&t.stdout)
-                        .contains("PostgreSQL database dump complete"))
-                    .unwrap_or(false);
-                if !complete {
-                    tracing::warn!(
-                        "DB auto-backup discarded: {backup_file} is incomplete \
-                         (completion marker absent) — keeping earlier backups"
-                    );
-                    let _ = std::fs::remove_file(&backup_file);
-                    return;
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let raw_backup = format!("/var/backups/dockpanel/dockpanel-db-{timestamp}.db");
+        let backup_file = format!("{raw_backup}.gz");
+
+        let _ = tokio::fs::create_dir_all("/var/backups/dockpanel").await;
+        // SQLite VACUUM INTO writes an atomic, consistent copy of the database to raw_backup
+        match sqlx::query(&format!("VACUUM INTO '{raw_backup}'")).execute(pool).await {
+            Ok(_) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&raw_backup, std::fs::Permissions::from_mode(0o600));
                 }
-                tracing::info!("DockPanel DB auto-backup completed");
+                // Compress with gzip
+                let _ = safe_command("gzip").arg("-f").arg(&raw_backup).output().await;
+                tracing::info!("DockPanel DB auto-backup completed: {backup_file}");
                 // Cleanup old backups (keep 7)
                 if let Ok(entries) = std::fs::read_dir("/var/backups/dockpanel") {
                     let mut files: Vec<_> = entries
@@ -1239,7 +1212,6 @@ async fn run_retention_cleanup(pool: &SqlitePool) {
                     }
                 }
             }
-            Ok(o) => tracing::warn!("DB auto-backup failed: {}", String::from_utf8_lossy(&o.stderr)),
             Err(e) => tracing::warn!("DB auto-backup failed: {e}"),
         }
     }
@@ -1737,7 +1709,7 @@ async fn auto_sleep_idle_containers(pool: &SqlitePool, agents: &AgentRegistry) {
                 }));
             if active {
                 let _ = sqlx::query(
-                    "UPDATE container_sleep_config SET last_activity_at = NOW() WHERE container_id = $1"
+                    "UPDATE container_sleep_config SET last_activity_at = CURRENT_TIMESTAMP WHERE container_id = $1"
                 )
                 .bind(container_id)
                 .execute(pool)
@@ -1768,7 +1740,7 @@ async fn auto_sleep_idle_containers(pool: &SqlitePool, agents: &AgentRegistry) {
                         if is_running {
                             // First run: record activity and skip
                             let _ = sqlx::query(
-                                "UPDATE container_sleep_config SET last_activity_at = NOW() WHERE container_id = $1"
+                                "UPDATE container_sleep_config SET last_activity_at = CURRENT_TIMESTAMP WHERE container_id = $1"
                             ).bind(container_id).execute(pool).await;
                             false
                         } else {
@@ -1792,8 +1764,8 @@ async fn auto_sleep_idle_containers(pool: &SqlitePool, agents: &AgentRegistry) {
                 Ok(_) => {
                     // Update sleep state
                     let _ = sqlx::query(
-                        "UPDATE container_sleep_config SET is_sleeping = true, last_slept_at = NOW(), \
-                         total_sleeps = total_sleeps + 1, updated_at = NOW() \
+                        "UPDATE container_sleep_config SET is_sleeping = true, last_slept_at = CURRENT_TIMESTAMP, \
+                         total_sleeps = total_sleeps + 1, updated_at = CURRENT_TIMESTAMP \
                          WHERE container_id = $1"
                     )
                     .bind(container_id)

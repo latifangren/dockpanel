@@ -181,7 +181,7 @@ pub async fn record_suspicious_event(
 /// and is NOT now.
 ///
 /// The auto-lockdown rule is "N events within M minutes", counted over `created_at`.
-/// Stamping an ingested backlog with `NOW()` collapses however long it took to
+/// Stamping an ingested backlog with `CURRENT_TIMESTAMP` collapses however long it took to
 /// accumulate into a single instant, so a queue that built up over months is counted
 /// as one burst and trips the threshold the moment it is read. That is exactly what
 /// happens on upgrade to 2.46.0: before it, suspicious-event ingestion sat under
@@ -205,7 +205,7 @@ pub async fn record_suspicious_event_at(
     // than duplicating "now" in Rust.
     let _ = sqlx::query(
         "INSERT INTO suspicious_events (event_type, actor_email, actor_ip, details, created_at) \
-         VALUES ($1, $2, $3, $4, COALESCE($5, NOW()))"
+         VALUES ($1, $2, $3, $4, COALESCE($5, CURRENT_TIMESTAMP))"
     )
     .bind(event_type)
     .bind(actor_email)
@@ -262,7 +262,7 @@ pub async fn record_suspicious_event_at(
 pub async fn activate_lockdown(pool: &SqlitePool, triggered_by: &str, reason: &str) {
     let _ = sqlx::query(
         "UPDATE lockdown_state SET \
-         active = TRUE, triggered_by = $1, triggered_at = NOW(), reason = $2, \
+         active = TRUE, triggered_by = $1, triggered_at = CURRENT_TIMESTAMP, reason = $2, \
          terminals_disabled = TRUE, registration_disabled = TRUE, non_admin_blocked = TRUE, \
          unlocked_at = NULL, unlocked_by = NULL \
          WHERE id = 1"
@@ -279,7 +279,7 @@ pub async fn activate_lockdown(pool: &SqlitePool, triggered_by: &str, reason: &s
 pub async fn deactivate_lockdown(pool: &SqlitePool, admin_email: &str) {
     let _ = sqlx::query(
         "UPDATE lockdown_state SET \
-         active = FALSE, unlocked_at = NOW(), unlocked_by = $1 \
+         active = FALSE, unlocked_at = CURRENT_TIMESTAMP, unlocked_by = $1 \
          WHERE id = 1"
     )
     .bind(admin_email)

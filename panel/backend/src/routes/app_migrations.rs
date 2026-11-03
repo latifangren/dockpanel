@@ -79,7 +79,7 @@ pub async fn start_migration(
 
     let mig_id: (uuid::Uuid,) = sqlx::query_as(
         "INSERT INTO app_migrations (container_id, container_name, source_server_id, target_server_id, status, started_at) \
-         VALUES ($1, $2, $3, $4, 'in_progress', NOW()) RETURNING id"
+         VALUES ($1, $2, $3, $4, 'in_progress', CURRENT_TIMESTAMP) RETURNING id"
     )
     .bind(&body.container_id)
     .bind(&body.container_name)

@@ -89,7 +89,7 @@ async fn tick(db: &SqlitePool, agents: &AgentRegistry) -> Result<(), String> {
         // inside `enqueue_drill` before the slow agent call is even spawned.
         if dispatch_policy_drills(db, agents, policy).await {
             let _ = sqlx::query(
-                "UPDATE backup_policies SET last_drill_at = NOW() WHERE id = $1"
+                "UPDATE backup_policies SET last_drill_at = CURRENT_TIMESTAMP WHERE id = $1"
             ).bind(policy.id).execute(db).await;
         }
     }
@@ -213,7 +213,7 @@ async fn has_running_drill_for_server(db: &SqlitePool, sid: Uuid) -> bool {
     let count: Option<(i64,)> = sqlx::query_as(
         "SELECT COUNT(*) FROM backup_drills \
          WHERE server_id = $1 AND status IN ('pending', 'running') \
-         AND started_at > NOW() - INTERVAL '2 hours'"
+         AND started_at > datetime('now', '-2 hours')"
     ).bind(sid).fetch_one(db).await.ok();
     count.map(|(n,)| n > 0).unwrap_or(false)
 }
@@ -233,7 +233,7 @@ async fn enqueue_drill(
     // INSERT … RETURNING the new id. triggered_by NULL = scheduler-fired.
     let drill_row: Result<(Uuid,), _> = sqlx::query_as(
         "INSERT INTO backup_drills (backup_type, backup_id, server_id, status, started_at) \
-         VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
+         VALUES ($1, $2, $3, 'running', CURRENT_TIMESTAMP) RETURNING id"
     )
     .bind(backup_type).bind(backup_id).bind(server_id)
     .fetch_one(db).await;
@@ -270,7 +270,7 @@ async fn enqueue_drill(
                 let _ = sqlx::query(
                     "UPDATE backup_drills SET \
                      status = $2, http_status = $3, body_excerpt = $4, \
-                     error_message = $5, duration_ms = $6, completed_at = NOW() \
+                     error_message = $5, duration_ms = $6, completed_at = CURRENT_TIMESTAMP \
                      WHERE id = $1"
                 )
                 .bind(drill_id)
@@ -281,7 +281,7 @@ async fn enqueue_drill(
             }
             Err(e) => {
                 let _ = sqlx::query(
-                    "UPDATE backup_drills SET status = 'failed', error_message = $2, completed_at = NOW() WHERE id = $1"
+                    "UPDATE backup_drills SET status = 'failed', error_message = $2, completed_at = CURRENT_TIMESTAMP WHERE id = $1"
                 ).bind(drill_id).bind(&e).execute(&db).await;
             }
         }

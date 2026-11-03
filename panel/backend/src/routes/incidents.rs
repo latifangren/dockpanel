@@ -300,7 +300,7 @@ pub async fn update(
     // stamp. `None` and `""` mean the caller is editing something else (a
     // description, a severity) and must not disturb the timestamp at all.
     let resolved_at_clause = match req.status.as_deref() {
-        Some("resolved") => ", resolved_at = NOW()",
+        Some("resolved") => ", resolved_at = CURRENT_TIMESTAMP",
         Some("investigating") | Some("identified") | Some("monitoring") => ", resolved_at = NULL",
         _ => "",
     };
@@ -314,7 +314,7 @@ pub async fn update(
          postmortem = COALESCE($6, postmortem), \
          postmortem_published = COALESCE($7, postmortem_published), \
          visible_on_status_page = COALESCE($8, visible_on_status_page), \
-         updated_at = NOW(){resolved_at_clause} \
+         updated_at = CURRENT_TIMESTAMP{resolved_at_clause} \
          WHERE id = $1 RETURNING *"
     );
 
@@ -436,7 +436,7 @@ pub async fn post_update(
 
     // Update incident status
     if req.status == "resolved" {
-        let _ = sqlx::query("UPDATE managed_incidents SET status = $2, resolved_at = NOW(), updated_at = NOW() WHERE id = $1")
+        let _ = sqlx::query("UPDATE managed_incidents SET status = $2, resolved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1")
             .bind(id).bind(&req.status).execute(&state.db).await;
 
         // GAP 16: Auto-resolve linked alerts when incident is resolved
@@ -452,7 +452,7 @@ pub async fn post_update(
             // a live outage. Ownership was verified on the incident (above) but
             // never carried into this UPDATE.
             let _ = sqlx::query(
-                "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
+                "UPDATE alerts SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP \
                  WHERE title = $1 AND user_id = $2 AND status IN ('firing', 'acknowledged')"
             ).bind(title).bind(claims.sub).execute(&state.db).await;
         }
@@ -475,9 +475,9 @@ pub async fn post_update(
         // this column, so fixing one and not the other would leave the defect
         // reachable through whichever endpoint the UI happens to call.
         let sql = if matches!(req.status.as_str(), "investigating" | "identified" | "monitoring") {
-            "UPDATE managed_incidents SET status = $2, resolved_at = NULL, updated_at = NOW() WHERE id = $1"
+            "UPDATE managed_incidents SET status = $2, resolved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1"
         } else {
-            "UPDATE managed_incidents SET status = $2, updated_at = NOW() WHERE id = $1"
+            "UPDATE managed_incidents SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1"
         };
         let _ = sqlx::query(sql)
             .bind(id).bind(&req.status).execute(&state.db).await;
@@ -610,7 +610,7 @@ pub async fn update_config(
          show_incident_history = COALESCE($7, show_incident_history), \
          history_days = COALESCE($8, history_days), \
          enabled = COALESCE($9, enabled), \
-         updated_at = NOW() \
+         updated_at = CURRENT_TIMESTAMP \
          WHERE user_id = $1 \
          RETURNING id, title, description, logo_url, accent_color, show_subscribe, show_incident_history, history_days, enabled"
     )
@@ -940,7 +940,7 @@ pub async fn public_status_page(
     if let Some(uid) = owner_id {
         let incidents: Vec<ManagedIncident> = sqlx::query_as(
             "SELECT * FROM managed_incidents WHERE user_id = $1 AND visible_on_status_page = TRUE \
-             AND (status != 'resolved' OR resolved_at > NOW() - ($2 || ' days')::interval) \
+             AND (status != 'resolved' OR resolved_at > datetime('now', '-' || $2 || ' days')) \
              ORDER BY started_at DESC LIMIT 50"
         )
         .bind(uid)
@@ -991,7 +991,7 @@ pub async fn public_status_page(
         Some(uid) => sqlx::query_as(
             "SELECT i.id, m.name, i.started_at, i.resolved_at, i.cause \
              FROM incidents i JOIN monitors m ON m.id = i.monitor_id \
-             WHERE m.user_id = $1 AND i.started_at > NOW() - INTERVAL '7 days' \
+             WHERE m.user_id = $1 AND i.started_at > datetime('now', '-7 days') \
              ORDER BY i.started_at DESC LIMIT 20"
         )
         .bind(uid)

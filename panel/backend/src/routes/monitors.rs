@@ -521,21 +521,21 @@ pub async fn uptime_stats(
     // 24h uptime
     let day: Option<(i64, i64)> = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
-         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours'"
+         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > datetime('now', '-24 hours')"
     ).bind(id).fetch_optional(&state.db).await
         .map_err(|e| internal_error("uptime stats 24h", e))?;
 
     // 7d uptime
     let week: Option<(i64, i64)> = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
-         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '7 days'"
+         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > datetime('now', '-7 days')"
     ).bind(id).fetch_optional(&state.db).await
         .map_err(|e| internal_error("uptime stats 7d", e))?;
 
     // 30d uptime
     let month: Option<(i64, i64)> = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
-         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '30 days'"
+         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > datetime('now', '-30 days')"
     ).bind(id).fetch_optional(&state.db).await
         .map_err(|e| internal_error("uptime stats 30d", e))?;
 
@@ -548,7 +548,7 @@ pub async fn uptime_stats(
 
     // Average response time (24h)
     let avg_rt: Option<(Option<f64>,)> = sqlx::query_as(
-        "SELECT AVG(response_time) FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours' AND status_code IS NOT NULL"
+        "SELECT AVG(response_time) FROM monitor_checks WHERE monitor_id = $1 AND checked_at > datetime('now', '-24 hours') AND status_code IS NOT NULL"
     ).bind(id).fetch_optional(&state.db).await
         .map_err(|e| internal_error("uptime stats avg response", e))?;
 
@@ -582,7 +582,7 @@ pub async fn response_chart(
 
     let points: Vec<(i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT response_time, checked_at FROM monitor_checks \
-         WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours' AND status_code IS NOT NULL \
+         WHERE monitor_id = $1 AND checked_at > datetime('now', '-24 hours') AND status_code IS NOT NULL \
          ORDER BY checked_at ASC"
     ).bind(id).fetch_all(&state.db).await.map_err(|e| internal_error("response chart points", e))?;
 
@@ -601,7 +601,7 @@ pub async fn force_check(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify ownership
     let result = sqlx::query(
-        "UPDATE monitors SET last_checked_at = NOW() - INTERVAL '1 hour' WHERE id = $1 AND user_id = $2"
+        "UPDATE monitors SET last_checked_at = datetime('now', '-1 hour') WHERE id = $1 AND user_id = $2"
     )
     .bind(id)
     .bind(claims.sub)
@@ -1059,7 +1059,7 @@ pub async fn create_maintenance(
     }
 
     let id: (uuid::Uuid,) = sqlx::query_as(
-        "INSERT INTO maintenance_windows (user_id, name, starts_at, ends_at) VALUES ($1, $2, $3::timestamptz, $4::timestamptz) RETURNING id"
+        "INSERT INTO maintenance_windows (user_id, name, starts_at, ends_at) VALUES ($1, $2, $3, $4) RETURNING id"
     ).bind(claims.sub).bind(name).bind(starts_at).bind(ends_at)
     .fetch_one(&state.db).await
     .map_err(|e| internal_error("create maintenance", e))?;
@@ -1146,15 +1146,15 @@ pub async fn heartbeat(
     }
 
     // Record successful check
-    sqlx::query("INSERT INTO monitor_checks (monitor_id, status_code, response_time, checked_at) VALUES ($1, 200, 0, NOW())")
+    sqlx::query("INSERT INTO monitor_checks (monitor_id, status_code, response_time, checked_at) VALUES ($1, 200, 0, CURRENT_TIMESTAMP)")
         .bind(monitor_id).execute(&state.db).await.ok();
 
     // Update monitor status to up
-    sqlx::query("UPDATE monitors SET status = 'up', last_checked_at = NOW(), last_response_time = 0, last_status_code = 200 WHERE id = $1")
+    sqlx::query("UPDATE monitors SET status = 'up', last_checked_at = CURRENT_TIMESTAMP, last_response_time = 0, last_status_code = 200 WHERE id = $1")
         .bind(monitor_id).execute(&state.db).await.ok();
 
     // Resolve any open incidents
-    sqlx::query("UPDATE incidents SET resolved_at = NOW() WHERE monitor_id = $1 AND resolved_at IS NULL")
+    sqlx::query("UPDATE incidents SET resolved_at = CURRENT_TIMESTAMP WHERE monitor_id = $1 AND resolved_at IS NULL")
         .bind(monitor_id).execute(&state.db).await.ok();
 
     Ok(Json(serde_json::json!({ "ok": true })))

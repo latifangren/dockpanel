@@ -185,7 +185,7 @@ pub async fn rotate(
 
     // 3. Update in-place (same ID, same name, new hash + prefix + timestamp)
     sqlx::query(
-        "UPDATE api_keys SET key_hash = $1, key_prefix = $2, created_at = NOW() WHERE id = $3 AND user_id = $4",
+        "UPDATE api_keys SET key_hash = $1, key_prefix = $2, created_at = CURRENT_TIMESTAMP WHERE id = $3 AND user_id = $4",
     )
     .bind(&key_hash)
     .bind(prefix)

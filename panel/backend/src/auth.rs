@@ -261,7 +261,7 @@ async fn authenticate_api_key(state: &AppState, key: &str) -> Result<Claims, Api
 
     // Best-effort bookkeeping — a failed UPDATE must not fail the request that
     // is itself proof the key still works.
-    let _ = sqlx::query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1")
+    let _ = sqlx::query("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1")
         .bind(key_id)
         .execute(&state.db)
         .await;

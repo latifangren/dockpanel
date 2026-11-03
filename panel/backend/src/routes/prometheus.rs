@@ -217,7 +217,7 @@ async fn read_settings(pool: &sqlx::SqlitePool) -> Result<(bool, Option<String>)
 async fn write_kv(pool: &sqlx::SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO settings (key, value) VALUES ($1, $2) \
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP",
     )
     .bind(key)
     .bind(value)

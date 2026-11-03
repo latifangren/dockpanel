@@ -64,7 +64,7 @@ async fn tick(db: &SqlitePool, agents: &AgentRegistry) -> Result<(), String> {
         "SELECT db.id, db.db_type, db.db_name, db.filename, d.server_id FROM database_backups db \
          JOIN databases d ON d.id = db.database_id \
          LEFT JOIN backup_verifications bv ON bv.backup_type = 'database' AND bv.backup_id = db.id \
-         WHERE bv.id IS NULL AND db.created_at > NOW() - INTERVAL '7 days' \
+         WHERE bv.id IS NULL AND db.created_at > datetime('now', '-7 days') \
          AND d.server_id IS NOT NULL \
          ORDER BY db.created_at DESC LIMIT 3"
     )
@@ -82,7 +82,7 @@ async fn tick(db: &SqlitePool, agents: &AgentRegistry) -> Result<(), String> {
     let vol_backups: Vec<(Uuid, String, String, Option<Uuid>)> = sqlx::query_as(
         "SELECT vb.id, vb.container_name, vb.filename, vb.server_id FROM volume_backups vb \
          LEFT JOIN backup_verifications bv ON bv.backup_type = 'volume' AND bv.backup_id = vb.id \
-         WHERE bv.id IS NULL AND vb.created_at > NOW() - INTERVAL '7 days' \
+         WHERE bv.id IS NULL AND vb.created_at > datetime('now', '-7 days') \
          ORDER BY vb.created_at DESC LIMIT 2"
     )
     .fetch_all(db).await.map_err(|e| e.to_string())?;
@@ -142,7 +142,7 @@ async fn verify_one(
     // `server_id` is bound: the row records which host actually read the archive.
     let verif_id: Uuid = match sqlx::query_scalar(
         "INSERT INTO backup_verifications (backup_type, backup_id, server_id, status, started_at) \
-         VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
+         VALUES ($1, $2, $3, 'running', CURRENT_TIMESTAMP) RETURNING id"
     )
     .bind(backup_type).bind(backup_id).bind(server_id)
     .fetch_one(db).await {
@@ -184,7 +184,7 @@ async fn verify_one(
             let _ = sqlx::query(
                 "UPDATE backup_verifications SET \
                  status = $2, checks_run = $3, checks_passed = $4, \
-                 details = $5, duration_ms = $6, completed_at = NOW() \
+                 details = $5, duration_ms = $6, completed_at = CURRENT_TIMESTAMP \
                  WHERE id = $1"
             )
             .bind(verif_id).bind(status)
@@ -211,7 +211,7 @@ async fn verify_one(
         Err(e) => {
             let err_msg = e.to_string();
             let _ = sqlx::query(
-                "UPDATE backup_verifications SET status = 'failed', error_message = $2, completed_at = NOW() WHERE id = $1"
+                "UPDATE backup_verifications SET status = 'failed', error_message = $2, completed_at = CURRENT_TIMESTAMP WHERE id = $1"
             ).bind(verif_id).bind(&err_msg).execute(db).await;
 
             tracing::error!("Verification failed for {backup_type} {filename}: {err_msg}");

@@ -312,7 +312,7 @@ pub async fn update(
         idx += 1;
         query_parts.push(format!("{col} = ${idx}"));
     }
-    query_parts.push("updated_at = NOW()".to_string());
+    query_parts.push("updated_at = CURRENT_TIMESTAMP".to_string());
 
     let sql = format!(
         "UPDATE extensions SET {} WHERE id = $1",
@@ -539,7 +539,7 @@ pub async fn test_webhook(
 
     // Update last webhook status
     let _ = sqlx::query(
-        "UPDATE extensions SET last_webhook_at = NOW(), last_webhook_status = $1 WHERE id = $2",
+        "UPDATE extensions SET last_webhook_at = CURRENT_TIMESTAMP, last_webhook_status = $1 WHERE id = $2",
     )
     .bind(status)
     .bind(id)
@@ -585,7 +585,7 @@ pub async fn rotate_secret(
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
 
-    sqlx::query("UPDATE extensions SET webhook_secret = $1, updated_at = NOW() WHERE id = $2")
+    sqlx::query("UPDATE extensions SET webhook_secret = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
         .bind(&encrypted_new_secret)
         .bind(id)
         .execute(&state.db)

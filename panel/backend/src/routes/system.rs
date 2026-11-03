@@ -858,7 +858,7 @@ pub async fn traefik_install(
         .map_err(|e| agent_error("Traefik install", e))?;
 
     // Save reverse_proxy setting
-    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('reverse_proxy', 'traefik', NOW()) ON CONFLICT (key) DO UPDATE SET value = 'traefik', updated_at = NOW()")
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('reverse_proxy', 'traefik', CURRENT_TIMESTAMP) ON CONFLICT (key) DO UPDATE SET value = 'traefik', updated_at = CURRENT_TIMESTAMP")
         .execute(&state.db).await.ok();
 
     let ip = crate::routes::client_ip(&headers);
@@ -884,7 +884,7 @@ pub async fn traefik_uninstall(
         .map_err(|e| agent_error("Traefik uninstall", e))?;
 
     // Revert to nginx
-    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('reverse_proxy', 'nginx', NOW()) ON CONFLICT (key) DO UPDATE SET value = 'nginx', updated_at = NOW()")
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('reverse_proxy', 'nginx', CURRENT_TIMESTAMP) ON CONFLICT (key) DO UPDATE SET value = 'nginx', updated_at = CURRENT_TIMESTAMP")
         .execute(&state.db).await.ok();
 
     let ip = crate::routes::client_ip(&headers);

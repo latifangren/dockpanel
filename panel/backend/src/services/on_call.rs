@@ -53,7 +53,7 @@ pub async fn resolve_on_call_user(
 /// Translate a route discriminator string into the set of user IDs whose
 /// `alert_rules` channels should receive the page.
 ///
-/// - `"on_call_schedule:<uuid>"` — current on-call user at NOW().
+/// - `"on_call_schedule:<uuid>"` — current on-call user at CURRENT_TIMESTAMP.
 /// - `"user:<uuid>"` — exactly that user.
 /// - `"all_channels"` — empty vec. Caller falls back to the alert's owner.
 /// - `"webhook:<url>"` — empty vec. Caller handles webhook directly.

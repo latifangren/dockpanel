@@ -4,6 +4,18 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.242.1-lite.3]
+
+### Fix runtime errors on SQLite: purge PostgreSQL leftovers (Issue #2)
+
+Completely eliminates all PostgreSQL SQL syntax leftovers that broke background jobs and endpoints on SQLite:
+- **`NOW()` purged**: Replaced all 234 occurrences in SQL strings with `CURRENT_TIMESTAMP` or `datetime('now')`.
+- **`INTERVAL '...'` / `::interval` purged**: Replaced all 82 occurrences with standard SQLite date arithmetic `datetime('now', '-X unit')`. Fixed the due-monitor query in `services::uptime`, server monitor offline check in `services::server_monitor`, and table retention purges in `services::auto_healer`.
+- **Type casts purged**: Removed all PostgreSQL-specific `::type` casts (`::uuid`, `::bigint`, `::float8`, `::text`, `::int`, `::timestamptz`).
+- **Special SQL functions replaced**: Replaced `generate_series` in port allocation with pure in-memory search; replaced `PERCENTILE_CONT` with in-memory calculation; removed `FOR UPDATE` in SQLite transaction.
+- **Native SQLite backups**: Refactored DB auto-backup in `services::auto_healer` and `scripts/setup.sh` to use atomic SQLite `VACUUM INTO` and hot backups instead of `docker exec dockpanel-postgres pg_dump`.
+- **CI Test Gate**: Added `tests/sqlite-dialect-pin-e2e.sh` to prevent any PostgreSQL leftovers (`NOW()`, `INTERVAL '`, `::interval`, `pg_dump`, `dockpanel-postgres`) from entering backend code in future PRs or releases.
+
 ## [2.242.1-lite.2]
 
 ### Rebuild database layer: Embedded SQLite (Tahap 8)

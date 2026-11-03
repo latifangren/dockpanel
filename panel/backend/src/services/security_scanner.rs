@@ -35,7 +35,7 @@ pub async fn run(pool: SqlitePool, agents: AgentRegistry, mut shutdown_rx: tokio
             let recent: Option<(i64,)> = sqlx::query_as(
                 "SELECT COUNT(*) FROM security_scans \
                  WHERE server_id = $1 AND status = 'completed' \
-                   AND created_at > NOW() - INTERVAL '7 days'",
+                   AND created_at > datetime('now', '-7 days')",
             )
             .bind(member.id)
             .fetch_optional(&pool)
@@ -92,7 +92,7 @@ async fn run_scan(pool: &SqlitePool, member: &FleetMember) {
                 Some(&e.to_string()),
             ).await;
             let _ = sqlx::query(
-                "UPDATE security_scans SET status = 'failed', completed_at = NOW() WHERE id = $1",
+                "UPDATE security_scans SET status = 'failed', completed_at = CURRENT_TIMESTAMP WHERE id = $1",
             )
             .bind(scan_id)
             .execute(pool)
@@ -176,7 +176,7 @@ async fn run_scan(pool: &SqlitePool, member: &FleetMember) {
             let _ = sqlx::query(
                 "INSERT INTO file_integrity_baselines (server_id, file_path, sha256_hash, file_size) \
                  VALUES ($1, $2, $3, $4) \
-                 ON CONFLICT (server_id, file_path) DO UPDATE SET sha256_hash = $3, file_size = $4, updated_at = NOW()",
+                 ON CONFLICT (server_id, file_path) DO UPDATE SET sha256_hash = $3, file_size = $4, updated_at = CURRENT_TIMESTAMP",
             )
             .bind(member.id)
             .bind(path)
@@ -190,7 +190,7 @@ async fn run_scan(pool: &SqlitePool, member: &FleetMember) {
     let total = critical + warning + info;
 
     let _ = sqlx::query(
-        "UPDATE security_scans SET status = 'completed', completed_at = NOW(), \
+        "UPDATE security_scans SET status = 'completed', completed_at = CURRENT_TIMESTAMP, \
          findings_count = $1, critical_count = $2, warning_count = $3, info_count = $4 \
          WHERE id = $5",
     )
@@ -218,9 +218,9 @@ async fn run_scan(pool: &SqlitePool, member: &FleetMember) {
     }
 
     // Keep only last 90 days of scans
-    let _ = sqlx::query("DELETE FROM security_findings WHERE scan_id IN (SELECT id FROM security_scans WHERE created_at < NOW() - INTERVAL '90 days')")
+    let _ = sqlx::query("DELETE FROM security_findings WHERE scan_id IN (SELECT id FROM security_scans WHERE created_at < datetime('now', '-90 days'))")
         .execute(pool).await;
-    let _ = sqlx::query("DELETE FROM security_scans WHERE created_at < NOW() - INTERVAL '90 days'")
+    let _ = sqlx::query("DELETE FROM security_scans WHERE created_at < datetime('now', '-90 days')")
         .execute(pool).await;
 
     // Auto-resolve prior firing security alerts so the new scan's result is
@@ -262,7 +262,7 @@ async fn run_scan(pool: &SqlitePool, member: &FleetMember) {
     // Alerts list; nothing notifies on that transition either way, so it stays
     // a narrowly-scoped direct UPDATE rather than a second, silent resolve path.
     let _ = sqlx::query(
-        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
+        "UPDATE alerts SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP \
          WHERE alert_type = 'security' AND server_id = $1 AND status = 'acknowledged'",
     )
     .bind(member.id)
@@ -701,7 +701,7 @@ async fn renew_stack_certificate(pool: &SqlitePool, member: &FleetMember, domain
          WHERE action = 'auto_fix.renew_stack_ssl' \
          AND target_name = $1 \
          AND server_id = $2 \
-         AND created_at > NOW() - INTERVAL '6 hours'",
+         AND created_at > datetime('now', '-6 hours')",
     )
     .bind(domain)
     .bind(member.id)
@@ -1007,7 +1007,7 @@ async fn renew_docker_app_certificate(pool: &SqlitePool, member: &FleetMember, d
          WHERE action = 'auto_fix.renew_docker_app_ssl' \
          AND target_name = $1 \
          AND server_id = $2 \
-         AND created_at > NOW() - INTERVAL '6 hours'",
+         AND created_at > datetime('now', '-6 hours')",
     )
     .bind(domain)
     .bind(member.id)

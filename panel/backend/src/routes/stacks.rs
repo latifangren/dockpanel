@@ -1087,7 +1087,7 @@ pub async fn update(
         "UPDATE docker_stacks SET yaml = $1, service_count = $2, domain = $3, ssl_email = $4, \
          tls_mode = $5, tls_certificate_id = $6, \
          ssl_expiry = CASE WHEN $8 THEN ssl_expiry ELSE NULL END, \
-         updated_at = NOW() WHERE id = $7",
+         updated_at = CURRENT_TIMESTAMP WHERE id = $7",
     )
     .bind(&body.yaml)
     .bind(service_count)

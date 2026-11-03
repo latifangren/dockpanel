@@ -250,9 +250,9 @@ async fn generate_and_store(
     // as it was would have turned every SBOM generation into a 500.
     sqlx::query(
         "INSERT INTO image_sbom (server_id, image, format, spdx, generated_at) \
-         VALUES ($1, $2, 'spdx-json', $3, NOW()) \
+         VALUES ($1, $2, 'spdx-json', $3, CURRENT_TIMESTAMP) \
          ON CONFLICT (server_id, image) DO UPDATE \
-            SET spdx = EXCLUDED.spdx, generated_at = NOW()",
+            SET spdx = EXCLUDED.spdx, generated_at = CURRENT_TIMESTAMP",
     )
     .bind(server_id)
     .bind(image)

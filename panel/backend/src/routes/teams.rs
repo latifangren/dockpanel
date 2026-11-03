@@ -233,7 +233,7 @@ pub async fn invite(
     // caller-supplied recipient, so an uncapped invite endpoint is an SMTP spam /
     // phishing amplifier — cap both the burst rate and the total team size.
     let recent_invites: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM team_invites WHERE team_id = $1 AND created_at > NOW() - INTERVAL '1 hour'",
+        "SELECT COUNT(*) FROM team_invites WHERE team_id = $1 AND created_at > datetime('now', '-1 hour')",
     )
     .bind(team_id)
     .fetch_one(&state.db)
@@ -333,7 +333,7 @@ pub async fn accept_invite(
 
     let invite: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
         "SELECT id, team_id, email, role FROM team_invites \
-         WHERE token = $1 AND expires_at > NOW()",
+         WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP",
     )
     .bind(&token_hash)
     .fetch_optional(&state.db)

@@ -114,7 +114,7 @@ pub async fn summary(
     let counts: Vec<(String, i64)> = sqlx::query_as(
         "SELECT status, COUNT(*) FROM alerts \
          WHERE user_id = $1 AND (server_id = $2 OR server_id IS NULL) \
-         AND created_at > NOW() - INTERVAL '30 days' \
+         AND created_at > datetime('now', '-30 days') \
          GROUP BY status",
     )
     .bind(claims.sub)
@@ -184,7 +184,7 @@ pub async fn acknowledge(
     }
 
     let result = sqlx::query(
-        "UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW(), \
+        "UPDATE alerts SET status = 'acknowledged', acknowledged_at = CURRENT_TIMESTAMP, \
                           acknowledged_by = $3, acknowledged_comment = $4 \
          WHERE id = $1 AND user_id = $2 AND status = 'firing'",
     )
@@ -210,7 +210,7 @@ pub async fn resolve(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = sqlx::query(
-        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
+        "UPDATE alerts SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP \
          WHERE id = $1 AND user_id = $2 AND status IN ('firing', 'acknowledged')",
     )
     .bind(id)
@@ -507,7 +507,7 @@ async fn upsert_rules(
              gpu_temp_threshold = COALESCE($25, gpu_temp_threshold), \
              gpu_vram_threshold = COALESCE($26, gpu_vram_threshold), \
              alert_gpu = COALESCE($27, alert_gpu), \
-             updated_at = NOW() \
+             updated_at = CURRENT_TIMESTAMP \
              {where_clause}"
         )
     } else {
@@ -614,7 +614,7 @@ pub async fn attach_escalation_policy(
         }
     }
     let result = sqlx::query(
-        "UPDATE alert_rules SET escalation_policy_id = $2, updated_at = NOW() \
+        "UPDATE alert_rules SET escalation_policy_id = $2, updated_at = CURRENT_TIMESTAMP \
          WHERE id = $1 AND user_id = $3",
     )
     .bind(rule_id)
@@ -741,12 +741,12 @@ pub async fn put_runbook(
 
     sqlx::query(
         "INSERT INTO alert_runbooks (alert_type, runbook_md, severity_default, updated_by, updated_at) \
-         VALUES ($1, $2, $3, $4, NOW()) \
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) \
          ON CONFLICT (alert_type) DO UPDATE SET \
            runbook_md = EXCLUDED.runbook_md, \
            severity_default = EXCLUDED.severity_default, \
            updated_by = EXCLUDED.updated_by, \
-           updated_at = NOW()",
+           updated_at = CURRENT_TIMESTAMP",
     )
     .bind(&alert_type)
     .bind(&body.runbook_md)
@@ -795,7 +795,7 @@ pub async fn apply_defaults(
     for d in DEFAULTS {
         let res = sqlx::query(
             "INSERT INTO alert_runbooks (alert_type, runbook_md, severity_default, updated_by, updated_at) \
-             VALUES ($1, $2, $3, $4, NOW()) \
+             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) \
              ON CONFLICT (alert_type) DO NOTHING",
         )
         .bind(d.alert_type)

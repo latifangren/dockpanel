@@ -281,7 +281,7 @@ pub async fn update(
         "UPDATE backup_destinations SET \
          name = COALESCE($1, name), \
          config = COALESCE($2, config), \
-         updated_at = NOW() \
+         updated_at = CURRENT_TIMESTAMP \
          WHERE id = $3 RETURNING *",
     )
     .bind(body.name.as_deref())

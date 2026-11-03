@@ -253,7 +253,7 @@ async fn main() {
     // GAP 66: Load persisted token blacklist from DB (survives restart)
     let token_blacklist = {
         let blacklisted: Vec<(String,)> = sqlx::query_as(
-            "SELECT jti FROM token_blacklist WHERE expires_at > NOW()"
+            "SELECT jti FROM token_blacklist WHERE expires_at > CURRENT_TIMESTAMP"
         ).fetch_all(&db).await.unwrap_or_default();
         let mut bl = HashSet::new();
         for (jti,) in blacklisted {
@@ -459,10 +459,10 @@ async fn main() {
             // Clean token blacklist: if over 10000 entries, purge expired from DB and reload
             let bl_count = blacklist.read().await.len();
             if bl_count > 10000 {
-                let _ = sqlx::query("DELETE FROM token_blacklist WHERE expires_at <= NOW()")
+                let _ = sqlx::query("DELETE FROM token_blacklist WHERE expires_at <= CURRENT_TIMESTAMP")
                     .execute(&bl_db).await;
                 let active: Vec<(String,)> = sqlx::query_as(
-                    "SELECT jti FROM token_blacklist WHERE expires_at > NOW()"
+                    "SELECT jti FROM token_blacklist WHERE expires_at > CURRENT_TIMESTAMP"
                 ).fetch_all(&bl_db).await.unwrap_or_default();
                 let mut bl = blacklist.write().await;
                 bl.clear();

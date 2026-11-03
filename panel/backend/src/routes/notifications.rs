@@ -62,9 +62,9 @@ pub async fn list(
         "SELECT id, title, message, severity, category, link, read_at, created_at \
          FROM panel_notifications \
          WHERE user_id = $1 \
-           AND ($2::timestamptz IS NULL OR created_at < $2) \
-           AND ($3::text IS NULL OR category = $3) \
-           AND ($4::bool IS NOT TRUE OR read_at IS NULL) \
+           AND ($2 IS NULL OR created_at < $2) \
+           AND ($3 IS NULL OR category = $3) \
+           AND ($4 IS NOT 1 OR read_at IS NULL) \
          ORDER BY created_at DESC LIMIT $5",
     )
     .bind(claims.sub)
@@ -142,7 +142,7 @@ pub async fn mark_read(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = sqlx::query(
-        "UPDATE panel_notifications SET read_at = NOW() WHERE id = $1 AND user_id = $2 AND read_at IS NULL",
+        "UPDATE panel_notifications SET read_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND read_at IS NULL",
     )
     .bind(id)
     .bind(claims.sub)
@@ -163,7 +163,7 @@ pub async fn mark_all_read(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     sqlx::query(
-        "UPDATE panel_notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL",
+        "UPDATE panel_notifications SET read_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND read_at IS NULL",
     )
     .bind(claims.sub)
     .execute(&state.db)

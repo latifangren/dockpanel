@@ -149,7 +149,7 @@ async fn collect_agent_health(pool: &SqlitePool, agent: &AgentClient) {
                     let exists: bool = sqlx::query_scalar(
                         "SELECT EXISTS(SELECT 1 FROM telemetry_events \
                          WHERE category = $1 AND message = $2 \
-                         AND created_at > NOW() - INTERVAL '6 hours')",
+                         AND created_at > datetime('now', '-6 hours'))",
                     )
                     .bind(category)
                     .bind(title)

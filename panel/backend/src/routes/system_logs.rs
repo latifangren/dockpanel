@@ -122,7 +122,7 @@ pub async fn list(
                 &format!("Unknown range '{since}' — expected 1h, 24h, 7d or 30d"),
             )
         })?;
-        conditions.push(format!("created_at > NOW() - INTERVAL '{interval}'"));
+        conditions.push(format!("created_at > datetime('now', '-{interval}')"));
     }
 
     let where_clause = if conditions.is_empty() {
@@ -198,7 +198,7 @@ pub async fn count(
     let rows: Vec<(String, i64)> = sqlx::query_as(
         &format!(
             "SELECT level, COUNT(*) FROM system_logs \
-             WHERE created_at > NOW() - INTERVAL '{interval}' AND {hide} \
+             WHERE created_at > datetime('now', '-{interval}') AND {hide} \
              GROUP BY level"
         ),
     )

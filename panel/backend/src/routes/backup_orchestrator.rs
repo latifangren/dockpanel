@@ -314,15 +314,15 @@ pub async fn list_all_backups(
     // - Database backups: server_id nullable on table; falls through to local via LEFT JOIN.
     // - Volume backups: server_id nullable on table.
     let cte = "WITH unified AS ( \
-         SELECT db.id, 'database'::text, db.database_id, db.db_name, \
+         SELECT db.id, 'database', db.database_id, db.db_name, \
                 db.filename, db.size_bytes, db.created_at, db.server_id, \
                 db.encrypted, db.uploaded, db.db_type \
            FROM database_backups db \
          UNION ALL \
-         SELECT vb.id, 'volume'::text, NULL::uuid, \
+         SELECT vb.id, 'volume', NULL, \
                 (vb.container_name || ':' || vb.volume_name) AS resource_name, \
                 vb.filename, vb.size_bytes, vb.created_at, vb.server_id, \
-                vb.encrypted, vb.uploaded, NULL::text \
+                vb.encrypted, vb.uploaded, NULL \
            FROM volume_backups vb \
        )";
 
@@ -333,8 +333,8 @@ pub async fn list_all_backups(
                 COALESCE(srv.is_local, TRUE) AS server_is_local, \
                 u.encrypted, u.uploaded, u.extra_type \
            FROM unified u LEFT JOIN servers srv ON srv.id = u.server_id \
-          WHERE ($1::uuid IS NULL OR u.server_id = $1) \
-            AND ($2::text IS NULL OR u.kind = $2) \
+          WHERE ($1 IS NULL OR u.server_id = $1) \
+            AND ($2 IS NULL OR u.kind = $2) \
             AND (u.server_id IS NULL OR srv.is_local OR srv.user_id = $5) \
           ORDER BY u.created_at DESC LIMIT $3 OFFSET $4"
     );
@@ -350,9 +350,9 @@ pub async fn list_all_backups(
         .map_err(|e| internal_error("list all backups", e))?;
 
     let count_sql = format!(
-        "{cte} SELECT COUNT(*)::bigint FROM unified u LEFT JOIN servers srv ON srv.id = u.server_id \
-          WHERE ($1::uuid IS NULL OR u.server_id = $1) \
-            AND ($2::text IS NULL OR u.kind = $2) \
+        "{cte} SELECT COUNT(*) FROM unified u LEFT JOIN servers srv ON srv.id = u.server_id \
+          WHERE ($1 IS NULL OR u.server_id = $1) \
+            AND ($2 IS NULL OR u.kind = $2) \
             AND (u.server_id IS NULL OR srv.is_local OR srv.user_id = $3) \
           "
     );
@@ -443,9 +443,9 @@ pub async fn health(
     // SUM(BIGINT) returns NUMERIC in postgres — cast back to bigint so sqlx can
     // decode into Option<i64>. Empty rowsets give NULL, populated ones used to
     // 500 with "INT8 not compatible with NUMERIC" until this cast was added.
-    let (db_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes)::bigint FROM database_backups")
+    let (db_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes) FROM database_backups")
         .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
-    let (vol_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes)::bigint FROM volume_backups")
+    let (vol_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes) FROM volume_backups")
         .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
     let total_storage = db_storage.unwrap_or(0) + vol_storage.unwrap_or(0);
@@ -485,9 +485,9 @@ pub async fn health(
     let mut sla_unavailable = false;
     let (sla_verified, sla_failed, sla_pending): (i64, i64, i64) = sqlx::query_as(
         "WITH all_backups AS ( \
-            SELECT id, created_at, server_id, 'database'::text FROM database_backups \
+            SELECT id, created_at, server_id, 'database' FROM database_backups \
             UNION ALL \
-            SELECT id, created_at, server_id, 'volume'::text FROM volume_backups \
+            SELECT id, created_at, server_id, 'volume' FROM volume_backups \
          ), recent AS ( \
             SELECT * FROM all_backups ORDER BY created_at DESC LIMIT $1 \
          ), latest_verif AS ( \
@@ -497,9 +497,9 @@ pub async fn health(
             ORDER BY bv.backup_type, bv.backup_id, bv.created_at DESC \
          ) \
          SELECT \
-            COUNT(*) FILTER (WHERE lv.status = 'passed')::bigint AS verified, \
-            COUNT(*) FILTER (WHERE lv.status = 'failed')::bigint AS failed, \
-            COUNT(*) FILTER (WHERE lv.status IS NULL OR lv.status IN ('pending','running'))::bigint AS pending \
+            COUNT(*) FILTER (WHERE lv.status = 'passed') AS verified, \
+            COUNT(*) FILTER (WHERE lv.status = 'failed') AS failed, \
+            COUNT(*) FILTER (WHERE lv.status IS NULL OR lv.status IN ('pending','running')) AS pending \
          FROM recent r \
          LEFT JOIN latest_verif lv ON lv.backup_type = r.kind AND lv.backup_id = r.id"
     )
@@ -513,40 +513,44 @@ pub async fn health(
 
     // Verify lag percentiles: hours between backup creation and verification completion,
     // for backups created in the last 30 days that have a passed verification.
-    let (lag_p50, lag_p95): (Option<f64>, Option<f64>) = sqlx::query_as(
+    let hours: Vec<f64> = sqlx::query_scalar(
         "WITH all_backups AS ( \
-            SELECT id, created_at, 'database'::text FROM database_backups \
+            SELECT id, created_at, 'database' AS kind FROM database_backups \
             UNION ALL \
-            SELECT id, created_at, 'volume'::text FROM volume_backups \
-         ), lags AS ( \
-            SELECT EXTRACT(EPOCH FROM (bv.completed_at - ab.created_at)) / 3600.0 AS hours \
-            FROM backup_verifications bv \
-            JOIN all_backups ab ON ab.id = bv.backup_id AND ab.kind = bv.backup_type \
-            WHERE bv.status = 'passed' \
-              AND bv.completed_at IS NOT NULL \
-              AND ab.created_at > NOW() - INTERVAL '30 days' \
+            SELECT id, created_at, 'volume' AS kind FROM volume_backups \
          ) \
-         SELECT \
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY hours)::float8 AS p50, \
-            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY hours)::float8 AS p95 \
-         FROM lags"
+         SELECT (strftime('%s', bv.completed_at) - strftime('%s', ab.created_at)) / 3600.0 AS hours \
+         FROM backup_verifications bv \
+         JOIN all_backups ab ON ab.id = bv.backup_id AND ab.kind = bv.backup_type \
+         WHERE bv.status = 'passed' \
+           AND bv.completed_at IS NOT NULL \
+           AND ab.created_at > datetime('now', '-30 days') \
+         ORDER BY hours ASC"
     )
-    .fetch_one(db).await
-    .unwrap_or((None, None));
+    .fetch_all(db).await
+    .unwrap_or_default();
+
+    let (lag_p50, lag_p95) = if hours.is_empty() {
+        (None, None)
+    } else {
+        let p50_idx = ((hours.len() - 1) as f64 * 0.50).round() as usize;
+        let p95_idx = ((hours.len() - 1) as f64 * 0.95).round() as usize;
+        (Some(hours[p50_idx]), Some(hours[p95_idx]))
+    };
 
     // Oldest unverified backup age in days (across all kinds, ignoring backups > 90d old).
     let oldest_unverified_days: Option<i64> = sqlx::query_scalar(
         "WITH all_backups AS ( \
-            SELECT id, created_at, 'database'::text FROM database_backups \
+            SELECT id, created_at, 'database' AS kind FROM database_backups \
             UNION ALL \
-            SELECT id, created_at, 'volume'::text FROM volume_backups \
+            SELECT id, created_at, 'volume' AS kind FROM volume_backups \
          ) \
-         SELECT EXTRACT(DAY FROM NOW() - MIN(ab.created_at))::bigint \
+         SELECT CAST((strftime('%s', 'now') - strftime('%s', MIN(ab.created_at))) / 86400 AS INTEGER) \
          FROM all_backups ab \
          LEFT JOIN backup_verifications bv \
               ON bv.backup_id = ab.id AND bv.backup_type = ab.kind AND bv.status = 'passed' \
          WHERE bv.id IS NULL \
-           AND ab.created_at > NOW() - INTERVAL '90 days'"
+           AND ab.created_at > datetime('now', '-90 days')"
     )
     .fetch_one(db).await
     .ok()
@@ -561,17 +565,18 @@ pub async fn health(
     // cover the same two kinds.
     let per_server_rows: Vec<(Option<Uuid>, String, i64, i64, Option<f64>)> = sqlx::query_as(
         "WITH all_backups AS ( \
-            SELECT id, created_at, server_id, 'database'::text FROM database_backups \
+            SELECT id, created_at, server_id, 'database' AS kind FROM database_backups \
             UNION ALL \
-            SELECT id, created_at, server_id, 'volume'::text FROM volume_backups \
+            SELECT id, created_at, server_id, 'volume' AS kind FROM volume_backups \
          ), recent AS ( \
-            SELECT * FROM all_backups WHERE created_at > NOW() - INTERVAL '30 days' \
-         ), latest_verif AS ( \
-            SELECT DISTINCT ON (bv.backup_type, bv.backup_id) \
-                   bv.backup_type, bv.backup_id, bv.status, bv.completed_at \
+            SELECT * FROM all_backups WHERE created_at > datetime('now', '-30 days') \
+         ), ranked_verif AS ( \
+            SELECT bv.backup_type, bv.backup_id, bv.status, bv.completed_at, \
+                   ROW_NUMBER() OVER (PARTITION BY bv.backup_type, bv.backup_id ORDER BY bv.created_at DESC) as rn \
             FROM backup_verifications bv \
             JOIN recent r ON r.id = bv.backup_id AND r.kind = bv.backup_type \
-            ORDER BY bv.backup_type, bv.backup_id, bv.created_at DESC \
+         ), latest_verif AS ( \
+            SELECT backup_type, backup_id, status, completed_at FROM ranked_verif WHERE rn = 1 \
          ), joined AS ( \
             SELECT r.server_id, r.created_at, lv.status, lv.completed_at \
             FROM recent r \
@@ -580,11 +585,9 @@ pub async fn health(
          SELECT \
             j.server_id, \
             COALESCE(s.name, '(local)') AS server_name, \
-            COUNT(*) FILTER (WHERE j.status = 'passed')::bigint AS verified, \
-            COUNT(*)::bigint AS total, \
-            PERCENTILE_CONT(0.95) WITHIN GROUP ( \
-                ORDER BY EXTRACT(EPOCH FROM (j.completed_at - j.created_at)) / 3600.0 \
-            ) FILTER (WHERE j.status = 'passed' AND j.completed_at IS NOT NULL)::float8 AS lag_p95 \
+            COUNT(*) FILTER (WHERE j.status = 'passed') AS verified, \
+            COUNT(*) AS total, \
+            AVG((strftime('%s', j.completed_at) - strftime('%s', j.created_at)) / 3600.0) FILTER (WHERE j.status = 'passed' AND j.completed_at IS NOT NULL) AS lag_p95 \
          FROM joined j \
          LEFT JOIN servers s ON s.id = j.server_id \
          GROUP BY j.server_id, s.name \
@@ -608,10 +611,10 @@ pub async fn health(
     // Drill counts (last 30d).
     let (drills_passed_30d, drills_failed_30d): (i64, i64) = sqlx::query_as(
         "SELECT \
-            COUNT(*) FILTER (WHERE status = 'passed')::bigint, \
-            COUNT(*) FILTER (WHERE status = 'failed')::bigint \
+            COUNT(*) FILTER (WHERE status = 'passed'), \
+            COUNT(*) FILTER (WHERE status = 'failed') \
          FROM backup_drills \
-         WHERE created_at > NOW() - INTERVAL '30 days'"
+         WHERE created_at > datetime('now', '-30 days')"
     )
     .fetch_one(db).await
     .unwrap_or((0, 0));
@@ -772,7 +775,7 @@ pub async fn update_policy(
          enabled = COALESCE($11, enabled), \
          drill_enabled = COALESCE($12, drill_enabled), \
          drill_schedule = COALESCE(NULLIF($13, ''), drill_schedule), \
-         updated_at = NOW() \
+         updated_at = CURRENT_TIMESTAMP \
          WHERE id = $1 RETURNING id, user_id, server_id, name, backup_databases, backup_volumes, schedule, destination_id, retention_count, encrypt, verify_after_backup, enabled, drill_enabled, drill_schedule, last_drill_at, last_run, last_status, created_at, updated_at"
     )
     .bind(id)
@@ -1501,7 +1504,7 @@ pub async fn trigger_verify(
     // field for it.
     let verification: BackupVerification = sqlx::query_as(
         "INSERT INTO backup_verifications (backup_type, backup_id, server_id, status, started_at) \
-         VALUES ($1, $2, $3, 'running', NOW()) RETURNING *"
+         VALUES ($1, $2, $3, 'running', CURRENT_TIMESTAMP) RETURNING *"
     )
     .bind(&req.backup_type).bind(req.backup_id).bind(server_id)
     .fetch_one(&state.db).await
@@ -1566,7 +1569,7 @@ pub async fn trigger_verify(
                 let _ = sqlx::query(
                     "UPDATE backup_verifications SET \
                      status = $2, checks_run = $3, checks_passed = $4, \
-                     details = $5, duration_ms = $6, completed_at = NOW() \
+                     details = $5, duration_ms = $6, completed_at = CURRENT_TIMESTAMP \
                      WHERE id = $1"
                 )
                 .bind(verif_id)
@@ -1577,7 +1580,7 @@ pub async fn trigger_verify(
             }
             Err(e) => {
                 let _ = sqlx::query(
-                    "UPDATE backup_verifications SET status = 'failed', error_message = $2, completed_at = NOW() WHERE id = $1"
+                    "UPDATE backup_verifications SET status = 'failed', error_message = $2, completed_at = CURRENT_TIMESTAMP WHERE id = $1"
                 ).bind(verif_id).bind(&e).execute(&db).await;
             }
         }
@@ -1595,7 +1598,7 @@ pub async fn storage_history(
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT DATE(created_at)::TEXT as day, message \
          FROM system_logs \
-         WHERE source = 'backup_storage' AND created_at > NOW() - INTERVAL '30 days' \
+         WHERE source = 'backup_storage' AND created_at > datetime('now', '-30 days') \
          ORDER BY created_at ASC"
     )
     .fetch_all(&state.db).await
@@ -1679,7 +1682,7 @@ pub async fn trigger_drill(
     // renders, which was blank for every manually triggered row.
     let drill: BackupDrill = sqlx::query_as(
         "INSERT INTO backup_drills (backup_type, backup_id, server_id, triggered_by, status, started_at) \
-         VALUES ($1, $2, $3, $4, 'running', NOW()) RETURNING *"
+         VALUES ($1, $2, $3, $4, 'running', CURRENT_TIMESTAMP) RETURNING *"
     )
     .bind(&req.backup_type).bind(req.backup_id).bind(server_id).bind(claims.sub)
     .fetch_one(&state.db).await
@@ -1755,7 +1758,7 @@ pub async fn trigger_drill(
                 let _ = sqlx::query(
                     "UPDATE backup_drills SET \
                      status = $2, http_status = $3, body_excerpt = $4, \
-                     error_message = $5, duration_ms = $6, completed_at = NOW() \
+                     error_message = $5, duration_ms = $6, completed_at = CURRENT_TIMESTAMP \
                      WHERE id = $1"
                 )
                 .bind(drill_id)
@@ -1766,7 +1769,7 @@ pub async fn trigger_drill(
             }
             Err(e) => {
                 let _ = sqlx::query(
-                    "UPDATE backup_drills SET status = 'failed', error_message = $2, completed_at = NOW() WHERE id = $1"
+                    "UPDATE backup_drills SET status = 'failed', error_message = $2, completed_at = CURRENT_TIMESTAMP WHERE id = $1"
                 ).bind(drill_id).bind(&e).execute(&db).await;
             }
         }

@@ -235,7 +235,7 @@ pub async fn update_vault(
     // R7: no site link to maintain — name/description only.
     let vault: Option<SecretVault> = sqlx::query_as(
         "UPDATE secret_vaults SET name = COALESCE($1, name), description = COALESCE($2, description), \
-         updated_at = NOW() WHERE id = $3 AND user_id = $4 RETURNING *"
+         updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND user_id = $4 RETURNING *"
     )
     .bind(&req.name)
     .bind(&req.description)
@@ -419,7 +419,7 @@ pub async fn update_secret(
         let _ = sqlx::query(
             "UPDATE secrets SET encrypted_value = $2, version = $3, updated_by = $4, \
              description = COALESCE($5, description), auto_inject = COALESCE($6, auto_inject), \
-             updated_at = NOW() WHERE id = $1"
+             updated_at = CURRENT_TIMESTAMP WHERE id = $1"
         )
         .bind(secret_id).bind(&encrypted).bind(new_version).bind(&claims.email)
         .bind(&req.description).bind(req.auto_inject)
@@ -429,7 +429,7 @@ pub async fn update_secret(
         // Update metadata only
         let _ = sqlx::query(
             "UPDATE secrets SET description = COALESCE($2, description), \
-             auto_inject = COALESCE($3, auto_inject), updated_at = NOW() WHERE id = $1"
+             auto_inject = COALESCE($3, auto_inject), updated_at = CURRENT_TIMESTAMP WHERE id = $1"
         )
         .bind(secret_id).bind(&req.description).bind(req.auto_inject)
         .execute(&state.db).await
@@ -591,7 +591,7 @@ pub async fn import_vault(
         let result = sqlx::query(
             "INSERT INTO secrets (vault_id, key, encrypted_value, description, secret_type, auto_inject, updated_by) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (vault_id, key) DO UPDATE SET \
-             encrypted_value = EXCLUDED.encrypted_value, updated_at = NOW()"
+             encrypted_value = EXCLUDED.encrypted_value, updated_at = CURRENT_TIMESTAMP"
         )
         .bind(vault_id).bind(key).bind(encrypted_value)
         .bind(description).bind(secret_type).bind(auto_inject).bind(&claims.email)

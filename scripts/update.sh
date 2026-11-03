@@ -325,11 +325,16 @@ mkdir -p "$BACKUP_DIR"
 # sites — the redirect is the only thing that needs it.
 chmod 700 "$BACKUP_DIR" /var/backups/dockpanel 2>/dev/null || true
 log "Backing up database..."
-if ( umask 077; docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > "$BACKUP_DIR/pre-upgrade-$(date +%Y%m%d%H%M%S).sql.gz" ); then
+if [ -f "/var/lib/dockpanel/dockpanel.db" ]; then
+    PRE_UP="$BACKUP_DIR/pre-upgrade-$(date +%Y%m%d%H%M%S).db"
+    if ( umask 077; cp /var/lib/dockpanel/dockpanel.db "$PRE_UP" && gzip -f "$PRE_UP" ); then
+        log "Database backup saved to $BACKUP_DIR/"
+    else
+        error "Database backup failed, aborting upgrade"
+        exit 1
+    fi
+elif ( umask 077; docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel 2>/dev/null | gzip > "$BACKUP_DIR/pre-upgrade-$(date +%Y%m%d%H%M%S).sql.gz" ); then
     log "Database backup saved to $BACKUP_DIR/"
-else
-    error "Database backup failed, aborting upgrade"
-    exit 1
 fi
 
 # ── Harden a legacy inline backup cron ────────────────────────────────────

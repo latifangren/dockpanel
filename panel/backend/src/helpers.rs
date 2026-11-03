@@ -85,7 +85,7 @@ pub async fn suspend_account(
     extra_predicate: &'static str,
 ) -> Result<u64, crate::error::ApiError> {
     let sql = format!(
-        "UPDATE users SET prior_role = role, role = 'suspended', updated_at = NOW() \
+        "UPDATE users SET prior_role = role, role = 'suspended', updated_at = CURRENT_TIMESTAMP \
          WHERE id = $1 AND role <> 'suspended'{extra_predicate}"
     );
     let changed = sqlx::query(&sql)
@@ -197,7 +197,7 @@ pub async fn unsuspend_account(
     // whatever state the account happens to be in, and must not rewrite the role
     // of an account that was never suspended.
     sqlx::query(
-        "UPDATE users SET role = $1, prior_role = NULL, updated_at = NOW() \
+        "UPDATE users SET role = $1, prior_role = NULL, updated_at = CURRENT_TIMESTAMP \
          WHERE id = $2 AND role = 'suspended'",
     )
     .bind(&role)

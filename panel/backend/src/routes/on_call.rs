@@ -45,7 +45,7 @@ pub struct ScheduleInput {
     pub name: String,
     pub members: Vec<Uuid>,
     pub cadence_days: i32,
-    /// Optional anchor override. Defaults to NOW() on create; on update the
+    /// Optional anchor override. Defaults to CURRENT_TIMESTAMP on create; on update the
     /// stored value is preserved when this field is absent so cadence math
     /// doesn't drift every PUT.
     #[serde(default)]
@@ -290,7 +290,7 @@ pub async fn update_schedule(
         if let Some(anchor) = input.anchor_at {
             sqlx::query_as(
                 "UPDATE on_call_schedules \
-                 SET name = $2, members = $3, cadence_days = $4, anchor_at = $5, updated_at = NOW() \
+                 SET name = $2, members = $3, cadence_days = $4, anchor_at = $5, updated_at = CURRENT_TIMESTAMP \
                  WHERE id = $1 AND user_id = $6 \
                  RETURNING id, name, members, cadence_days, anchor_at, created_at, updated_at",
             )
@@ -307,7 +307,7 @@ pub async fn update_schedule(
             // doesn't reset on every save (e.g. when only re-ordering members).
             sqlx::query_as(
                 "UPDATE on_call_schedules \
-                 SET name = $2, members = $3, cadence_days = $4, updated_at = NOW() \
+                 SET name = $2, members = $3, cadence_days = $4, updated_at = CURRENT_TIMESTAMP \
                  WHERE id = $1 AND user_id = $5 \
                  RETURNING id, name, members, cadence_days, anchor_at, created_at, updated_at",
             )
@@ -381,7 +381,7 @@ pub async fn delete_schedule(
 
     let orphan_route = format!("on_call_schedule:{id}");
     let policies: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
-        "SELECT id, steps FROM escalation_policies WHERE user_id = $1 FOR UPDATE",
+        "SELECT id, steps FROM escalation_policies WHERE user_id = $1",
     )
     .bind(claims.sub)
     .fetch_all(&mut *tx)
@@ -411,7 +411,7 @@ pub async fn delete_schedule(
 
         let new_steps = serde_json::to_value(&steps)
             .map_err(|e| internal_error("delete schedule", e))?;
-        sqlx::query("UPDATE escalation_policies SET steps = $1, updated_at = NOW() WHERE id = $2")
+        sqlx::query("UPDATE escalation_policies SET steps = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
             .bind(new_steps)
             .bind(policy_id)
             .execute(&mut *tx)
@@ -508,7 +508,7 @@ pub async fn scrub_deleted_user(db: &sqlx::SqlitePool, user_id: Uuid) {
             continue;
         };
         if let Err(e) =
-            sqlx::query("UPDATE escalation_policies SET steps = $1, updated_at = NOW() WHERE id = $2")
+            sqlx::query("UPDATE escalation_policies SET steps = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
                 .bind(new_steps)
                 .bind(policy_id)
                 .execute(db)

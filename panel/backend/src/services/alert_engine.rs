@@ -73,7 +73,7 @@ pub async fn run(pool: SqlitePool, agents: AgentRegistry, mut shutdown_rx: tokio
                 // Purge old resolved alerts (keep 30 days) — every hour
                 if tick_count % 60 == 0 {
                     let _ = sqlx::query(
-                        "DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < NOW() - INTERVAL '30 days'",
+                        "DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < datetime('now', '-30 days')",
                     )
                     .execute(&pool)
                     .await;
@@ -119,7 +119,7 @@ pub async fn run(pool: SqlitePool, agents: AgentRegistry, mut shutdown_rx: tokio
 async fn maintenance_users(pool: &SqlitePool) -> HashSet<Uuid> {
     sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT user_id FROM maintenance_windows \
-         WHERE starts_at <= NOW() AND ends_at >= NOW()",
+         WHERE starts_at <= CURRENT_TIMESTAMP AND ends_at >= CURRENT_TIMESTAMP",
     )
     .fetch_all(pool)
     .await
@@ -180,7 +180,7 @@ async fn fire_alert_with_retry(
                         "SELECT id FROM managed_incidents \
                          WHERE user_id = $1 \
                          AND status NOT IN ('resolved', 'postmortem') \
-                         AND created_at > NOW() - INTERVAL '5 minutes' \
+                         AND created_at > datetime('now', '-5 minutes') \
                          LIMIT 1"
                     )
                     .bind(user_id)
@@ -356,7 +356,7 @@ async fn check_resource_thresholds(pool: &SqlitePool, maint: &HashSet<Uuid>) {
         // backfilled collector, not as the window itself.
         let disk_trend: Vec<(f32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
             "SELECT disk_pct, created_at FROM metrics_history \
-             WHERE server_id = $1 AND created_at > NOW() - INTERVAL '12 hours' \
+             WHERE server_id = $1 AND created_at > datetime('now', '-12 hours') \
              ORDER BY created_at DESC LIMIT 1440",
         )
         .bind(server.id)
@@ -562,11 +562,11 @@ async fn check_threshold(
         let _ = sqlx::query(
             "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, consecutive_count, fired_at) \
              VALUES ($1, $2, '', CASE WHEN $3 >= $4 THEN 'firing' ELSE 'pending' END, $3, \
-                     CASE WHEN $3 >= $4 THEN NOW() ELSE NULL END) \
+                     CASE WHEN $3 >= $4 THEN CURRENT_TIMESTAMP ELSE NULL END) \
              ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
              DO UPDATE SET consecutive_count = $3, \
                           current_state = CASE WHEN $3 >= $4 THEN 'firing' ELSE alert_state.current_state END, \
-                          fired_at = CASE WHEN $3 >= $4 AND alert_state.current_state != 'firing' THEN NOW() ELSE alert_state.fired_at END",
+                          fired_at = CASE WHEN $3 >= $4 AND alert_state.current_state != 'firing' THEN CURRENT_TIMESTAMP ELSE alert_state.fired_at END",
         )
         .bind(server.id)
         .bind(alert_type)
@@ -599,7 +599,7 @@ async fn check_threshold(
 
             // Update last_notified
             let _ = sqlx::query(
-                "UPDATE alert_state SET last_notified_at = NOW() \
+                "UPDATE alert_state SET last_notified_at = CURRENT_TIMESTAMP \
                  WHERE server_id = $1 AND alert_type = $2 AND state_key = ''",
             )
             .bind(server.id)
@@ -687,11 +687,11 @@ async fn claim_trend_fire(
 
     let claimed: Option<(Uuid,)> = sqlx::query_as(
         "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
-         VALUES ($1, $2, '', 'firing', NOW(), NOW()) \
+         VALUES ($1, $2, '', 'firing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
          ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
          DO UPDATE SET current_state = 'firing', \
-                       fired_at = COALESCE(alert_state.fired_at, NOW()), \
-                       last_notified_at = NOW() \
+                       fired_at = COALESCE(alert_state.fired_at, CURRENT_TIMESTAMP), \
+                       last_notified_at = CURRENT_TIMESTAMP \
          WHERE alert_state.last_notified_at IS NULL \
             OR alert_state.last_notified_at < datetime('now', '-' || $3 || ' minutes') \
          RETURNING id",
@@ -856,11 +856,11 @@ async fn check_gpu_metric(
         let _ = sqlx::query(
             "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, consecutive_count, fired_at) \
              VALUES ($1, $2, $3, CASE WHEN $4 >= $5 THEN 'firing' ELSE 'pending' END, $4, \
-                     CASE WHEN $4 >= $5 THEN NOW() ELSE NULL END) \
+                     CASE WHEN $4 >= $5 THEN CURRENT_TIMESTAMP ELSE NULL END) \
              ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
              DO UPDATE SET consecutive_count = $4, \
                           current_state = CASE WHEN $4 >= $5 THEN 'firing' ELSE alert_state.current_state END, \
-                          fired_at = CASE WHEN $4 >= $5 AND alert_state.current_state != 'firing' THEN NOW() ELSE alert_state.fired_at END",
+                          fired_at = CASE WHEN $4 >= $5 AND alert_state.current_state != 'firing' THEN CURRENT_TIMESTAMP ELSE alert_state.fired_at END",
         )
         .bind(server_id)
         .bind(alert_type)
@@ -876,7 +876,7 @@ async fn check_gpu_metric(
             fire_alert_with_retry(pool, user_id, Some(server_id), alert_type, state_key, severity, title, message).await;
 
             let _ = sqlx::query(
-                "UPDATE alert_state SET last_notified_at = NOW() \
+                "UPDATE alert_state SET last_notified_at = CURRENT_TIMESTAMP \
                  WHERE server_id = $1 AND alert_type = $2 AND state_key = $3",
             )
             .bind(server_id)
@@ -950,9 +950,9 @@ async fn check_server_offline(pool: &SqlitePool, maint: &HashSet<Uuid>) {
         // Create firing state — PostgreSQL serializes concurrent ON CONFLICT upserts
         let _ = sqlx::query(
             "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
-             VALUES ($1, 'offline', '', 'firing', NOW(), NOW()) \
+             VALUES ($1, 'offline', '', 'firing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
              ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
-             DO UPDATE SET current_state = 'firing', fired_at = NOW(), last_notified_at = NOW()",
+             DO UPDATE SET current_state = 'firing', fired_at = CURRENT_TIMESTAMP, last_notified_at = CURRENT_TIMESTAMP",
         )
         .bind(server_id)
         .execute(pool)
@@ -1227,9 +1227,9 @@ async fn check_stack_ssl_expiry(pool: &SqlitePool, maint: &HashSet<Uuid>) {
 
         let _ = sqlx::query(
             "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, last_notified_at, metadata) \
-             VALUES ($1, 'ssl_expiry', $2, 'firing', NOW(), $3) \
+             VALUES ($1, 'ssl_expiry', $2, 'firing', CURRENT_TIMESTAMP, $3) \
              ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
-             DO UPDATE SET current_state = 'firing', last_notified_at = NOW(), metadata = $3",
+             DO UPDATE SET current_state = 'firing', last_notified_at = CURRENT_TIMESTAMP, metadata = $3",
         )
         .bind(server_id)
         .bind(&state_key)
@@ -1355,9 +1355,9 @@ async fn check_registered_cert_expiry(pool: &SqlitePool, maint: &HashSet<Uuid>) 
 
         let _ = sqlx::query(
             "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, last_notified_at, metadata) \
-             VALUES ($1, 'ssl_expiry', $2, 'firing', NOW(), $3) \
+             VALUES ($1, 'ssl_expiry', $2, 'firing', CURRENT_TIMESTAMP, $3) \
              ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
-             DO UPDATE SET current_state = 'firing', last_notified_at = NOW(), metadata = $3",
+             DO UPDATE SET current_state = 'firing', last_notified_at = CURRENT_TIMESTAMP, metadata = $3",
         )
         .bind(server_id)
         .bind(&state_key)
@@ -1479,7 +1479,7 @@ async fn check_service_health(pool: &SqlitePool, member: &FleetMember) {
                 "SELECT COUNT(*) FROM activity_logs \
                  WHERE action = 'auto_heal.restart_service' \
                  AND target_name = $1 AND server_id = $2 \
-                 AND created_at > NOW() - INTERVAL '5 minutes'",
+                 AND created_at > datetime('now', '-5 minutes')",
             )
             .bind(name)
             .bind(server_id)
@@ -1509,9 +1509,9 @@ async fn check_service_health(pool: &SqlitePool, member: &FleetMember) {
                 // PostgreSQL serializes concurrent ON CONFLICT upserts
                 let _ = sqlx::query(
                     "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
-                     VALUES ($1, 'service_down', $2, 'firing', NOW(), NOW()) \
+                     VALUES ($1, 'service_down', $2, 'firing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
                      ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
-                     DO UPDATE SET current_state = 'firing', fired_at = NOW(), last_notified_at = NOW()",
+                     DO UPDATE SET current_state = 'firing', fired_at = CURRENT_TIMESTAMP, last_notified_at = CURRENT_TIMESTAMP",
                 )
                 .bind(server_id)
                 .bind(name)
@@ -1657,9 +1657,9 @@ async fn check_container_health(pool: &SqlitePool, member: &FleetMember) {
             if existing.as_ref().map(|s| s.0.as_str()) != Some("firing") {
                 let _ = sqlx::query(
                     "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
-                     VALUES ($1, 'container_down', $2, 'firing', NOW(), NOW()) \
+                     VALUES ($1, 'container_down', $2, 'firing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
                      ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
-                     DO UPDATE SET current_state = 'firing', fired_at = NOW(), last_notified_at = NOW()",
+                     DO UPDATE SET current_state = 'firing', fired_at = CURRENT_TIMESTAMP, last_notified_at = CURRENT_TIMESTAMP",
                 )
                 .bind(server_id)
                 .bind(name)
@@ -1706,9 +1706,9 @@ async fn check_container_health(pool: &SqlitePool, member: &FleetMember) {
             if existing.as_ref().map(|s| s.0.as_str()) != Some("firing") {
                 let _ = sqlx::query(
                     "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
-                     VALUES ($1, 'container_crashloop', $2, 'firing', NOW(), NOW()) \
+                     VALUES ($1, 'container_crashloop', $2, 'firing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
                      ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
-                     DO UPDATE SET current_state = 'firing', fired_at = NOW(), last_notified_at = NOW()",
+                     DO UPDATE SET current_state = 'firing', fired_at = CURRENT_TIMESTAMP, last_notified_at = CURRENT_TIMESTAMP",
                 )
                 .bind(server_id)
                 .bind(name)
@@ -1746,9 +1746,9 @@ async fn check_container_health(pool: &SqlitePool, member: &FleetMember) {
             if existing.as_ref().map(|s| s.0.as_str()) != Some("firing") {
                 let _ = sqlx::query(
                     "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
-                     VALUES ($1, 'container_unhealthy', $2, 'firing', NOW(), NOW()) \
+                     VALUES ($1, 'container_unhealthy', $2, 'firing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
                      ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
-                     DO UPDATE SET current_state = 'firing', fired_at = NOW(), last_notified_at = NOW()",
+                     DO UPDATE SET current_state = 'firing', fired_at = CURRENT_TIMESTAMP, last_notified_at = CURRENT_TIMESTAMP",
                 )
                 .bind(server_id)
                 .bind(name)
@@ -2007,7 +2007,7 @@ async fn check_escalations(pool: &SqlitePool) {
                 created_at, escalation_step_index, escalated_at \
          FROM alerts \
          WHERE status = 'firing' AND acknowledged_at IS NULL \
-           AND created_at > NOW() - INTERVAL '7 days' \
+           AND created_at > datetime('now', '-7 days') \
          ORDER BY COALESCE(escalated_at, created_at) ASC \
          LIMIT $1",
     )

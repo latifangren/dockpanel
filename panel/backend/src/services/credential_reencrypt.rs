@@ -264,7 +264,7 @@ async fn reencrypt_settings(pool: &SqlitePool, jwt_secret: &str) -> SubjectRepor
             Ok(None) => report.already_current += 1,
             Ok(Some(fresh)) => {
                 let res = sqlx::query(
-                    "UPDATE settings SET value = $1, updated_at = NOW() \
+                    "UPDATE settings SET value = $1, updated_at = CURRENT_TIMESTAMP \
                      WHERE key = $2 AND value = $3",
                 )
                     .bind(&fresh)
@@ -424,7 +424,7 @@ async fn reencrypt_vault_secrets(pool: &SqlitePool, jwt_secret: &str) -> Subject
                 // ciphertext read above catches the race the same way the
                 // other three sweeps do.
                 let res = sqlx::query(
-                    "UPDATE secrets SET encrypted_value = $1, updated_at = NOW() \
+                    "UPDATE secrets SET encrypted_value = $1, updated_at = CURRENT_TIMESTAMP \
                      WHERE id = $2 AND encrypted_value = $3",
                 )
                 .bind(&fresh)

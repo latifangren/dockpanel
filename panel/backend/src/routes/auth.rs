@@ -608,7 +608,7 @@ pub async fn revoke_all_user_sessions(state: &AppState, user_id: uuid::Uuid) {
     }
     for (jti,) in &sessions {
         let _ = sqlx::query(
-            "INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING",
+            "INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, datetime('now', '+2 hours')) ON CONFLICT DO NOTHING",
         )
         .bind(jti)
         .execute(&state.db)
@@ -629,7 +629,7 @@ pub async fn logout(
             blacklist.insert(jti.clone());
             drop(blacklist);
             // GAP 66: Persist to DB (survives restart)
-            let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING")
+            let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, datetime('now', '+2 hours')) ON CONFLICT DO NOTHING")
                 .bind(&jti).execute(&state.db).await;
             // Remove session record
             let _ = sqlx::query("DELETE FROM user_sessions WHERE jti = $1")
@@ -781,7 +781,7 @@ pub async fn register(
         // No SMTP configured — auto-verify for self-hosted convenience
         tracing::info!("SMTP not configured — auto-verifying {}", body.email);
         sqlx::query(
-            "UPDATE users SET email_verified = TRUE, email_token = NULL, updated_at = NOW() WHERE id = $1",
+            "UPDATE users SET email_verified = TRUE, email_token = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
         )
         .bind(user.id)
         .execute(&state.db)
@@ -880,7 +880,7 @@ pub async fn verify_email(
     let token_hash = hash_token(&body.token);
 
     let result = sqlx::query(
-        "UPDATE users SET email_verified = TRUE, email_token = NULL, updated_at = NOW() \
+        "UPDATE users SET email_verified = TRUE, email_token = NULL, updated_at = CURRENT_TIMESTAMP \
          WHERE email_token = $1 AND email_verified = FALSE",
     )
     .bind(&token_hash)
@@ -957,7 +957,7 @@ pub async fn forgot_password(
     let expires = chrono::Utc::now() + chrono::Duration::hours(1);
 
     sqlx::query(
-        "UPDATE users SET reset_token = $1, reset_expires = $2, updated_at = NOW() WHERE id = $3",
+        "UPDATE users SET reset_token = $1, reset_expires = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3",
     )
     .bind(&token_hash)
     .bind(expires)
@@ -1043,7 +1043,7 @@ pub async fn reset_password(
 
     sqlx::query(
         "UPDATE users SET password_hash = $1, reset_token = NULL, reset_expires = NULL, \
-         email_verified = TRUE, updated_at = NOW() WHERE id = $2",
+         email_verified = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
     )
     .bind(&hash)
     .bind(user.id)
@@ -1068,7 +1068,7 @@ pub async fn reset_password(
         drop(blacklist);
         // Persist to DB so blacklist survives restart
         for (jti,) in &all_sessions {
-            let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING")
+            let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, datetime('now', '+2 hours')) ON CONFLICT DO NOTHING")
                 .bind(jti).execute(&state.db).await;
         }
     }
@@ -1403,7 +1403,7 @@ pub async fn twofa_setup(
     let encrypted_secret = crate::services::secrets_crypto::encrypt_credential(&secret_base32, &state.config.jwt_secret)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
     sqlx::query(
-        "UPDATE users SET totp_secret = $1, updated_at = NOW() WHERE id = $2",
+        "UPDATE users SET totp_secret = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
     )
     .bind(&encrypted_secret)
     .bind(claims.sub)
@@ -1469,7 +1469,7 @@ pub async fn twofa_enable(
         .map_err(|e| internal_error("2FA enable", e))?;
 
     sqlx::query(
-        "UPDATE users SET totp_enabled = TRUE, recovery_codes = $1, updated_at = NOW() WHERE id = $2",
+        "UPDATE users SET totp_enabled = TRUE, recovery_codes = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
     )
     .bind(&hashed_json)
     .bind(claims.sub)
@@ -1648,7 +1648,7 @@ async fn try_recovery_code(
         let updated = serde_json::to_string(&remaining)
             .map_err(|e| internal_error("2FA verify", e))?;
 
-        sqlx::query("UPDATE users SET recovery_codes = $1, updated_at = NOW() WHERE id = $2")
+        sqlx::query("UPDATE users SET recovery_codes = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
             .bind(&updated)
             .bind(user.id)
             .execute(db)
@@ -1728,7 +1728,7 @@ pub async fn twofa_disable(
     twofa_rate_limit_clear(&state, claims.sub);
 
     sqlx::query(
-        "UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, recovery_codes = NULL, updated_at = NOW() WHERE id = $1",
+        "UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, recovery_codes = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
     )
     .bind(claims.sub)
     .execute(&state.db)
@@ -1822,7 +1822,7 @@ pub async fn twofa_regenerate_recovery_codes(
     let hashed_json = serde_json::to_string(&hashed_codes)
         .map_err(|e| internal_error("2FA recovery codes", e))?;
 
-    sqlx::query("UPDATE users SET recovery_codes = $1, updated_at = NOW() WHERE id = $2")
+    sqlx::query("UPDATE users SET recovery_codes = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
         .bind(&hashed_json)
         .bind(claims.sub)
         .execute(&state.db)
@@ -1941,7 +1941,7 @@ pub async fn change_password(
         .map_err(|e| internal_error("change password", e))?
         .to_string();
 
-    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
+    sqlx::query("UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
         .bind(&new_hash)
         .bind(claims.sub)
         .execute(&state.db)
@@ -1967,7 +1967,7 @@ pub async fn change_password(
             drop(blacklist);
             // Persist to DB so blacklist survives restart
             for (jti,) in &other_sessions {
-                let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING")
+                let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, datetime('now', '+2 hours')) ON CONFLICT DO NOTHING")
                     .bind(jti).execute(&state.db).await;
             }
         }
@@ -1996,8 +1996,8 @@ pub async fn revoke_all_sessions(
     let now = chrono::Utc::now();
     // Store a timestamp marker — auth middleware checks this to invalidate older tokens
     sqlx::query(
-        "INSERT INTO settings (key, value, updated_at) VALUES ('sessions_revoked_at', $1, NOW()) \
-         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+        "INSERT INTO settings (key, value, updated_at) VALUES ('sessions_revoked_at', $1, CURRENT_TIMESTAMP) \
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP",
     )
     .bind(now.to_rfc3339())
     .execute(&state.db)
@@ -2087,7 +2087,7 @@ pub async fn revoke_session(
         drop(blacklist);
 
         // GAP 66: Persist to DB (survives restart)
-        let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING")
+        let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, datetime('now', '+2 hours')) ON CONFLICT DO NOTHING")
             .bind(&jti).execute(&state.db).await;
 
         // Delete session record

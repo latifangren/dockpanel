@@ -56,7 +56,7 @@ pub async fn list(
 
     let users: Vec<UserResponse> = sqlx::query_as(
         "SELECT u.id, u.email, u.role, u.created_at, \
-         0::bigint as site_count, \
+         0 as site_count, \
          u.totp_enabled \
          FROM users u ORDER BY u.created_at ASC",
     )
@@ -268,7 +268,7 @@ pub async fn update(
         if role_changed {
             let res = sqlx::query(
                 "UPDATE users SET role = $1, \
-                 updated_at = NOW() \
+                 updated_at = CURRENT_TIMESTAMP \
                  WHERE id = $2 \
                    AND ($1 = 'admin' OR role <> 'admin' OR (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1)",
             )
@@ -303,7 +303,7 @@ pub async fn update(
             .map_err(|e| internal_error("update users", e))?
             .to_string();
 
-        sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
+        sqlx::query("UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
             .bind(&hash)
             .bind(id)
             .execute(&state.db)
@@ -469,7 +469,7 @@ pub async fn reset_password(
         .to_string();
 
     // Update password
-    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
+    sqlx::query("UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
         .bind(&hash)
         .bind(id)
         .execute(&state.db)
@@ -553,7 +553,7 @@ pub async fn reset_2fa(
     }
 
     sqlx::query(
-        "UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, recovery_codes = NULL, updated_at = NOW() WHERE id = $1",
+        "UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, recovery_codes = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
     )
     .bind(id)
     .execute(&state.db)

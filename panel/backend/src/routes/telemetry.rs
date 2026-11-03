@@ -151,7 +151,7 @@ pub async fn stats(
 
     // Recent events (last 24h)
     let recent: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM telemetry_events WHERE created_at > NOW() - INTERVAL '24 hours'",
+        "SELECT COUNT(*) FROM telemetry_events WHERE created_at > datetime('now', '-24 hours')",
     )
     .fetch_one(&state.db)
     .await

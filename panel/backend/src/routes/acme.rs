@@ -234,7 +234,7 @@ pub async fn set_contact_email(
                 .map_err(|msg| err(StatusCode::BAD_REQUEST, &msg))?;
             sqlx::query(
                 "INSERT INTO settings (key, value) VALUES ('acme_contact_email', $1) \
-                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP",
             )
             .bind(e)
             .execute(&state.db)
@@ -276,7 +276,7 @@ pub async fn set_default_profile(
         Some(p) if !p.is_empty() => {
             sqlx::query(
                 "INSERT INTO settings (key, value) VALUES ('acme_default_profile', $1) \
-                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP",
             )
             .bind(p)
             .execute(&state.db)
