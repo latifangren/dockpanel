@@ -15,7 +15,7 @@ description="AList file manager"
 
 command="/usr/local/bin/alist"
 command_args="server --data /var/lib/alist"
-command_background=true
+supervisor="supervise-daemon"
 directory="/var/lib/alist"
 pidfile="/run/alist.pid"
 output_log="/var/log/alist.log"

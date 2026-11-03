@@ -1249,9 +1249,13 @@ download_binaries() {
     # Stop running services before overwriting their binaries. Re-running the
     # installer with services active causes `curl -o` to fail with "Text file
     # busy" (exit 23) because Linux refuses to overwrite a running executable.
-    # systemctl stop is a no-op if the unit is inactive or missing.
+    # systemctl / rc-service stop is a no-op if the unit is inactive or missing.
     if command -v systemctl >/dev/null 2>&1; then
         systemctl stop dockpanel-api dockpanel-agent 2>/dev/null || true
+    fi
+    if command -v rc-service >/dev/null 2>&1; then
+        rc-service dockpanel-api stop 2>/dev/null || true
+        rc-service dockpanel-agent stop 2>/dev/null || true
     fi
 
     fetch_asset "dockpanel-agent-linux-${DL_ARCH}" "$AGENT_BIN"
@@ -1356,6 +1360,10 @@ build_binaries() {
     # download_binaries — same "Text file busy" trap).
     if command -v systemctl >/dev/null 2>&1; then
         systemctl stop dockpanel-api dockpanel-agent 2>/dev/null || true
+    fi
+    if command -v rc-service >/dev/null 2>&1; then
+        rc-service dockpanel-api stop 2>/dev/null || true
+        rc-service dockpanel-agent stop 2>/dev/null || true
     fi
 
     # Build agent

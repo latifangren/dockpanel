@@ -53,12 +53,9 @@ jobs:
 
           ---
 
-          **Install:** `curl -sL dockpanel.dev/install.sh | bash`
+          **Install:** `curl -sL https://raw.githubusercontent.com/latifangren/dockpanel/dev-muse-alpine/scripts/install.sh | bash`
 
-          Every release is installed on a throwaway VPS and driven as a user before
-          it ships. What that means, and what it has found, is written up at
-          <https://docs.dockpanel.dev/testing.html>.
-
+          DockPanel Lite for postmarketOS (Alpine Linux) — CasaOS-style edge dashboard for low-resource devices.
           Binaries are static musl builds signed with Sigstore; `checksums.txt`
           and the `.sig`/`.pem` pairs are attached below.
           FOOTER
@@ -212,7 +209,7 @@ jobs:
         run: |
           cd panel/frontend
           npm ci
-          npx vite build
+          npm run build
 
       - name: Package frontend
         run: |

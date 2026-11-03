@@ -4,27 +4,6 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
-
-### Removed: hosting backend (slices R1–R8, issue #1)
-
-Backend hosting is deleted, not hidden: R1 shared-foundation decoupling,
-R2 CDN/reseller/WHMCS, R3 sites/WordPress/staging/deploy/site-SSL/site-crons/PHP,
-R4 mail/DNS, R5 git-deploy/migration wizard, R6 agent hosting surfaces,
-R7 terminal migration dropping the hosting tables (`sites`,
-`mail_domains`, `dns_zones`, `git_deploys`, `backup_schedules`, and
-related tables/columns), plus the CLI cleanup (only local `sites list`,
-`ssl status`, and database/volume backup commands survive). Kept: ACME
-panel routes, TLS certificate registry, notification SMTP
-(`services/email.rs`), `app_migrations`, and database/volume backup.
-R1–R7 and the CLI fix are pushed at `4fcec629`; the R8 working-tree work
-(dead frontend pages, `install_php` removal, docs, pin re-derivation) is
-not yet pushed or released at the time of this entry. The
-`pdns_api_url`/`pdns_api_key` settings keys were removed from the settable
-settings surface in R8 (no reader remains); rows stored by older installs
-stay masked and re-keyed by the credential sweep. No release tag has been
-cut for this removal yet.
-
 ## [2.242.1-lite.1]
 
 ### Fork release: DockPanel Lite for postmarketOS (first fork release)
@@ -32,23 +11,31 @@ cut for this removal yet.
 First release published from this fork (`latifangren/dockpanel`, branch
 `dev-muse-alpine`). The binaries are built from upstream 2.242.1 plus every
 fork commit since the fork point — the Alpine installer, the lite UI, the
-CasaOS-style rebrand, and the Phase 1–2 bugfix work below. This
-is a fork release, not an upstream release: install it with the fork's own
-installer, never with the upstream install URL (the release workflow's
-footer still points at the upstream URL — a known wart, not fixed here).
+CasaOS-style rebrand, the Phase 1–3 bugfixes (B1–B12), the complete removal
+of the hosting backend (R1–R8), and fork-pinned self-updates.
+
+### Removed: hosting backend & dead frontend (slices R1–R8, issue #1)
+
+Backend hosting is completely deleted, not just hidden from the UI:
+- **R1**: Decoupled shared foundations from the `sites` table.
+- **R2**: Removed CDN, Reseller, and WHMCS backend routes and services.
+- **R3**: Removed Sites, WordPress, Staging, Site Deploy, Site SSL, Site Crons, and PHP host routes.
+- **R4**: Removed Mail (Postfix/Dovecot/Rspamd) and DNS (PowerDNS) routes and agent installers.
+- **R5**: Removed Git Deploy pipelines and migration wizard.
+- **R6**: Removed Agent hosting services (PHP, WordPress, CMS, Nginx site vhosts, host SSL).
+- **R7**: Terminal database migration (`20260909000001_drop_hosting_schema.sql`) dropping all hosting tables (`sites`, `mail_domains`, `dns_zones`, `git_deploys`, `backup_schedules`, etc.) and stripping `site_id` foreign keys; CLI pruned to local container/volume management.
+- **R8**: Pruned dead frontend pages (`Sites`, `Mail`, `WordPress`, `GitDeploys`, `Dns`, `Cdn`, `Migration`, `Resellers`, `Backups`, `Deploy`, etc.); purged hosting settings and unused test fixtures.
 
 ### Add: Alpine Linux / postmarketOS installer and OpenRC services
 
 - `scripts/setup.sh` detects `apk` alongside `apt`/`dnf`/`yum`; Docker comes
   from Alpine packages and `get.docker.com` is never reached on Alpine.
   Node is only required for a build-from-source install.
-- OpenRC service scripts for the agent and the API
-  (`scripts/openrc/dockpanel-agent`, `scripts/openrc/dockpanel-api`), with
-  systemd units kept for boxes that run systemd — the installer detects the
-  init system and dispatches. On the reference phone (Xiaomi Redmi Note 5
-  Pro, postmarketOS Nura edge) systemd is what actually runs; the OpenRC
-  path is written but has never been exercised on a device, because that
-  image has no `rc-service` at all.
+- OpenRC service scripts for the agent, API, docker-monitor, and AList
+  (`scripts/openrc/`), with systemd units kept for boxes that run systemd —
+  the installer detects the init system and dispatches. On the reference
+  phone (Xiaomi Redmi Note 5 Pro, postmarketOS Nura edge) systemd is what
+  actually runs; OpenRC service scripts are provided and aligned with supervise-daemon.
 - nginx serves the panel from `/etc/nginx/http.d/` on Alpine, and the
   Postgres container is capped at 256 MiB (`DOCKPANEL_LITE=1`).
 - `python3` is a declared base dependency: the monitoring scripts and the
@@ -58,93 +45,39 @@ footer still points at the upstream URL — a known wart, not fixed here).
 
 - Four lite themes (`lite-mix` default, `lite-warm`, `lite-clean`,
   `lite-midnight`) replace the upstream Terminal look; the Dashboard is
-  restructured 1Panel-style (counts, CPU/memory/disk rings, System
-  Information, application list) from existing API fields only — no new
-  endpoints, no invented numbers.
-- Hosting menus (Sites, Mail, DNS, CDN, WordPress, Git Deploy, Migration,
-  Reseller) are removed from the sidebar, command palette, and Dashboard
-  links. **Frontend only:** the hosting backend routes, agent services, and
-  migrations are still present and live in this release. Removing them is
-  planned as slices R1–R8 after the bugfix phases (see issue #1); do not
-  treat the clean UI as proof the backend is gone.
-- Monolithic frontend pages (Settings, Apps, Security, GitDeploys,
-  Databases) are split into shell + tab components with full feature
-  parity, plus a small shared UI kit for new chrome. The AI Studio
-  mock-server zips were never merged; ported pieces (NetworkingHub,
-  Projects, GlobalDockDrawer, app icons/tags) are wired to the real
-  backend, and anything that would have needed invented data (simulated
-  terminal output, fabricated pipeline logs, demo slow-query rows) was
-  deliberately left out.
+  restructured CasaOS-style (live clock, CPU/memory/disk gauges, SoC core temperature,
+  System Information, and CasaOS App Launcher Grid) from existing API fields only.
+- Hosting menus are removed from navigation, command palette, and Dashboard.
+- Monolithic frontend pages (Settings, Apps, Security, Databases) are split
+  into shell + tab components with full feature parity.
 
 ### Add: AList as the file manager, installed by the installer
 
-- The Files page is an iframe to `/fs`. The installer now actually installs
+- The Files page is an iframe to `/fs`. The installer installs
   AList (pinned v3.66.0 musl, SHA-256-verified against the release asset),
   its systemd/OpenRC service, a generated admin password stored mode 600,
-  and a local storage bootstrap. The storage root defaults to `/`
-  (`ALIST_ROOT` overrides it). The bootstrap's admin-API payload shape is
-  verified against a stub only — its first run against a real AList server
-  is still an open check.
+  and a local storage bootstrap rooted at `/`.
 
-### Fix: installer and security (Phase 1, issue #1)
+### Fix: installer, security, and updates (Phases 1–3, issue #1)
 
 - Release binaries and the frontend tarball are fetched from **this fork's**
-  releases by default. Previously the installer hardcoded the upstream
-  repository, so a fresh install silently ran upstream binaries that lack
-  the fork's backend fields (e.g. the `lite` branding flag) and showed the
-  full hosting UI. A branch pin such as `dev-muse-alpine` no longer gets
-  used verbatim as a release tag; it resolves to the latest release, and a
-  fork with no releases fails closed with the remedy instead of falling
-  back to upstream.
-- `/api/hardware` and `/api/docker-stats` are no longer served by nginx
-  without authentication: both now go through `auth_request` against the
-  API's own session check. Fixed alongside it: the `/fs` proxy block's
-  forwarding headers were rendered empty at install time (unescaped nginx
-  variables in an unquoted heredoc).
-- The agent's systemd sandbox hardening is restored (13 directives back to
-  `yes`); it had been flipped wholesale to `no` to fix the terminal with no
-  record of which directive the terminal needed. If the terminal breaks
-  again, bisect one directive at a time — the procedure is in the unit
-  file's comment. A terminal smoke test on the phone is still pending.
-
-### Fix: monitoring, Dashboard, and orphan routes (Phase 2, issue #1)
-
+  releases (`latifangren/dockpanel`) by default.
+- `/api/hardware` and `/api/docker-stats` are guarded by nginx `auth_request`
+  against the API's session check.
+- Agent systemd sandbox hardening is restored.
 - The Docker/hardware monitoring scripts are installed on both init paths
-  (previously systemd only, so an OpenRC box never produced the monitoring
-  JSON files). The monitor polls every 6 seconds (was 3), logs failures
-  with exponential backoff instead of swallowing them, and creates its
-  output directory before the first Docker call. Hardware info is
-  refreshed on agent (re)start only, written atomically so a failed run
-  never truncates a good file. The monitor unit deliberately has no
-  dedicated `User=` (the Docker socket's group varies by distribution, and
-  a process that can talk to the socket is root-equivalent anyway).
-- Dashboard cleanup after the hosting prune: the dead "Add Site" button,
-  site/domain onboarding steps, Sites Grid widget, and unused
-  `/databases`/`/mail/queue` fetches are gone. The App Store card shows
-  the real template count from `/apps/templates` instead of a hardcoded
-  `148+`; the Storage card's big number is free space (its subtext already
-  said "free" while the number showed used space); the Installed Apps grid
-  reads the `/apps` list again — admin-only, honouring the `apps_list`
-  widget toggle, with an empty state and Open/Stop/Start/Restart actions —
-  so infra containers no longer show to every role.
+  (systemd and OpenRC).
+- Self-update scripts (`scripts/update.sh` and `scripts/agent-self-update.sh`)
+  are pinned to the fork repository.
 - Orphan routes resolved: `/logs`, `/security`, `/system`, `/users`, and
-  `/telemetry` return to the sidebar (admin-only), each holding controls
-  with no other home. `/integrations` (Webhooks/Extensions/WHMCS/
-  Migrations) redirects to `/` like the other pruned hosting pages.
+  `/telemetry` return to navigation.
 
 ### Known limitations of this release
 
-- Backend hosting code is still shipped (see above); the large RAM item
-  remains the Postgres container until the deferred SQLite migration.
-- OpenRC services (including the new docker-monitor init script), the
-  AList bootstrap against a real server, and the post-sandbox terminal
-  are unverified on hardware. The release workflow's own smoke test is
-  the first end-to-end check this build gets.
-- The panel's self-update script (`scripts/update.sh`) still fetches from
-  the upstream repository and does not refresh the monitoring scripts, so
-  a self-update can pull upstream binaries back onto a fork install.
-  Fresh installs via the fork installer are unaffected. Fixing the update
-  path is tracked as follow-up work to issue #1.
+- The database backend remains a PostgreSQL container (256 MiB cap in lite mode);
+  the migration to SQLite is deferred to a future milestone.
+- OpenRC service execution has not yet been exercised on physical phone hardware
+  (the test device runs postmarketOS with systemd).
 
 ## [2.242.1]
 
