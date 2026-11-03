@@ -135,10 +135,10 @@ jobs:
             # default ("Release file ... is expired"), which no retry count fixes.
             # Point bullseye to archive.debian.org where its packages and security pool reside.
             if [ -f /etc/os-release ] && grep -q 'VERSION_CODENAME=bullseye' /etc/os-release; then
-              cat > /etc/apt/sources.list <<'SOURCES'
-deb http://archive.debian.org/debian bullseye main contrib non-free
-deb http://archive.debian.org/debian-security bullseye-security main contrib non-free
-SOURCES
+              printf '%s\n%s\n' \
+                "deb http://archive.debian.org/debian bullseye main contrib non-free" \
+                "deb http://archive.debian.org/debian-security bullseye-security main contrib non-free" \
+                > /etc/apt/sources.list
             fi
             apt-get update -qq -o Acquire::Check-Valid-Until=false
             DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Acquire::Check-Valid-Until=false curl ca-certificates file >/dev/null
