@@ -4,7 +4,7 @@
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE users (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'admin',
@@ -30,8 +30,8 @@ CREATE TABLE users (
 );
 
 CREATE TABLE servers (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   ip_address TEXT,
   agent_token TEXT NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE servers (
   cpu_usage REAL,
   mem_used_mb INTEGER,
   uptime_secs INTEGER,
-  team_id TEXT REFERENCES teams(id) ON DELETE SET NULL,
+  team_id BLOB REFERENCES teams(id) ON DELETE SET NULL,
   disk_used_gb INTEGER,
   disk_usage_pct REAL,
   mem_usage_pct REAL,
@@ -57,8 +57,8 @@ CREATE TABLE servers (
 );
 
 CREATE TABLE activity_logs (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL,
   user_email TEXT NOT NULL,
   action TEXT NOT NULL,
   target_type TEXT,
@@ -66,13 +66,13 @@ CREATE TABLE activity_logs (
   details TEXT,
   ip_address TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
-  api_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
+  api_key_id BLOB REFERENCES api_keys(id) ON DELETE SET NULL
 );
 
 CREATE TABLE agent_commands (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  server_id BLOB NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   action TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'pending',
@@ -83,9 +83,9 @@ CREATE TABLE agent_commands (
 );
 
 CREATE TABLE alert_rules (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE,
   cpu_threshold INTEGER NOT NULL DEFAULT 90,
   cpu_duration INTEGER NOT NULL DEFAULT 5,
   memory_threshold INTEGER NOT NULL DEFAULT 90,
@@ -113,7 +113,7 @@ CREATE TABLE alert_rules (
   gpu_temp_threshold INTEGER NOT NULL DEFAULT 85,
   gpu_vram_threshold INTEGER NOT NULL DEFAULT 95,
   alert_gpu INTEGER NOT NULL DEFAULT 1,
-  escalation_policy_id TEXT NULL
+  escalation_policy_id BLOB NULL
         REFERENCES escalation_policies(id) ON DELETE SET NULL,
   UNIQUE(user_id, server_id)
 );
@@ -122,13 +122,13 @@ CREATE TABLE alert_runbooks (
   alert_type TEXT PRIMARY KEY,
   runbook_md TEXT NOT NULL,
   severity_default TEXT NOT NULL CHECK (severity_default IN ('info', 'warning', 'critical')),
-  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BLOB REFERENCES users(id) ON DELETE SET NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE alert_state (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE,
   alert_type TEXT NOT NULL,
   state_key TEXT NOT NULL DEFAULT '',
   current_state TEXT NOT NULL DEFAULT 'ok',
@@ -139,9 +139,9 @@ CREATE TABLE alert_state (
 );
 
 CREATE TABLE alerts (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
   alert_type TEXT NOT NULL,
   severity TEXT NOT NULL DEFAULT 'warning',
   title TEXT NOT NULL,
@@ -160,8 +160,8 @@ CREATE TABLE alerts (
 );
 
 CREATE TABLE api_keys (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   key_hash TEXT NOT NULL,
   key_prefix TEXT NOT NULL,
@@ -171,11 +171,11 @@ CREATE TABLE api_keys (
 );
 
 CREATE TABLE app_migrations (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   container_id TEXT NOT NULL,
   container_name TEXT NOT NULL,
-  source_server_id TEXT NOT NULL REFERENCES servers(id),
-  target_server_id TEXT NOT NULL REFERENCES servers(id),
+  source_server_id BLOB NOT NULL REFERENCES servers(id),
+  target_server_id BLOB NOT NULL REFERENCES servers(id),
   status TEXT NOT NULL DEFAULT 'pending',
   progress_pct INTEGER NOT NULL DEFAULT 0,
   error_message TEXT,
@@ -185,7 +185,7 @@ CREATE TABLE app_migrations (
 );
 
 CREATE TABLE autoscale_rules (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   container_id TEXT NOT NULL,
   container_name TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
@@ -201,23 +201,23 @@ CREATE TABLE autoscale_rules (
 );
 
 CREATE TABLE backup_destinations (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   name TEXT NOT NULL,
   dtype TEXT NOT NULL CHECK (dtype IN ('s3', 'sftp')),
   config TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
   encryption_enabled INTEGER NOT NULL DEFAULT 0,
   encryption_key TEXT
 );
 
 CREATE TABLE backup_drills (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   backup_type TEXT NOT NULL,
-  backup_id TEXT NOT NULL,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
-  triggered_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  backup_id BLOB NOT NULL,
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
+  triggered_by BLOB REFERENCES users(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   http_status INTEGER,
   body_excerpt TEXT,
@@ -229,14 +229,14 @@ CREATE TABLE backup_drills (
 );
 
 CREATE TABLE backup_policies (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   backup_databases INTEGER NOT NULL DEFAULT 1,
   backup_volumes INTEGER NOT NULL DEFAULT 0,
   schedule TEXT NOT NULL DEFAULT '0 2 * * *',
-  destination_id TEXT REFERENCES backup_destinations(id) ON DELETE SET NULL,
+  destination_id BLOB REFERENCES backup_destinations(id) ON DELETE SET NULL,
   retention_count INTEGER NOT NULL DEFAULT 7 CHECK (retention_count BETWEEN 1 AND 365),
   encrypt INTEGER NOT NULL DEFAULT 0,
   verify_after_backup INTEGER NOT NULL DEFAULT 0,
@@ -251,10 +251,10 @@ CREATE TABLE backup_policies (
 );
 
 CREATE TABLE backup_verifications (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   backup_type TEXT NOT NULL,
-  backup_id TEXT NOT NULL,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
+  backup_id BLOB NOT NULL,
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   details TEXT NOT NULL DEFAULT '{}',
   error_message TEXT,
@@ -267,22 +267,22 @@ CREATE TABLE backup_verifications (
 );
 
 CREATE TABLE backups (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   filename TEXT NOT NULL,
   size_bytes INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   sha256_hash TEXT,
   previous_hash TEXT,
   chain_valid INTEGER DEFAULT 1,
-  destination_id TEXT REFERENCES backup_destinations(id) ON DELETE SET NULL,
+  destination_id BLOB REFERENCES backup_destinations(id) ON DELETE SET NULL,
   uploaded INTEGER NOT NULL DEFAULT 0,
   databases_included INTEGER NOT NULL DEFAULT 0,
   databases_expected INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE container_expected_stops (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  server_id BLOB NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   container_name TEXT NOT NULL,
   reason TEXT NOT NULL,
   actor_email TEXT,
@@ -291,8 +291,8 @@ CREATE TABLE container_expected_stops (
 );
 
 CREATE TABLE container_policies (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
   max_containers INTEGER NOT NULL DEFAULT 10,
   max_memory_mb INTEGER NOT NULL DEFAULT 4096,
   max_cpu_percent INTEGER NOT NULL DEFAULT 400,
@@ -303,7 +303,7 @@ CREATE TABLE container_policies (
 );
 
 CREATE TABLE container_sleep_config (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   container_id TEXT NOT NULL UNIQUE,
   container_name TEXT NOT NULL,
   domain TEXT,
@@ -317,20 +317,20 @@ CREATE TABLE container_sleep_config (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   gpu_enabled INTEGER NOT NULL DEFAULT 0,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE
 );
 
 CREATE TABLE database_backups (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  database_id TEXT NOT NULL REFERENCES databases(id) ON DELETE CASCADE,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  database_id BLOB NOT NULL REFERENCES databases(id) ON DELETE CASCADE,
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
   filename TEXT NOT NULL,
   size_bytes INTEGER NOT NULL DEFAULT 0,
   db_type TEXT NOT NULL,
   db_name TEXT NOT NULL,
   encrypted INTEGER NOT NULL DEFAULT 0,
-  policy_id TEXT REFERENCES backup_policies(id) ON DELETE SET NULL,
-  destination_id TEXT REFERENCES backup_destinations(id) ON DELETE SET NULL,
+  policy_id BLOB REFERENCES backup_policies(id) ON DELETE SET NULL,
+  destination_id BLOB REFERENCES backup_destinations(id) ON DELETE SET NULL,
   uploaded INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   sha256_hash TEXT,
@@ -340,7 +340,7 @@ CREATE TABLE database_backups (
 );
 
 CREATE TABLE databases (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   name TEXT NOT NULL UNIQUE,
   engine TEXT NOT NULL DEFAULT 'postgres',
   db_user TEXT NOT NULL,
@@ -348,14 +348,14 @@ CREATE TABLE databases (
   container_id TEXT,
   port INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  stack_id TEXT REFERENCES docker_stacks(id) ON DELETE CASCADE,
-  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE
+  stack_id BLOB REFERENCES docker_stacks(id) ON DELETE CASCADE,
+  user_id BLOB REFERENCES users(id) ON DELETE CASCADE,
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE
 );
 
 CREATE TABLE db_pitr_config (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  database_id TEXT NOT NULL REFERENCES databases(id) ON DELETE CASCADE UNIQUE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  database_id BLOB NOT NULL REFERENCES databases(id) ON DELETE CASCADE UNIQUE,
   pitr_enabled INTEGER NOT NULL DEFAULT 0,
   retention_hours INTEGER NOT NULL DEFAULT 24,
   last_backup_at TEXT,
@@ -366,9 +366,9 @@ CREATE TABLE db_pitr_config (
 );
 
 CREATE TABLE docker_app_domains (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id)   ON DELETE CASCADE,
-  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id)   ON DELETE CASCADE,
+  server_id BLOB NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   app_name TEXT NOT NULL,
   domain TEXT NOT NULL,
   ssl_email TEXT,
@@ -379,33 +379,33 @@ CREATE TABLE docker_app_domains (
 );
 
 CREATE TABLE docker_stacks (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   yaml TEXT NOT NULL,
   service_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE,
   domain TEXT,
   ssl_email TEXT,
   tls_mode TEXT CHECK (tls_mode IN ('none', 'acme', 'provided')),
-  tls_certificate_id TEXT REFERENCES tls_certificates(id) ON DELETE SET NULL,
+  tls_certificate_id BLOB REFERENCES tls_certificates(id) ON DELETE SET NULL,
   ssl_expiry TEXT
 );
 
 CREATE TABLE escalation_policies (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   name TEXT NOT NULL,
   steps TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  user_id TEXT REFERENCES users(id) ON DELETE CASCADE
+  user_id BLOB REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE extension_events (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  extension_id TEXT NOT NULL REFERENCES extensions(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  extension_id BLOB NOT NULL REFERENCES extensions(id) ON DELETE CASCADE,
   event_type TEXT NOT NULL,
   payload TEXT NOT NULL,
   response_status INTEGER,
@@ -415,8 +415,8 @@ CREATE TABLE extension_events (
 );
 
 CREATE TABLE extensions (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   author TEXT NOT NULL DEFAULT '',
@@ -435,8 +435,8 @@ CREATE TABLE extensions (
 );
 
 CREATE TABLE file_integrity_baselines (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE,
   file_path TEXT NOT NULL,
   sha256_hash TEXT NOT NULL,
   file_size INTEGER NOT NULL,
@@ -445,13 +445,13 @@ CREATE TABLE file_integrity_baselines (
 );
 
 CREATE TABLE fleet_update_runs (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   target_version TEXT NOT NULL,
   plan TEXT NOT NULL,
   progress TEXT NOT NULL DEFAULT '[]',
   halt_on_failure INTEGER NOT NULL DEFAULT 1,
   include_panel INTEGER NOT NULL DEFAULT 0,
-  started_by TEXT NULL REFERENCES users(id) ON DELETE SET NULL,
+  started_by BLOB NULL REFERENCES users(id) ON DELETE SET NULL,
   started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   finished_at TEXT NULL,
   outcome TEXT NULL
@@ -465,13 +465,13 @@ CREATE TABLE gpu_metrics_history (
   memory_total_mb REAL NOT NULL,
   temperature_c REAL,
   power_draw_w REAL,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE iac_tokens (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   token_hash TEXT NOT NULL UNIQUE,
   scopes TEXT NOT NULL DEFAULT 'sites,databases,dns',
@@ -484,11 +484,11 @@ CREATE TABLE image_sbom (
   format TEXT NOT NULL DEFAULT 'spdx-TEXT',
   spdx TEXT NOT NULL,
   generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE
 );
 
 CREATE TABLE image_scan_findings (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   image TEXT NOT NULL,
   scanner TEXT NOT NULL DEFAULT 'grype',
   critical_count INTEGER NOT NULL DEFAULT 0,
@@ -498,12 +498,12 @@ CREATE TABLE image_scan_findings (
   unknown_count INTEGER NOT NULL DEFAULT 0,
   vulnerabilities TEXT NOT NULL DEFAULT '[]',
   scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE
 );
 
 CREATE TABLE incident_updates (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  incident_id TEXT NOT NULL REFERENCES managed_incidents(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  incident_id BLOB NOT NULL REFERENCES managed_incidents(id) ON DELETE CASCADE,
   status TEXT NOT NULL,
   message TEXT NOT NULL,
   author_email TEXT,
@@ -511,8 +511,8 @@ CREATE TABLE incident_updates (
 );
 
 CREATE TABLE incidents (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  monitor_id BLOB NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
   started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resolved_at TEXT,
   cause TEXT,
@@ -522,7 +522,7 @@ CREATE TABLE incidents (
 CREATE TABLE lockdown_state (
   id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   active INTEGER NOT NULL DEFAULT 0,
-  triggered_by TEXT,
+  triggered_by BLOB,
   triggered_at TEXT,
   reason TEXT,
   terminals_disabled INTEGER DEFAULT 1,
@@ -533,8 +533,8 @@ CREATE TABLE lockdown_state (
 );
 
 CREATE TABLE maintenance_windows (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id),
   name TEXT NOT NULL,
   starts_at TEXT NOT NULL,
   ends_at TEXT NOT NULL,
@@ -543,14 +543,14 @@ CREATE TABLE maintenance_windows (
 );
 
 CREATE TABLE managed_incident_components (
-  incident_id TEXT NOT NULL REFERENCES managed_incidents(id) ON DELETE CASCADE,
-  component_id TEXT NOT NULL REFERENCES status_page_components(id) ON DELETE CASCADE,
+  incident_id BLOB NOT NULL REFERENCES managed_incidents(id) ON DELETE CASCADE,
+  component_id BLOB NOT NULL REFERENCES status_page_components(id) ON DELETE CASCADE,
   PRIMARY KEY (incident_id, component_id)
 );
 
 CREATE TABLE managed_incidents (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'investigating',
   severity TEXT NOT NULL DEFAULT 'major',
@@ -565,8 +565,8 @@ CREATE TABLE managed_incidents (
 );
 
 CREATE TABLE metrics (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  server_id BLOB NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   metric_type TEXT NOT NULL,
   value REAL NOT NULL,
   metadata TEXT,
@@ -579,12 +579,12 @@ CREATE TABLE metrics_history (
   mem_pct REAL NOT NULL,
   disk_pct REAL NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE
 );
 
 CREATE TABLE monitor_checks (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  monitor_id BLOB NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
   status_code INTEGER,
   response_time INTEGER,
   error TEXT,
@@ -592,8 +592,8 @@ CREATE TABLE monitor_checks (
 );
 
 CREATE TABLE monitors (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   url TEXT NOT NULL,
   name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
@@ -610,25 +610,25 @@ CREATE TABLE monitors (
   keyword TEXT,
   keyword_must_contain INTEGER NOT NULL DEFAULT 1,
   custom_headers TEXT,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
   heartbeat_token TEXT,
   check_interval INTEGER NOT NULL DEFAULT 60
 );
 
 CREATE TABLE on_call_schedules (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   name TEXT NOT NULL,
   members TEXT[] NOT NULL,
   cadence_days INTEGER NOT NULL CHECK (cadence_days BETWEEN 1 AND 90),
   anchor_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  user_id TEXT REFERENCES users(id) ON DELETE CASCADE
+  user_id BLOB REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE panel_notifications (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   message TEXT NOT NULL,
   severity TEXT NOT NULL DEFAULT 'info',
@@ -639,7 +639,7 @@ CREATE TABLE panel_notifications (
 );
 
 CREATE TABLE panel_snapshots (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   file_path TEXT NOT NULL,
   from_version TEXT NOT NULL,
   to_version TEXT,
@@ -652,8 +652,8 @@ CREATE TABLE panel_snapshots (
 );
 
 CREATE TABLE passkeys (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   credential_id TEXT NOT NULL UNIQUE,
   public_key_cbor BLOB NOT NULL,
   sign_count INTEGER NOT NULL DEFAULT 0,
@@ -665,18 +665,18 @@ CREATE TABLE passkeys (
 );
 
 CREATE TABLE secret_vaults (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE secret_versions (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  secret_id TEXT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  secret_id BLOB NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
   version INTEGER NOT NULL,
   encrypted_value TEXT NOT NULL,
   changed_by TEXT,
@@ -685,22 +685,22 @@ CREATE TABLE secret_versions (
 );
 
 CREATE TABLE secrets (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  vault_id TEXT NOT NULL REFERENCES secret_vaults(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  vault_id BLOB NOT NULL REFERENCES secret_vaults(id) ON DELETE CASCADE,
   key TEXT NOT NULL,
   encrypted_value TEXT NOT NULL,
   description TEXT,
   secret_type TEXT NOT NULL DEFAULT 'env',
   auto_inject INTEGER NOT NULL DEFAULT 0,
   version INTEGER NOT NULL DEFAULT 1,
-  updated_by TEXT,
+  updated_by BLOB,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(vault_id, key)
 );
 
 CREATE TABLE security_audit_log (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   event_type TEXT NOT NULL,
   actor_email TEXT,
   actor_ip TEXT,
@@ -712,13 +712,13 @@ CREATE TABLE security_audit_log (
   geo_isp TEXT,
   severity TEXT DEFAULT 'info',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  api_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
-  actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+  api_key_id BLOB REFERENCES api_keys(id) ON DELETE SET NULL,
+  actor_user_id BLOB REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE security_findings (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  scan_id TEXT NOT NULL REFERENCES security_scans(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  scan_id BLOB NOT NULL REFERENCES security_scans(id) ON DELETE CASCADE,
   severity TEXT NOT NULL,
   title TEXT NOT NULL,
   description TEXT,
@@ -729,8 +729,8 @@ CREATE TABLE security_findings (
 );
 
 CREATE TABLE security_scans (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  server_id TEXT REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  server_id BLOB REFERENCES servers(id) ON DELETE CASCADE,
   scan_type TEXT NOT NULL DEFAULT 'full',
   status TEXT NOT NULL DEFAULT 'running',
   findings_count INTEGER NOT NULL DEFAULT 0,
@@ -749,14 +749,14 @@ CREATE TABLE settings (
 );
 
 CREATE TABLE status_page_component_monitors (
-  component_id TEXT NOT NULL REFERENCES status_page_components(id) ON DELETE CASCADE,
-  monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+  component_id BLOB NOT NULL REFERENCES status_page_components(id) ON DELETE CASCADE,
+  monitor_id BLOB NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
   PRIMARY KEY (component_id, monitor_id)
 );
 
 CREATE TABLE status_page_components (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -766,8 +766,8 @@ CREATE TABLE status_page_components (
 );
 
 CREATE TABLE status_page_config (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL DEFAULT 'Service Status',
   description TEXT NOT NULL DEFAULT 'Current status of our services',
   logo_url TEXT,
@@ -783,19 +783,19 @@ CREATE TABLE status_page_config (
 );
 
 CREATE TABLE status_page_subscribers (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   email TEXT NOT NULL,
   verified INTEGER NOT NULL DEFAULT 0,
   verify_token TEXT,
   notify_incidents INTEGER NOT NULL DEFAULT 1,
   notify_maintenance INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  owner_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  owner_id BLOB REFERENCES users(id) ON DELETE CASCADE,
   UNIQUE(email)
 );
 
 CREATE TABLE suspicious_events (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   event_type TEXT NOT NULL,
   actor_email TEXT,
   actor_ip TEXT,
@@ -804,7 +804,7 @@ CREATE TABLE suspicious_events (
 );
 
 CREATE TABLE system_logs (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   level TEXT NOT NULL CHECK (level IN ('error', 'warning', 'info')),
   source TEXT NOT NULL,
   message TEXT NOT NULL,
@@ -813,8 +813,8 @@ CREATE TABLE system_logs (
 );
 
 CREATE TABLE team_invites (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  team_id BLOB NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   email TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'viewer',
   token TEXT NOT NULL,
@@ -823,23 +823,23 @@ CREATE TABLE team_invites (
 );
 
 CREATE TABLE team_members (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  team_id BLOB NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role TEXT NOT NULL DEFAULT 'viewer',
   joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(team_id, user_id)
 );
 
 CREATE TABLE teams (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   name TEXT NOT NULL,
-  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  owner_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE telemetry_events (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   event_type TEXT NOT NULL DEFAULT 'error',
   category TEXT NOT NULL DEFAULT 'general',
   message TEXT NOT NULL,
@@ -850,7 +850,7 @@ CREATE TABLE telemetry_events (
 );
 
 CREATE TABLE terminal_recordings (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   user_email TEXT NOT NULL,
   domain TEXT NOT NULL,
   filename TEXT NOT NULL,
@@ -862,9 +862,9 @@ CREATE TABLE terminal_recordings (
 );
 
 CREATE TABLE tls_certificates (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id)   ON DELETE CASCADE,
-  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id)   ON DELETE CASCADE,
+  server_id BLOB NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   alias TEXT NOT NULL,
   dns_names TEXT[] NOT NULL DEFAULT '{}',
   issuer TEXT,
@@ -884,8 +884,8 @@ CREATE TABLE token_blacklist (
 );
 
 CREATE TABLE user_sessions (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   jti TEXT NOT NULL UNIQUE,
   ip_address TEXT,
   user_agent TEXT,
@@ -894,16 +894,16 @@ CREATE TABLE user_sessions (
 );
 
 CREATE TABLE volume_backups (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
   container_id TEXT NOT NULL,
   container_name TEXT NOT NULL,
-  server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
+  server_id BLOB REFERENCES servers(id) ON DELETE SET NULL,
   volume_name TEXT NOT NULL,
   filename TEXT NOT NULL,
   size_bytes INTEGER NOT NULL DEFAULT 0,
   encrypted INTEGER NOT NULL DEFAULT 0,
-  policy_id TEXT REFERENCES backup_policies(id) ON DELETE SET NULL,
-  destination_id TEXT REFERENCES backup_destinations(id) ON DELETE SET NULL,
+  policy_id BLOB REFERENCES backup_policies(id) ON DELETE SET NULL,
+  destination_id BLOB REFERENCES backup_destinations(id) ON DELETE SET NULL,
   uploaded INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   sha256_hash TEXT,
@@ -912,8 +912,8 @@ CREATE TABLE volume_backups (
 );
 
 CREATE TABLE webhook_deliveries (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  endpoint_id TEXT NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  endpoint_id BLOB NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
   method TEXT NOT NULL DEFAULT 'POST',
   headers TEXT NOT NULL DEFAULT '{}',
   body TEXT,
@@ -928,8 +928,8 @@ CREATE TABLE webhook_deliveries (
 );
 
 CREATE TABLE webhook_endpoints (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  user_id BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
   token TEXT NOT NULL UNIQUE,
@@ -944,8 +944,8 @@ CREATE TABLE webhook_endpoints (
 );
 
 CREATE TABLE webhook_routes (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-  endpoint_id TEXT NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
+  id BLOB PRIMARY KEY DEFAULT (randomblob(16)),
+  endpoint_id BLOB NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   destination_url TEXT NOT NULL,
   filter_path TEXT,

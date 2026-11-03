@@ -661,3 +661,75 @@ async fn shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
         std::process::exit(1);
     });
 }
+
+
+#[cfg(test)]
+mod sqlite_uuid_test {
+    #[tokio::test]
+    async fn test_sqlite_uuid_blob_roundtrip() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE test_users (id BLOB PRIMARY KEY DEFAULT (randomblob(16)), name TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let generated_id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO test_users (name) VALUES ('alice') RETURNING id"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let row: (uuid::Uuid, String) = sqlx::query_as(
+            "SELECT id, name FROM test_users WHERE id = $1"
+        )
+        .bind(generated_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(row.0, generated_id);
+        assert_eq!(row.1, "alice");
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_full_migration_and_user_crud() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations_sqlite")
+            .run(&pool)
+            .await
+            .expect("Migrations must apply cleanly");
+
+        // 1. Insert user with auto-generated BLOB UUID
+        let user: (uuid::Uuid, String, String) = sqlx::query_as(
+            "INSERT INTO users (email, password_hash, role) VALUES ('admin@example.com', 'hash', 'admin') RETURNING id, email, role"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Insert user must succeed and return Uuid");
+
+        // 2. Query user back by UUID
+        let fetched: (uuid::Uuid, String) = sqlx::query_as(
+            "SELECT id, email FROM users WHERE id = $1"
+        )
+        .bind(user.0)
+        .fetch_one(&pool)
+        .await
+        .expect("Query user by UUID must match");
+
+        assert_eq!(fetched.0, user.0);
+        assert_eq!(fetched.1, "admin@example.com");
+
+        // 3. Insert server referencing user
+        let server: (uuid::Uuid, uuid::Uuid, String) = sqlx::query_as(
+            "INSERT INTO servers (user_id, name, agent_token) VALUES ($1, 'whyred', 'token123') RETURNING id, user_id, name"
+        )
+        .bind(user.0)
+        .fetch_one(&pool)
+        .await
+        .expect("Insert server with FK user_id must succeed");
+
+        assert_eq!(server.1, user.0);
+        assert_eq!(server.2, "whyred");
+    }
+}

@@ -15,6 +15,7 @@ Completely eliminates all PostgreSQL SQL syntax leftovers that broke background 
 - **Special SQL functions replaced**: Replaced `generate_series` in port allocation with pure in-memory search; replaced `PERCENTILE_CONT` with in-memory calculation; removed `FOR UPDATE` in SQLite transaction.
 - **Native SQLite backups**: Refactored DB auto-backup in `services::auto_healer` and `scripts/setup.sh` to use atomic SQLite `VACUUM INTO` and hot backups instead of `docker exec dockpanel-postgres pg_dump`.
 - **CI Test Gate**: Added `tests/sqlite-dialect-pin-e2e.sh` to prevent any PostgreSQL leftovers (`NOW()`, `INTERVAL '`, `::interval`, `pg_dump`, `dockpanel-postgres`) from entering backend code in future PRs or releases.
+- **UUID BLOB schema alignment (Issue #3)**: Changed UUID column declarations from TEXT to BLOB in SQLite schema (`20261001000000_init_sqlite.sql`) with `randomblob(16)` default generator, matching `sqlx-sqlite`'s native 16-byte BLOB encoding/decoding and eliminating decode length mismatch.
 
 ## [2.242.1-lite.2]
 

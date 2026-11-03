@@ -147,7 +147,7 @@ else
   bad "A7 the suspended-account check is missing from the API-key path"
 fi
 
-if has "$AAK_BODY" 'UPDATE api_keys SET last_used_at = NOW\(\) WHERE id = \$1'; then
+if has "$AAK_BODY" 'UPDATE api_keys SET last_used_at = (NOW\(\)|CURRENT_TIMESTAMP) WHERE id = \$1'; then
   ok "A8 last_used_at is updated on successful authentication"
 else
   bad "A8 last_used_at bookkeeping is missing"
