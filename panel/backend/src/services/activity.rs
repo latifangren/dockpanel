@@ -1,8 +1,8 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 pub async fn log_activity(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     user_email: &str,
     action: &str,
@@ -41,7 +41,7 @@ pub async fn log_activity(
 /// `log_activity` and leave the column NULL.
 #[allow(clippy::too_many_arguments)]
 pub async fn log_activity_on_server(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     user_email: &str,
     action: &str,
@@ -91,7 +91,7 @@ pub async fn log_activity_on_server(
 /// login address, or the name of the service acting.
 #[allow(clippy::too_many_arguments)]
 pub async fn log_activity_system(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_email: &str,
     action: &str,
     target_type: Option<&str>,
@@ -121,7 +121,7 @@ pub async fn log_activity_system(
 /// isn't one — rather than inventing a third answer out of a sentinel uuid.
 #[allow(clippy::too_many_arguments)]
 async fn write_row(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Option<Uuid>,
     user_email: &str,
     action: &str,

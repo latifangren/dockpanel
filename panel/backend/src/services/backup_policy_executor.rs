@@ -3,7 +3,7 @@
 //! died with the `sites` table in R7.)
 
 use chrono::{Datelike, Timelike};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::services::agent::{AgentHandle, AgentRegistry};
@@ -113,7 +113,7 @@ struct ResolvedDestination {
     payload: serde_json::Value,
 }
 
-async fn resolve_destination(db: &PgPool, policy: &PolicyRow) -> Option<ResolvedDestination> {
+async fn resolve_destination(db: &SqlitePool, policy: &PolicyRow) -> Option<ResolvedDestination> {
     let id = policy.destination_id?;
 
     let row: Result<Option<(String, serde_json::Value)>, _> =
@@ -211,7 +211,7 @@ async fn upload_to_destination(
 /// `server_id`, and reported success — with no failure path at all. s298's correctly
 /// scoped `auto_healer` then refused to prune those rows, because they claimed to
 /// belong to another host, so retention was enforced on nothing.
-pub async fn run(db: PgPool, agents: AgentRegistry, jwt_secret: String, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(db: SqlitePool, agents: AgentRegistry, jwt_secret: String, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Backup policy executor started");
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -231,7 +231,7 @@ pub async fn run(db: PgPool, agents: AgentRegistry, jwt_secret: String, mut shut
     }
 }
 
-async fn tick(db: &PgPool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(), String> {
+async fn tick(db: &SqlitePool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(), String> {
     let now = chrono::Utc::now();
 
     // Fetch all enabled policies
@@ -283,7 +283,7 @@ async fn tick(db: &PgPool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(
     Ok(())
 }
 
-async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow, jwt_secret: &str) {
+async fn execute_policy(db: &SqlitePool, agents: &AgentRegistry, policy: &PolicyRow, jwt_secret: &str) {
     let mut successes = 0;
     let mut failures = 0;
 

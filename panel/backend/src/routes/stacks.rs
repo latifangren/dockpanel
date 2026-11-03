@@ -118,7 +118,7 @@ impl TlsPlan {
 /// own `/apps/deploy` has accepted `tls_mode`/`tls_certificate` since
 /// `TlsIntent` was built, but nothing on the panel side ever sent them.
 pub(crate) async fn plan_tls(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     agent: &AgentHandle,
     mode: &'static str,
     domain: Option<&str>,
@@ -1150,7 +1150,7 @@ pub async fn update(
 /// address would put a provided-certificate stack back as plain HTTP.
 #[allow(clippy::too_many_arguments)]
 async fn restore_previous(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     server_id: Uuid,
     agent: &AgentHandle,
     id: Uuid,

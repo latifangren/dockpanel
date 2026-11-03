@@ -142,7 +142,7 @@ pub fn normalise(domain: &str) -> String {
 /// the unreachable host and the claim's target to be the SAME host, and in that
 /// case the vhost write immediately after this fails on its own.
 pub async fn ensure_claimable(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     agents: &crate::services::agent::AgentRegistry,
     domain: &str,
     headers: &HeaderMap,
@@ -186,7 +186,7 @@ pub async fn ensure_claimable(
 /// that must report rather than reject (the migration wizard's per-site loop) can
 /// ask the same question and get the same answer.
 pub async fn find_occupant(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     agents: &crate::services::agent::AgentRegistry,
     domain: &str,
     holder: Holder,

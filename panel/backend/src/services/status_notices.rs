@@ -27,7 +27,7 @@
 //! the subscriber list was global: on a multi-tenant install every verified
 //! subscriber received every tenant's status notices.
 
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 /// Largest subscriber fan-out one notice may send. The public subscribe
@@ -57,7 +57,7 @@ static NOTICE_TX: std::sync::OnceLock<tokio::sync::mpsc::Sender<StatusNotice>> =
 
 /// Start the worker. Idempotent — later calls are no-ops, so it is safe for a
 /// supervised service to call this on every restart.
-pub fn start_worker(pool: PgPool) {
+pub fn start_worker(pool: SqlitePool) {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<StatusNotice>(QUEUE_DEPTH);
     if NOTICE_TX.set(tx).is_err() {
         return; // already started

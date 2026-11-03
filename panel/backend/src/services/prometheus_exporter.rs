@@ -6,11 +6,11 @@
 // metrics_collector task writes fresh rows every 30s so data is always
 // well within Prometheus default scrape intervals (15-60s).
 
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::fmt::Write;
 
 /// Render the current metrics snapshot in Prometheus text exposition format.
-pub async fn render(pool: &PgPool) -> String {
+pub async fn render(pool: &SqlitePool) -> String {
     let mut out = String::with_capacity(4096);
 
     render_info(&mut out);
@@ -30,7 +30,7 @@ fn render_info(out: &mut String) {
     let _ = writeln!(out, "\"}} 1");
 }
 
-async fn render_system(out: &mut String, pool: &PgPool) {
+async fn render_system(out: &mut String, pool: &SqlitePool) {
     let rows: Vec<(uuid::Uuid, String, f32, f32, f32)> = sqlx::query_as(
         "SELECT DISTINCT ON (m.server_id) m.server_id, s.name, \
                 m.cpu_pct, m.mem_pct, m.disk_pct \
@@ -64,7 +64,7 @@ async fn render_system(out: &mut String, pool: &PgPool) {
     }
 }
 
-async fn render_gpu(out: &mut String, pool: &PgPool) {
+async fn render_gpu(out: &mut String, pool: &SqlitePool) {
     let rows: Vec<(uuid::Uuid, String, i16, f32, f32, f32, Option<f32>, Option<f32>)> =
         sqlx::query_as(
             "SELECT DISTINCT ON (g.server_id, g.gpu_index) \
@@ -134,7 +134,7 @@ fn render_cert_renewals(out: &mut String) {
     let _ = writeln!(out, "dockpanel_cert_renewals_total{{result=\"failure\"}} {failure}");
 }
 
-async fn render_alerts(out: &mut String, pool: &PgPool) {
+async fn render_alerts(out: &mut String, pool: &SqlitePool) {
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT severity, COUNT(*) FROM alerts WHERE status = 'firing' GROUP BY severity",
     )

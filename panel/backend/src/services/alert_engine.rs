@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::time::Duration;
 use uuid::Uuid;
@@ -8,7 +8,7 @@ use crate::services::expected_stops;
 use crate::services::notifications;
 
 /// Background task: checks all alert conditions every 60 seconds.
-pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(pool: SqlitePool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Alert engine started");
 
     // Initial delay (respects shutdown)
@@ -116,7 +116,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
 /// inside a maintenance window is not deferred to the next tick the way a
 /// standing condition is; suppressing it here would lose that run's result
 /// outright, not merely delay it.
-async fn maintenance_users(pool: &PgPool) -> HashSet<Uuid> {
+async fn maintenance_users(pool: &SqlitePool) -> HashSet<Uuid> {
     sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT user_id FROM maintenance_windows \
          WHERE starts_at <= NOW() AND ends_at >= NOW()",
@@ -138,7 +138,7 @@ async fn maintenance_users(pool: &PgPool) -> HashSet<Uuid> {
 /// was ever delivered and no `alerts` row exists for `check_escalations` to
 /// re-page from.
 async fn fire_alert_with_retry(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     alert_type: &str,
@@ -261,7 +261,7 @@ struct ServerMetrics {
     disk_usage_pct: Option<f32>,
 }
 
-async fn check_resource_thresholds(pool: &PgPool, maint: &HashSet<Uuid>) {
+async fn check_resource_thresholds(pool: &SqlitePool, maint: &HashSet<Uuid>) {
     let servers: Vec<ServerMetrics> = match sqlx::query_as(
         "SELECT id, user_id, name, cpu_usage, mem_used_mb, ram_mb, disk_usage_pct \
          FROM servers WHERE status = 'online'",
@@ -527,7 +527,7 @@ fn memory_leak_trend(trend: &[(f32,)]) -> Option<(f64, f64, f64)> {
 }
 
 async fn check_threshold(
-    pool: &PgPool,
+    pool: &SqlitePool,
     server: &ServerMetrics,
     alert_type: &str,
     current_value: f64,
@@ -676,7 +676,7 @@ fn past_cooldown(
 /// reintroducing, through the gate meant to stop it, the exact storm this
 /// function exists to prevent.
 async fn claim_trend_fire(
-    pool: &PgPool,
+    pool: &SqlitePool,
     server_id: Uuid,
     alert_type: &str,
     cooldown_minutes: i32,
@@ -693,7 +693,7 @@ async fn claim_trend_fire(
                        fired_at = COALESCE(alert_state.fired_at, NOW()), \
                        last_notified_at = NOW() \
          WHERE alert_state.last_notified_at IS NULL \
-            OR alert_state.last_notified_at < NOW() - make_interval(mins => $3) \
+            OR alert_state.last_notified_at < datetime('now', '-' || $3 || ' minutes') \
          RETURNING id",
     )
     .bind(server_id)
@@ -722,7 +722,7 @@ async fn claim_trend_fire(
 /// state row stays 'ok', so this UPDATE matches nothing and no second recovery
 /// page is sent either.
 async fn clear_trend_alert(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Uuid,
     alert_type: &str,
@@ -756,7 +756,7 @@ async fn clear_trend_alert(
 
 // ─── GPU Thresholds ─────────────────────────────────────────────────────
 
-async fn check_gpu_thresholds(pool: &PgPool, member: &FleetMember) {
+async fn check_gpu_thresholds(pool: &SqlitePool, member: &FleetMember) {
     let gpu_info = match member.agent.get("/apps/gpu-info").await {
         Ok(v) => v,
         Err(_) => return,
@@ -819,7 +819,7 @@ async fn check_gpu_thresholds(pool: &PgPool, member: &FleetMember) {
 
 /// Generic GPU metric threshold check using the existing alert_state machine.
 async fn check_gpu_metric(
-    pool: &PgPool,
+    pool: &SqlitePool,
     server_id: Uuid,
     user_id: Uuid,
     server_name: &str,
@@ -922,7 +922,7 @@ async fn check_gpu_metric(
 
 // ─── Server Offline ─────────────────────────────────────────────────────
 
-async fn check_server_offline(pool: &PgPool, maint: &HashSet<Uuid>) {
+async fn check_server_offline(pool: &SqlitePool, maint: &HashSet<Uuid>) {
     // Find servers that just went offline (status = offline, no firing alert state yet)
     let offline: Vec<(Uuid, Uuid, String)> = match sqlx::query_as(
         "SELECT s.id, s.user_id, s.name FROM servers s \
@@ -1120,7 +1120,7 @@ fn ssl_decision(
 /// `ssl_warning_days` rungs a site's certificate already uses — an operator
 /// configures "how many days before I'm warned" once, not per certificate
 /// kind.
-async fn check_stack_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
+async fn check_stack_ssl_expiry(pool: &SqlitePool, maint: &HashSet<Uuid>) {
     let stacks: Vec<(
         Uuid,
         Uuid,
@@ -1257,8 +1257,8 @@ async fn check_stack_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
 /// `check_stack_ssl_expiry` already apply. An operator who uploaded a
 /// certificate ahead of assigning it to anything is not yet exposing traffic
 /// through it, so there is nothing to page about.
-async fn check_registered_cert_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
-    let certs: Vec<(Uuid, Uuid, Uuid, String, Vec<String>, chrono::DateTime<chrono::Utc>)> =
+async fn check_registered_cert_expiry(pool: &SqlitePool, maint: &HashSet<Uuid>) {
+    let certs: Vec<(Uuid, Uuid, Uuid, String, sqlx::types::Json<Vec<String>>, chrono::DateTime<chrono::Utc>)> =
         match sqlx::query_as(
             "SELECT DISTINCT tc.id, tc.user_id, tc.server_id, tc.alias, tc.dns_names, tc.not_after \
              FROM tls_certificates tc \
@@ -1275,6 +1275,7 @@ async fn check_registered_cert_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
     let now = chrono::Utc::now();
 
     for (_cert_id, user_id, server_id, alias, dns_names, not_after) in &certs {
+        let dns_names = &dns_names.0;
         if maint.contains(user_id) {
             continue;
         }
@@ -1422,7 +1423,7 @@ fn ssl_alert_copy(domain: &str, days_left: i64, expired: bool) -> (String, Strin
 /// Fire a stack SSL alert. A stack alert fires with `server_id: Some` and
 /// a domain-derived `state_key`.
 async fn fire_stack_ssl_alert(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Uuid,
     state_key: &str,
@@ -1440,7 +1441,7 @@ async fn fire_stack_ssl_alert(
 
 // ─── Service Health ─────────────────────────────────────────────────────
 
-async fn check_service_health(pool: &PgPool, member: &FleetMember) {
+async fn check_service_health(pool: &SqlitePool, member: &FleetMember) {
     let services: Vec<serde_json::Value> = match member.agent.get("/services/health").await {
         Ok(val) => {
             if let Some(arr) = val.as_array() {
@@ -1572,7 +1573,7 @@ async fn check_service_health(pool: &PgPool, member: &FleetMember) {
 
 // ─── GAP 8: Docker Container Health ──────────────────────────────────────
 
-async fn check_container_health(pool: &PgPool, member: &FleetMember) {
+async fn check_container_health(pool: &SqlitePool, member: &FleetMember) {
     // Stamped BEFORE the snapshot, because the walk below awaits a database and
     // notification round-trip per container: an expectation recorded by an
     // operator mid-walk is NEWER than this evidence and must survive it.
@@ -1971,7 +1972,7 @@ fn escalation_decision(
 ///   documentation has always promised a repeating cadence for every alert;
 ///   this is the path that makes that true rather than the sentence that
 ///   explained it away.
-async fn check_escalations(pool: &PgPool) {
+async fn check_escalations(pool: &SqlitePool) {
     #[derive(sqlx::FromRow)]
     struct EscalationRow {
         id: Uuid,
@@ -2254,11 +2255,13 @@ async fn check_escalations(pool: &PgPool) {
     // policy alerts (a cron failing every 5 minutes, say — nothing resolves
     // those) cannot fill the window and starve a fresh critical out of it.
     if !terminal_ids.is_empty() {
-        let _ = sqlx::query("UPDATE alerts SET escalated_at = $1 WHERE id = ANY($2)")
-            .bind(now)
-            .bind(&terminal_ids)
-            .execute(pool)
-            .await;
+        let placeholders = terminal_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("UPDATE alerts SET escalated_at = ? WHERE id IN ({placeholders})");
+        let mut q = sqlx::query(&sql).bind(now);
+        for tid in &terminal_ids {
+            q = q.bind(tid);
+        }
+        let _ = q.execute(pool).await;
     }
 }
 

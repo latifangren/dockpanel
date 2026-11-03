@@ -194,7 +194,7 @@ fn generate_token() -> String {
     )
 }
 
-async fn read_settings(pool: &sqlx::PgPool) -> Result<(bool, Option<String>), sqlx::Error> {
+async fn read_settings(pool: &sqlx::SqlitePool) -> Result<(bool, Option<String>), sqlx::Error> {
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT key, value FROM settings \
          WHERE key IN ('prometheus_enabled', 'prometheus_token_hash')",
@@ -214,7 +214,7 @@ async fn read_settings(pool: &sqlx::PgPool) -> Result<(bool, Option<String>), sq
     Ok((enabled, token_hash))
 }
 
-async fn write_kv(pool: &sqlx::PgPool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+async fn write_kv(pool: &sqlx::SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO settings (key, value) VALUES ($1, $2) \
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",

@@ -1,5 +1,5 @@
 use crate::safe_cmd::safe_command;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::time::{Duration, Instant};
 
 #[derive(sqlx::FromRow, Clone)]
@@ -22,7 +22,7 @@ struct MonitorRow {
 }
 
 /// Background task: checks all enabled monitors periodically.
-pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(pool: SqlitePool, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Uptime monitor started");
     crate::services::status_notices::start_worker(pool.clone());
     let client = http_check_client_builder().build().unwrap();
@@ -108,7 +108,7 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
 }
 
 /// Check a single monitor: HTTP/TCP/ping request, record result, handle status transitions.
-async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &PgPool) {
+async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &SqlitePool) {
     // Heartbeat monitors are passive — check if we missed a beat
     if monitor.monitor_type == "heartbeat" {
         check_heartbeat(monitor, pool).await;
@@ -376,7 +376,7 @@ async fn check_ping(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'sta
 }
 
 /// Heartbeat (dead man's switch) — alerts if no ping received within 2x interval.
-async fn check_heartbeat(monitor: &MonitorRow, pool: &PgPool) {
+async fn check_heartbeat(monitor: &MonitorRow, pool: &SqlitePool) {
     let expected_interval = Duration::from_secs(monitor.check_interval.max(60) as u64);
     let last_check = monitor.last_checked_at.unwrap_or_else(chrono::Utc::now);
     let elapsed = chrono::Utc::now() - last_check;
@@ -658,7 +658,7 @@ async fn check_http(monitor: &MonitorRow, _client: &reqwest::Client) -> (Option<
 /// `alert_slack_url`, `alert_discord_url`), so they are not subject to the
 /// missing-`alert_rules` gate that silences the security alerts; this is a
 /// straightforward omission rather than a fail-closed default.
-async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str, severity: &str) {
+async fn send_alerts(pool: &SqlitePool, monitor: &MonitorRow, message: &str, severity: &str) {
     // Build notification channels from monitor's per-monitor settings
     let email = if monitor.alert_email {
         sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id = $1")
@@ -680,7 +680,7 @@ async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str, severit
 
     // All four of these are encrypted at rest (alert_rules.notify_pagerduty_key/
     // notify_webhook_url in alerts.rs, monitors.alert_slack_url/alert_discord_url
-    // in monitors.rs). This function only has a PgPool, no AppState/jwt_secret,
+    // in monitors.rs). This function only has a SqlitePool, no AppState/jwt_secret,
     // so it decrypts the same way notifications::get_user_channels does.
     use crate::services::secrets_crypto::decrypt_credential_from_env as decrypt_env;
     let pagerduty_key = pagerduty_key.as_deref().map(decrypt_env);
@@ -727,7 +727,7 @@ async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str, severit
 }
 
 /// GAP 3: Auto-create a managed incident when a monitor goes down.
-async fn create_auto_incident(pool: &PgPool, monitor: &MonitorRow, cause: &str) -> Result<(), String> {
+async fn create_auto_incident(pool: &SqlitePool, monitor: &MonitorRow, cause: &str) -> Result<(), String> {
     // Find admin user for the monitor
     let user: Option<(uuid::Uuid,)> = sqlx::query_as(
         "SELECT user_id FROM monitors WHERE id = $1"
@@ -779,7 +779,7 @@ async fn create_auto_incident(pool: &PgPool, monitor: &MonitorRow, cause: &str) 
 }
 
 /// GAP 3: Auto-resolve managed incident when monitor recovers.
-async fn resolve_auto_incident(pool: &PgPool, monitor: &MonitorRow) -> Result<(), String> {
+async fn resolve_auto_incident(pool: &SqlitePool, monitor: &MonitorRow) -> Result<(), String> {
     // Find unresolved managed incidents with matching title pattern, scoped to
     // the monitor's owner. Monitor names are per-tenant and unremarkable ("api",
     // "website"), so matching on title alone let one tenant's monitor recovering

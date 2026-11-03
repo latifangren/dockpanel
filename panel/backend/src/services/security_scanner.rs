@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::time::Duration;
 
 use crate::services::agent::{AgentRegistry, FleetMember};
@@ -11,7 +11,7 @@ use crate::services::notifications;
 /// fleet loop instead. Until v2.58.0 it asked the panel's own agent once a week
 /// and recorded the answer with a NULL host, so a fleet's members were never
 /// scanned at all: not mislabelled, simply never looked at.
-pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(pool: SqlitePool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Security scanner background task started (weekly)");
 
     // Initial delay: 5 minutes after startup (respects shutdown)
@@ -61,7 +61,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
     }
 }
 
-async fn run_scan(pool: &PgPool, member: &FleetMember) {
+async fn run_scan(pool: &SqlitePool, member: &FleetMember) {
     let agent = &member.agent;
 
     // Create scan record, naming the host it is a scan OF.
@@ -287,7 +287,7 @@ async fn run_scan(pool: &PgPool, member: &FleetMember) {
     }
 }
 
-async fn reconcile_docker_app_domains(pool: &PgPool, member: &FleetMember) {
+async fn reconcile_docker_app_domains(pool: &SqlitePool, member: &FleetMember) {
     let apps = match member.agent.get("/apps").await {
         Ok(v) => v,
         Err(e) => {
@@ -347,7 +347,7 @@ async fn reconcile_docker_app_domains(pool: &PgPool, member: &FleetMember) {
 /// Only fixes things that are SAFE to fix automatically (SSL renewal).
 /// Never auto-fixes malware, open ports, or config changes that could break things.
 pub(crate) async fn auto_fix_safe_findings(
-    pool: &PgPool,
+    pool: &SqlitePool,
     member: &FleetMember,
     findings: &[serde_json::Value],
 ) {
@@ -555,7 +555,7 @@ pub(crate) fn registered_cert_expiry_state_key(alias: &str) -> String {
 /// including a mode-guard decline or a failed order, because a domain that
 /// matched THIS table can never also match the Docker-app one
 /// (`domain_claim`'s occupant types are mutually exclusive).
-async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &str) -> bool {
+async fn renew_stack_certificate(pool: &SqlitePool, member: &FleetMember, domain: &str) -> bool {
     // 1. Resolve, ON THE HOST THAT RAISED THE FINDING — the same host discipline
     //    the site read above learned the hard way. A domain is unique only per
     //    server, so a name-only lookup on a fleet can hand back another host's
@@ -901,7 +901,7 @@ type DockerAppDomainRow = (uuid::Uuid, uuid::Uuid, String, Option<String>, Optio
 /// either way. See migration `20260905180000_docker_app_ssl_domains.sql` for
 /// why the table exists and what it deliberately does not carry.
 
-async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domain: &str) -> bool {
+async fn renew_docker_app_certificate(pool: &SqlitePool, member: &FleetMember, domain: &str) -> bool {
     // 1. Resolve, ON THE HOST THAT RAISED THE FINDING — same host discipline as
     //    the stack arm above, for the same reason: a domain is unique only per
     //    server, so a name-only lookup could hand back another host's app and
@@ -1114,7 +1114,7 @@ async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domai
     true
 }
 
-async fn send_scan_alerts(pool: &PgPool, member: &FleetMember, critical: i32, warning: i32, total: i32) {
+async fn send_scan_alerts(pool: &SqlitePool, member: &FleetMember, critical: i32, warning: i32, total: i32) {
     // Get admin users to create alerts for
     let admins: Vec<(uuid::Uuid, String)> =
         sqlx::query_as("SELECT id, email FROM users WHERE role = 'admin'")

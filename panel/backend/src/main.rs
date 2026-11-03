@@ -1,3 +1,4 @@
+#[cfg(not(windows))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -14,7 +15,7 @@ mod services;
 
 use axum::{http::Method, Router};
 use chrono;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -30,7 +31,7 @@ use services::agent::{AgentClient, AgentRegistry};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: sqlx::PgPool,
+    pub db: sqlx::SqlitePool,
     pub config: Arc<Config>,
     /// Legacy single-agent accessor (routes being migrated will use `agents` instead).
     pub agent: AgentClient,
@@ -139,49 +140,29 @@ async fn main() {
 
     let config = Config::from_env();
 
-    // Connect to PostgreSQL with retry (DB container may not be ready yet)
-    let connect_opts = PgConnectOptions::from_str(&config.database_url)
-        .expect("Invalid DATABASE_URL");
+    // Open SQLite database with WAL mode and foreign key enforcement
+    let connect_opts = SqliteConnectOptions::from_str(&config.database_url)
+        .expect("Invalid DATABASE_URL")
+        .create_if_missing(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+        .busy_timeout(Duration::from_secs(5));
 
-    const DB_MAX_RETRIES: u32 = 5;
-    const DB_RETRY_DELAY: Duration = Duration::from_secs(3);
-
-    let mut retries = 0u32;
-    let db = loop {
-        match PgPoolOptions::new()
-            .max_connections(config.db_max_connections)
-            .min_connections(2)
-            .acquire_timeout(Duration::from_secs(5))
-            // Note: slow query logging (log_min_duration_statement) should be configured
-            // in postgresql.conf, not per-connection. Set to 1000ms for production.
-            .after_connect(|conn, _meta| {
-                Box::pin(async move {
-                    sqlx::query("SET statement_timeout = '30000'")
-                        .execute(&mut *conn)
-                        .await?;
-                    Ok(())
-                })
+    let db = SqlitePoolOptions::new()
+        .max_connections(config.db_max_connections.clamp(5, 20))
+        .min_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("PRAGMA foreign_keys = ON;")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
             })
-            .connect_with(connect_opts.clone())
-            .await
-        {
-            Ok(pool) => break pool,
-            Err(e) => {
-                retries += 1;
-                if retries >= DB_MAX_RETRIES {
-                    tracing::error!(
-                        "Failed to connect to database after {retries} attempts: {e}"
-                    );
-                    return;
-                }
-                tracing::warn!(
-                    "Database not ready (attempt {retries}/{DB_MAX_RETRIES}): {e}, retrying in {}s...",
-                    DB_RETRY_DELAY.as_secs()
-                );
-                tokio::time::sleep(DB_RETRY_DELAY).await;
-            }
-        }
-    };
+        })
+        .connect_with(connect_opts)
+        .await
+        .expect("Failed to open SQLite database");
 
     // Run migrations.
     //
@@ -198,7 +179,7 @@ async fn main() {
     // Migrations here are additive, so an older binary running against a newer
     // schema is safe; it simply ignores columns it does not know about. Missing
     // migrations are still applied — only *unknown extra* ones are tolerated.
-    sqlx::migrate!("./migrations")
+    sqlx::migrate!("./migrations_sqlite")
         .set_ignore_missing(true)
         .run(&db)
         .await

@@ -12,7 +12,7 @@
 //! and is not unique across a cloned fleet member. See the migration for the
 //! full reasoning.
 
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -37,7 +37,7 @@ pub const REASON_RECREATE: &str = "recreate_in_progress";
 /// and having the agent refuse would mark a still-RUNNING container as
 /// expectedly stopped, and the next genuine crash would be suppressed.
 pub async fn record(
-    pool: &PgPool,
+    pool: &SqlitePool,
     server_id: Uuid,
     container_name: &str,
     reason: &str,
@@ -68,7 +68,7 @@ pub async fn record(
 }
 
 /// Forget the expectation — the container is running again, or is being started.
-pub async fn clear(pool: &PgPool, server_id: Uuid, container_name: &str) {
+pub async fn clear(pool: &SqlitePool, server_id: Uuid, container_name: &str) {
     let _ = sqlx::query(
         "DELETE FROM container_expected_stops WHERE server_id = $1 AND container_name = $2",
     )
@@ -90,7 +90,7 @@ pub async fn clear(pool: &PgPool, server_id: Uuid, container_name: &str) {
 /// `observed_at` is stamped before the snapshot is fetched, so only an
 /// expectation that predates the observation is cleared.
 pub async fn clear_if_older_than(
-    pool: &PgPool,
+    pool: &SqlitePool,
     server_id: Uuid,
     container_name: &str,
     observed_at: chrono::DateTime<chrono::Utc>,
@@ -142,7 +142,7 @@ pub async fn clear_if_older_than(
 /// container, so an expectation recorded inside that window is NEWER than the
 /// evidence being used to discard it.
 pub async fn clear_absent(
-    pool: &PgPool,
+    pool: &SqlitePool,
     server_id: Uuid,
     observed: &[String],
     observed_at: chrono::DateTime<chrono::Utc>,
@@ -151,15 +151,18 @@ pub async fn clear_absent(
         return;
     }
 
-    let _ = sqlx::query(
+    let placeholders = observed.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
         "DELETE FROM container_expected_stops \
-         WHERE server_id = $1 AND stopped_at < $2 AND container_name <> ALL($3)",
-    )
-    .bind(server_id)
-    .bind(observed_at)
-    .bind(observed)
-    .execute(pool)
-    .await;
+         WHERE server_id = ? AND stopped_at < ? AND container_name NOT IN ({placeholders})"
+    );
+    let mut q = sqlx::query(&sql)
+        .bind(server_id)
+        .bind(observed_at);
+    for name in observed {
+        q = q.bind(name);
+    }
+    let _ = q.execute(pool).await;
 }
 
 /// Every container this host is expected to be holding stopped.
@@ -167,7 +170,7 @@ pub async fn clear_absent(
 /// Loaded once per member per sweep rather than queried per container: the
 /// health check already walks every container the host reports, and a query
 /// each would multiply the sweep's database round-trips by the app count.
-pub async fn expected_on_server(pool: &PgPool, server_id: Uuid) -> HashSet<String> {
+pub async fn expected_on_server(pool: &SqlitePool, server_id: Uuid) -> HashSet<String> {
     sqlx::query_as::<_, (String,)>(
         "SELECT container_name FROM container_expected_stops WHERE server_id = $1",
     )
@@ -182,7 +185,7 @@ pub async fn expected_on_server(pool: &PgPool, server_id: Uuid) -> HashSet<Strin
 /// for the operator-facing surfaces. `actor_email` is NULL for auto_sleep,
 /// which no person initiates — see `record()`'s own doc comment.
 pub async fn reasons_on_server(
-    pool: &PgPool,
+    pool: &SqlitePool,
     server_id: Uuid,
 ) -> Vec<(String, String, Option<String>)> {
     sqlx::query_as::<_, (String, String, Option<String>)>(
@@ -206,7 +209,7 @@ pub async fn reasons_on_server(
 /// for ever, escalating for seven days, with the incident published throughout.
 ///
 /// So recording an expectation is also a resolve point.
-pub async fn resolve_open_container_down(pool: &PgPool, server_id: Uuid, container_name: &str) {
+pub async fn resolve_open_container_down(pool: &SqlitePool, server_id: Uuid, container_name: &str) {
     let owner: Option<(Uuid,)> = sqlx::query_as("SELECT user_id FROM servers WHERE id = $1")
         .bind(server_id)
         .fetch_optional(pool)

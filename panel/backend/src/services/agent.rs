@@ -8,7 +8,40 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(unix)]
 use tokio::net::UnixStream;
+
+#[cfg(not(unix))]
+#[derive(Debug)]
+struct UnixStream;
+
+#[cfg(not(unix))]
+impl UnixStream {
+    async fn connect(_path: &str) -> Result<Self, std::io::Error> {
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Unix sockets not supported on Windows"))
+    }
+}
+
+#[cfg(not(unix))]
+impl tokio::io::AsyncRead for UnixStream {
+    fn poll_read(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>, _buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Unix sockets not supported on Windows")))
+    }
+}
+
+#[cfg(not(unix))]
+impl tokio::io::AsyncWrite for UnixStream {
+    fn poll_write(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>, _buf: &[u8]) -> std::task::Poll<Result<usize, std::io::Error>> {
+        std::task::Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Unix sockets not supported on Windows")))
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), std::io::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), std::io::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
 use tokio::sync::{RwLock, Semaphore};
 use uuid::Uuid;
 
@@ -1251,7 +1284,7 @@ pub struct AgentRegistry {
     /// Cached remote agent clients keyed by server_id.
     remote_cache: Arc<RwLock<HashMap<Uuid, RemoteAgentClient>>>,
     /// Database pool for looking up server details.
-    db: sqlx::PgPool,
+    db: sqlx::SqlitePool,
     /// Key `servers.agent_token` is encrypted under. Held here because
     /// `for_server` is the single site that opens a stored dial-out token, and
     /// a struct field is a dependency the compiler checks — an env read inside
@@ -1261,7 +1294,7 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
-    pub fn new(local: AgentClient, db: sqlx::PgPool, jwt_secret: String) -> Self {
+    pub fn new(local: AgentClient, db: sqlx::SqlitePool, jwt_secret: String) -> Self {
         Self {
             local,
             local_server_id: Arc::new(RwLock::new(None)),
@@ -1443,7 +1476,7 @@ pub struct FleetMember {
 /// is the key `servers.agent_token` is encrypted under, and both callers already
 /// hold it. An env read here would be an untestable second source of truth for
 /// the one value that decides whether the column can be opened again.
-pub async fn ensure_local_server(db: &sqlx::PgPool, agent_token: &str, jwt_secret: &str) -> Uuid {
+pub async fn ensure_local_server(db: &sqlx::SqlitePool, agent_token: &str, jwt_secret: &str) -> Uuid {
     // Encrypted at rest like every other stored credential. The local row's
     // plaintext is never dialled — `AgentPool::for_server` short-circuits
     // `is_local` to the Unix-socket handle before it looks at the token — so

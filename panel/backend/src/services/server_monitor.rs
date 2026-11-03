@@ -1,8 +1,8 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::time::Duration;
 
 /// Background task that marks servers as offline if they haven't checked in recently.
-pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(pool: SqlitePool, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Server health monitor started");
 
     let mut interval = tokio::time::interval(Duration::from_secs(120));

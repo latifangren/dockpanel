@@ -119,8 +119,16 @@ impl Config {
             });
 
         Self {
-            database_url: std::env::var("DATABASE_URL")
-                .expect("DATABASE_URL must be set"),
+            database_url: {
+                let raw = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:///var/lib/dockpanel/dockpanel.db?mode=rwc".into());
+                if raw.starts_with("sqlite:") {
+                    raw
+                } else if raw.starts_with("postgres:") || raw.starts_with("postgresql:") {
+                    "sqlite:///var/lib/dockpanel/dockpanel.db?mode=rwc".into()
+                } else {
+                    format!("sqlite://{raw}?mode=rwc")
+                }
+            },
             jwt_secret,
             agent_socket: std::env::var("AGENT_SOCKET")
                 .unwrap_or_else(|_| "/var/run/dockpanel/agent.sock".into()),

@@ -88,7 +88,7 @@ pub(crate) fn validate_acme_contact(email: &str) -> Result<(), String> {
 /// `acme_contact_email` setting as a rescue. Keeping the user's address first
 /// means installs that already work are completely unaffected.
 pub(crate) async fn resolve_acme_contact(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     user_email: &str,
 ) -> Result<String, String> {
     let user_err = match validate_acme_contact(user_email) {

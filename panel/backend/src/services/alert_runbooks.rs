@@ -10,7 +10,7 @@
 //! and in the in-panel incident detail view.
 
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use crate::services::alert_runbook_defaults::{find_default, DEFAULTS};
 
@@ -26,7 +26,7 @@ pub struct RunbookView {
 
 /// Resolve a runbook by alert_type. Returns DB row if present, otherwise
 /// the compile-time default, otherwise None for unknown alert types.
-pub async fn get_runbook(pool: &PgPool, alert_type: &str) -> Option<RunbookView> {
+pub async fn get_runbook(pool: &SqlitePool, alert_type: &str) -> Option<RunbookView> {
     if let Ok(Some((md, sev, updated_at, updated_by))) = sqlx::query_as::<
         _,
         (
@@ -66,7 +66,7 @@ pub async fn get_runbook(pool: &PgPool, alert_type: &str) -> Option<RunbookView>
 /// List every known runbook — DB rows merged over the const slice. DB rows
 /// win on collision; const-slice entries that have no DB row are returned
 /// with `is_default = true`.
-pub async fn list_runbooks(pool: &PgPool) -> Vec<RunbookView> {
+pub async fn list_runbooks(pool: &SqlitePool) -> Vec<RunbookView> {
     let mut out: Vec<RunbookView> = Vec::with_capacity(DEFAULTS.len() + 4);
 
     let rows: Vec<(

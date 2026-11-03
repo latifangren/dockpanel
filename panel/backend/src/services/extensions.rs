@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::time::Instant;
 
 /// The settings every extension-webhook HTTP client shares. Every send path
@@ -21,7 +21,7 @@ static ACTIVE_DELIVERIES: std::sync::atomic::AtomicU32 = std::sync::atomic::Atom
 const MAX_CONCURRENT_DELIVERIES: u32 = 20;
 
 /// Emit an event to all subscribed extensions (fire-and-forget).
-pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value) {
+pub async fn emit_event(pool: &SqlitePool, event_type: &str, data: serde_json::Value) {
     // Rate limit: skip if too many deliveries in flight
     let active = ACTIVE_DELIVERIES.load(std::sync::atomic::Ordering::Relaxed);
     if active >= MAX_CONCURRENT_DELIVERIES {
@@ -175,7 +175,7 @@ pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value
 /// Helper: emit event from route handlers (fire-and-forget spawn).
 /// GAP 7+21: Also forwards events to webhook gateway endpoints that have
 /// routes with filter_path="/event" matching this event_type.
-pub fn fire_event(pool: &PgPool, event_type: &str, data: serde_json::Value) {
+pub fn fire_event(pool: &SqlitePool, event_type: &str, data: serde_json::Value) {
     let pool = pool.clone();
     let event_type = event_type.to_string();
     tokio::spawn(async move {

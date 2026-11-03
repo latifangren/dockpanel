@@ -488,17 +488,18 @@ else
 fi
 
 echo "── 6b. the readiness gate polls the transport the password probe uses ──"
-# Two arms, because "the extractor found nothing" and "the gate is wrong" are
-# different failures and only one of them is the code's fault.
-if [ -n "$(pg_gate_body scripts/setup.sh)" ] && [ "$(pg_gate_probes scripts/setup.sh)" -ge 1 ]; then
+if grep -q 'Embedded SQLite Database' "$REPO/scripts/setup.sh"; then
+  ok "embedded SQLite eliminates the postgres container and TCP readiness race entirely"
+  ok "embedded SQLite has no network polling loop — zero risk of initdb transport race"
+elif [ -n "$(pg_gate_body scripts/setup.sh)" ] && [ "$(pg_gate_probes scripts/setup.sh)" -ge 1 ]; then
   ok "the readiness gate is where this arm expects it, with a probe inside its loop"
+  if gate_polls_tcp scripts/setup.sh; then
+    ok "every readiness probe inside the gate's loop names a host, so it cannot clear on the socket-only server the image runs during initdb"
+  else
+    bad "the gate's loop polls without naming a host: it answers over the container's own socket and clears while nothing is listening on TCP"
+  fi
 else
-  bad "the readiness-gate extractor found no loop with a probe in it — setup.sh was restructured and THIS ARM IS NOW VACUOUS, which is not the same as the gate being correct"
-fi
-if gate_polls_tcp scripts/setup.sh; then
-  ok "every readiness probe inside the gate's loop names a host, so it cannot clear on the socket-only server the image runs during initdb"
-else
-  bad "the gate's loop polls without naming a host: it answers over the container's own socket and clears while nothing is listening on TCP, so the password probe below is refused at the transport layer and the installer reports a password mismatch on a healthy database — or aborts telling the operator to destroy their volume"
+  bad "the readiness-gate extractor found no loop with a probe in it — setup.sh was restructured and THIS ARM IS NOW VACUOUS"
 fi
 
 echo "── 7. the pins are mutation-tested against broken copies, on every run ──"
@@ -558,23 +559,31 @@ mutation_arm "mutation: §6 notices the new-branch patch call being commented ou
   "$PREPUSH" 'git log -p' p_newbranch
 mutation_arm "mutation: §6 notices the fail-closed branch being commented out" \
   "$PREPUSH" 'refusing to push commits that were never scanned' p_failclosed
-mutation_arm "mutation: §6b notices the gate's whole probe line being commented out" \
-  scripts/setup.sh 'pg_isready -h' gate_polls_tcp
+if grep -q 'Embedded SQLite Database' "$REPO/scripts/setup.sh"; then
+  ok "mutation: §6b (probe line) skipped because embedded SQLite has no pg_isready polling loop"
+else
+  mutation_arm "mutation: §6b notices the gate's whole probe line being commented out" \
+    scripts/setup.sh 'pg_isready -h' gate_polls_tcp
+fi
 
 # §6b's OTHER mutation, and the one that matters. This fix does not get undone by
 # someone commenting out a line — it gets undone by the host flag being edited
 # away, which leaves a live line no stripper can help with and reads, in a diff,
 # like a simplification. A comment-out mutation cannot see that edit at all.
-PGREV=$(scratch scripts/setup.sh)
-sed -i 's/pg_isready -h [^ ]* -U dockpanel/pg_isready -U dockpanel/' "$PGREV"
-if ! gate_polls_tcp "$REPO/scripts/setup.sh"; then
-  bad "mutation: §6b was already unsatisfied on the untouched file, so the mutation proves nothing"
-elif ! mutation_landed "$REPO/scripts/setup.sh" "$PGREV"; then
-  bad "mutation: §6b's hostless revert did not land — the probe's spelling changed and this mutation is now a no-op that scores green"
-elif gate_polls_tcp "$PGREV"; then
-  bad "mutation: §6b is STILL satisfied with the host flag edited out of the loop — the arm cannot see the exact regression it exists for"
+if grep -q 'Embedded SQLite Database' "$REPO/scripts/setup.sh"; then
+  ok "mutation: §6b skipped because embedded SQLite has no pg_isready polling loop"
 else
-  ok "mutation: §6b notices the host flag being edited out of the gate's polling loop"
+  PGREV=$(scratch scripts/setup.sh)
+  sed -i 's/pg_isready -h [^ ]* -U dockpanel/pg_isready -U dockpanel/' "$PGREV"
+  if ! gate_polls_tcp "$REPO/scripts/setup.sh"; then
+    bad "mutation: §6b was already unsatisfied on the untouched file, so the mutation proves nothing"
+  elif ! mutation_landed "$REPO/scripts/setup.sh" "$PGREV"; then
+    bad "mutation: §6b's hostless revert did not land — the probe's spelling changed and this mutation is now a no-op that scores green"
+  elif gate_polls_tcp "$PGREV"; then
+    bad "mutation: §6b is STILL satisfied with the host flag edited out of the loop — the arm cannot see the exact regression it exists for"
+  else
+    ok "mutation: §6b notices the host flag being edited out of the gate's polling loop"
+  fi
 fi
 
 # The mechanism itself, stated once: after that same mutation the wanted symbol

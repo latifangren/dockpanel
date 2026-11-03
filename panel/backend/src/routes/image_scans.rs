@@ -71,7 +71,7 @@ pub struct UpdateSettings {
 
 // ── Settings helpers ────────────────────────────────────────────────────
 
-pub async fn read_settings(pool: &sqlx::PgPool) -> Result<(bool, bool, String, i32), sqlx::Error> {
+pub async fn read_settings(pool: &sqlx::SqlitePool) -> Result<(bool, bool, String, i32), sqlx::Error> {
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT key, value FROM settings WHERE key IN \
          ('image_scan_enabled', 'image_scan_on_deploy', 'image_scan_deploy_gate', 'image_scan_interval_hours')"
@@ -344,7 +344,7 @@ fn row_to_finding(
 /// `tests/deploy-gate-coverage-pin-e2e.sh`, which enumerates the doors from the
 /// route table and fails when one of them stops asking.
 pub async fn preflight_gate(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     server_id: uuid::Uuid,
     agent: &crate::services::agent::AgentHandle,
     template_id: &str,
@@ -364,7 +364,7 @@ pub async fn preflight_gate(
 /// True when the operator has switched the deploy gate on and given it a
 /// threshold. Split out so a caller can decline to do expensive work — an agent
 /// round trip, a YAML parse — for a gate that is off, which is the default.
-async fn gate_is_armed(pool: &sqlx::PgPool) -> Result<bool, ApiError> {
+async fn gate_is_armed(pool: &sqlx::SqlitePool) -> Result<bool, ApiError> {
     let (enabled, on_deploy, gate, _hours) = read_settings(pool)
         .await
         .map_err(|e| internal_error("read scan settings for gate", e))?;
@@ -383,7 +383,7 @@ async fn gate_is_armed(pool: &sqlx::PgPool) -> Result<bool, ApiError> {
 /// precisely when the running image is vulnerable, which is the update that
 /// fixes it. A guard that blocks the remedy is worse than no guard.
 pub async fn preflight_gate_image(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     server_id: uuid::Uuid,
     agent: &crate::services::agent::AgentHandle,
     image: &str,
@@ -526,7 +526,7 @@ fn image_scan_state_key(image: &str) -> String {
 /// Run a scan via the agent and persist the result. Public so the deploy
 /// gate and the background scheduler can call it.
 pub async fn scan_and_store(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     server_id: uuid::Uuid,
     agent: &crate::services::agent::AgentHandle,
     image: &str,

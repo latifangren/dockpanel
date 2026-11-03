@@ -9,7 +9,7 @@
 
 use crate::services::agent::{AgentClient, AgentRegistry};
 use crate::services::panel_update::semver_key;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::time::Duration;
 
 const CHECK_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
@@ -23,7 +23,7 @@ const GITHUB_RELEASES_LIST_URL: &str =
 
 /// Record a telemetry event (callable from anywhere in the backend).
 pub async fn record_event(
-    pool: &PgPool,
+    pool: &SqlitePool,
     event_type: &str,
     category: &str,
     message: &str,
@@ -54,7 +54,7 @@ pub async fn record_event(
 /// bare `AgentClient` made "local" indistinguishable from "nobody threaded this yet",
 /// which is the only reason it stayed on the fleet-blind list for two sessions.
 pub async fn run(
-    pool: PgPool,
+    pool: SqlitePool,
     agents: AgentRegistry,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
@@ -90,7 +90,7 @@ pub async fn run(
 }
 
 /// Collect diagnostics, send if enabled, clean up old events.
-async fn collect_and_process(pool: &PgPool, agent: &AgentClient) {
+async fn collect_and_process(pool: &SqlitePool, agent: &AgentClient) {
     // 1. Collect agent health snapshot
     collect_agent_health(pool, agent).await;
 
@@ -108,7 +108,7 @@ async fn collect_and_process(pool: &PgPool, agent: &AgentClient) {
 }
 
 /// Collect agent health info and record any issues as telemetry events.
-async fn collect_agent_health(pool: &PgPool, agent: &AgentClient) {
+async fn collect_agent_health(pool: &SqlitePool, agent: &AgentClient) {
     // Check if agent is reachable via health endpoint
     match agent.get("/health").await {
         Ok(_) => {
@@ -168,12 +168,12 @@ async fn collect_agent_health(pool: &PgPool, agent: &AgentClient) {
 }
 
 /// Public wrapper for routes to trigger manual send.
-pub async fn send_pending_events_public(pool: &PgPool, endpoint: &str) {
+pub async fn send_pending_events_public(pool: &SqlitePool, endpoint: &str) {
     send_pending_events(pool, endpoint).await;
 }
 
 /// Send unsent telemetry events to the remote endpoint.
-async fn send_pending_events(pool: &PgPool, endpoint: &str) {
+async fn send_pending_events(pool: &SqlitePool, endpoint: &str) {
     // Validate endpoint URL
     if !endpoint.starts_with("https://") {
         tracing::warn!("Telemetry endpoint must use HTTPS, skipping send");
@@ -243,12 +243,17 @@ async fn send_pending_events(pool: &PgPool, endpoint: &str) {
         Ok(Ok(resp)) if resp.status().is_success() => {
             // Mark events as sent
             let ids: Vec<uuid::Uuid> = events.iter().map(|(id, ..)| *id).collect();
-            let _ = sqlx::query(
-                "UPDATE telemetry_events SET sent_at = NOW() WHERE id = ANY($1)",
-            )
-            .bind(&ids)
-            .execute(pool)
-            .await;
+            if !ids.is_empty() {
+                let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!(
+                    "UPDATE telemetry_events SET sent_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})"
+                );
+                let mut q = sqlx::query(&sql);
+                for id in &ids {
+                    q = q.bind(id);
+                }
+                let _ = q.execute(pool).await;
+            }
 
             tracing::info!("Telemetry: sent {} events to endpoint", ids.len());
         }
@@ -312,7 +317,7 @@ pub fn strip_pii(context: &serde_json::Value) -> serde_json::Value {
 
 /// Read `update_channel` from settings. Defaults to `"stable"` when the
 /// row is missing or the value is unrecognised (degrades gracefully).
-async fn read_update_channel(pool: &PgPool) -> String {
+async fn read_update_channel(pool: &SqlitePool) -> String {
     let row: Option<(String,)> =
         sqlx::query_as("SELECT value FROM settings WHERE key = 'update_channel'")
             .fetch_optional(pool)
@@ -337,7 +342,7 @@ async fn read_update_channel(pool: &PgPool) -> String {
 /// Both "Check Now" routes bypass the `hold` skip by calling
 /// [`check_for_updates_manual`] instead — `hold` pins automatic polling, not
 /// an operator who has just asked to look.
-async fn check_for_updates(pool: &PgPool) {
+async fn check_for_updates(pool: &SqlitePool) {
     let channel = read_update_channel(pool).await;
     if channel == "hold" {
         tracing::debug!("Update poll skipped: channel=hold");
@@ -348,7 +353,7 @@ async fn check_for_updates(pool: &PgPool) {
 
 /// Bypass the `hold` skip — operator manually clicked "Check now".
 /// Always polls regardless of channel; uses channel only to choose URL.
-pub async fn check_for_updates_manual(pool: &PgPool) {
+pub async fn check_for_updates_manual(pool: &SqlitePool) {
     let mut channel = read_update_channel(pool).await;
     if channel == "hold" {
         channel = "stable".into(); // manual check defaults to stable scan
@@ -356,7 +361,7 @@ pub async fn check_for_updates_manual(pool: &PgPool) {
     check_for_updates_inner(pool, &channel).await;
 }
 
-async fn check_for_updates_inner(pool: &PgPool, channel: &str) {
+async fn check_for_updates_inner(pool: &SqlitePool, channel: &str) {
     let url = match channel {
         "candidate" => GITHUB_RELEASES_LIST_URL,
         _ => GITHUB_RELEASES_LATEST_URL,
@@ -484,7 +489,7 @@ async fn check_for_updates_inner(pool: &PgPool, channel: &str) {
 ///
 /// A DB read and possibly a delete; no GitHub request, so it costs the API
 /// nothing and works on a box with no outbound network.
-async fn reconcile_stored_update(pool: &PgPool) {
+async fn reconcile_stored_update(pool: &SqlitePool) {
     let advertised = get_setting(pool, "update_available_version").await;
     if advertised.is_empty() {
         return;
@@ -501,7 +506,7 @@ async fn reconcile_stored_update(pool: &PgPool) {
 
 /// Delete the three keys that make the UI offer an update. `update_checked_at`
 /// deliberately survives: the check still happened, and the UI shows when.
-async fn clear_update_advertisement(pool: &PgPool) {
+async fn clear_update_advertisement(pool: &SqlitePool) {
     let _ = sqlx::query(
         "DELETE FROM settings WHERE key IN ('update_available_version', 'update_release_notes', 'update_release_url')",
     )
@@ -511,7 +516,7 @@ async fn clear_update_advertisement(pool: &PgPool) {
 
 /// Record the check timestamp so the UI can show "checked Xs ago" — on polls
 /// that found nothing just as much as on polls that found a release.
-async fn record_update_check_time(pool: &PgPool) {
+async fn record_update_check_time(pool: &SqlitePool) {
     let _ = sqlx::query(
         "INSERT INTO settings (key, value) VALUES ('update_checked_at', $1) \
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
@@ -564,9 +569,9 @@ fn release_key(v: &str) -> ((u8, u64, u64, u64), u64) {
 }
 
 /// Clean up events older than retention period.
-async fn cleanup_old_events(pool: &PgPool) {
+async fn cleanup_old_events(pool: &SqlitePool) {
     let _ = sqlx::query(
-        "DELETE FROM telemetry_events WHERE created_at < NOW() - $1::interval",
+        "DELETE FROM telemetry_events WHERE created_at < datetime('now', '-' || $1)",
     )
     .bind(format!("{RETENTION_DAYS} days"))
     .execute(pool)
@@ -574,7 +579,7 @@ async fn cleanup_old_events(pool: &PgPool) {
 }
 
 /// Get or create an anonymous installation ID.
-async fn get_or_create_installation_id(pool: &PgPool) -> String {
+async fn get_or_create_installation_id(pool: &SqlitePool) -> String {
     let existing: Option<(String,)> =
         sqlx::query_as("SELECT value FROM settings WHERE key = 'telemetry_installation_id'")
             .fetch_optional(pool)
@@ -599,7 +604,7 @@ async fn get_or_create_installation_id(pool: &PgPool) -> String {
 }
 
 /// Helper to read a setting value.
-async fn get_setting(pool: &PgPool, key: &str) -> String {
+async fn get_setting(pool: &SqlitePool, key: &str) -> String {
     sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = $1")
         .bind(key)
         .fetch_optional(pool)

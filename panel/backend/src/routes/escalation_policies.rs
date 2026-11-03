@@ -143,7 +143,7 @@ async fn validate_webhook_routes(input: &PolicyInput) -> Result<(), ApiError> {
 /// codebase's convention elsewhere of never confirming another tenant's
 /// resource exists to a caller who doesn't own it.
 async fn validate_schedule_routes(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     input: &PolicyInput,
     owner_id: Uuid,
 ) -> Result<(), ApiError> {
@@ -193,7 +193,7 @@ async fn validate_schedule_routes(
 /// at s437 — same file, same validator set, same threat model, different
 /// route shape.
 async fn validate_user_routes(
-    _db: &sqlx::PgPool,
+    _db: &sqlx::SqlitePool,
     input: &PolicyInput,
     owner_id: Uuid,
 ) -> Result<(), ApiError> {

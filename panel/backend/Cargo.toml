@@ -19,7 +19,7 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "migrate", "macros", "derive"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "json", "migrate", "macros", "derive"] }
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 argon2 = "0.5"
 # Mailbox passwords on boxes whose Dovecot has no Argon2 built in (RHEL family:
@@ -48,7 +48,6 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 subtle = "2"
 rustls = "0.23"
 regex = "1"
-tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
 # WebAuthn / Passkey support
 ciborium = "0.2"
 p256 = { version = "0.13", features = ["ecdsa"] }
@@ -58,3 +57,6 @@ hkdf = "0.12"
 zeroize = { version = "1", features = ["derive"] }
 # Phase 4 W2: render runbook markdown into HTML for email payloads.
 pulldown-cmark = { version = "0.10", default-features = false, features = ["html"] }
+
+[target.'cfg(not(windows))'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["background_threads"] }

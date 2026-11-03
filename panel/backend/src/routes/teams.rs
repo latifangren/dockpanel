@@ -82,15 +82,19 @@ pub async fn list(
     let members: Vec<TeamMember> = if team_ids.is_empty() {
         Vec::new()
     } else {
-        sqlx::query_as(
+        let placeholders = team_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
             "SELECT tm.id, tm.team_id, tm.user_id, tm.role, tm.joined_at, u.email \
              FROM team_members tm JOIN users u ON u.id = tm.user_id \
-             WHERE tm.team_id = ANY($1) ORDER BY tm.joined_at ASC",
-        )
-        .bind(&team_ids)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| internal_error("list teams", e))?
+             WHERE tm.team_id IN ({placeholders}) ORDER BY tm.joined_at ASC"
+        );
+        let mut q = sqlx::query_as(&sql);
+        for tid in &team_ids {
+            q = q.bind(tid);
+        }
+        q.fetch_all(&state.db)
+            .await
+            .map_err(|e| internal_error("list teams", e))?
     };
 
     // Group members by team_id

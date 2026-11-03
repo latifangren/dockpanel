@@ -173,7 +173,7 @@ pub async fn get_config(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let keys = [
+    let _keys = [
         "telemetry_enabled",
         "telemetry_endpoint",
         "telemetry_installation_id",
@@ -184,8 +184,7 @@ pub async fn get_config(
     ];
 
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT key, value FROM settings WHERE key = ANY($1)")
-            .bind(&keys[..])
+        sqlx::query_as("SELECT key, value FROM settings WHERE key IN ('telemetry_enabled', 'telemetry_endpoint', 'update_channel', 'update_available_version', 'update_release_notes', 'update_release_url', 'update_checked_at')")
             .fetch_all(&state.db)
             .await
             .map_err(|e| internal_error("get telemetry config", e))?;
@@ -479,7 +478,7 @@ pub async fn clear_events(
 
     let deleted = if days > 0 {
         sqlx::query_scalar::<_, i64>(
-            "WITH d AS (DELETE FROM telemetry_events WHERE created_at < NOW() - ($1 || ' days')::interval RETURNING 1) SELECT COUNT(*) FROM d",
+            "DELETE FROM telemetry_events WHERE created_at < datetime('now', '-' || $1 || ' days')",
         )
         .bind(days.to_string())
         .fetch_one(&state.db)
@@ -509,7 +508,7 @@ pub async fn update_status(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let keys = [
+    let _keys = [
         "update_available_version",
         "update_release_notes",
         "update_release_url",
@@ -517,8 +516,7 @@ pub async fn update_status(
     ];
 
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT key, value FROM settings WHERE key = ANY($1)")
-            .bind(&keys[..])
+        sqlx::query_as("SELECT key, value FROM settings WHERE key IN ('update_available_version', 'update_release_notes', 'update_release_url', 'update_checked_at')")
             .fetch_all(&state.db)
             .await
             .map_err(|e| internal_error("get update status", e))?;

@@ -40,7 +40,7 @@ pub const SERVER_SHELL_SCOPE: &str = "@server";
 /// one that reaches terminals. `is_locked_down` answers neither question: it
 /// reads `active` and stops, which is right for the login and site-creation doors
 /// and would be wrong here.
-pub async fn lockdown_terminal_state(pool: &sqlx::PgPool) -> (bool, bool) {
+pub async fn lockdown_terminal_state(pool: &sqlx::SqlitePool) -> (bool, bool) {
     let row: Option<(bool, Option<bool>)> =
         sqlx::query_as("SELECT active, terminals_disabled FROM lockdown_state WHERE id = 1")
             .fetch_optional(pool)
@@ -69,7 +69,7 @@ pub async fn lockdown_terminal_state(pool: &sqlx::PgPool) -> (bool, bool) {
 /// writer stored. `revoke_share` and `list_shares` are deliberately left open:
 /// they are how an operator sees a live share and closes it, and refusing them
 /// during a lockdown would withdraw the remedy at the same moment as the risk.
-pub async fn terminals_locked_down(pool: &sqlx::PgPool) -> bool {
+pub async fn terminals_locked_down(pool: &sqlx::SqlitePool) -> bool {
     let (active, disabled) = lockdown_terminal_state(pool).await;
     active && disabled
 }

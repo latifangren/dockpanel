@@ -10,7 +10,7 @@
 //! `services::notifications`.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 /// Compute which user is on-call at `at` for the given schedule.
@@ -23,11 +23,11 @@ use uuid::Uuid;
 /// `anchor_at` in the future folds back to `members[0]` (negative
 /// elapsed days wrap to the head).
 pub async fn resolve_on_call_user(
-    pool: &PgPool,
+    pool: &SqlitePool,
     schedule_id: Uuid,
     at: DateTime<Utc>,
 ) -> Option<Uuid> {
-    let row: Option<(Vec<Uuid>, i32, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<(sqlx::types::Json<Vec<Uuid>>, i32, DateTime<Utc>)> = sqlx::query_as(
         "SELECT members, cadence_days, anchor_at \
          FROM on_call_schedules WHERE id = $1",
     )
@@ -37,7 +37,7 @@ pub async fn resolve_on_call_user(
     .ok()
     .flatten();
 
-    let (members, cadence_days, anchor_at) = row?;
+    let (sqlx::types::Json(members), cadence_days, anchor_at) = row?;
     if members.is_empty() || cadence_days <= 0 {
         return None;
     }
@@ -58,7 +58,7 @@ pub async fn resolve_on_call_user(
 /// - `"all_channels"` — empty vec. Caller falls back to the alert's owner.
 /// - `"webhook:<url>"` — empty vec. Caller handles webhook directly.
 /// - anything else — empty vec, debug-logged.
-pub async fn route_to_user_ids(pool: &PgPool, route: &str) -> Vec<Uuid> {
+pub async fn route_to_user_ids(pool: &SqlitePool, route: &str) -> Vec<Uuid> {
     if let Some(uuid_str) = route.strip_prefix("on_call_schedule:") {
         let Ok(sched_id) = Uuid::parse_str(uuid_str) else {
             tracing::debug!("route_to_user_ids: invalid schedule uuid in {route}");

@@ -1,6 +1,6 @@
 use crate::safe_cmd::safe_command;
 use chrono::Datelike;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
@@ -28,7 +28,7 @@ pub static SSL_RENEWALS_FAILURE: AtomicU64 = AtomicU64::new(0);
 /// acted on the wrong machine. Removing the parameter is what
 /// keeps that from being re-introduced by an author who sees one in scope.
 pub async fn run(
-    pool: PgPool,
+    pool: SqlitePool,
     agents: AgentRegistry,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
@@ -85,7 +85,7 @@ pub async fn run(
 }
 
 /// Check if auto-healing is enabled in settings.
-async fn is_enabled(pool: &PgPool) -> bool {
+async fn is_enabled(pool: &SqlitePool) -> bool {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'auto_heal_enabled'",
     )
@@ -126,7 +126,7 @@ async fn is_enabled(pool: &PgPool) -> bool {
 /// * **Recovery is scoped too.** The state clears and the incident resolves for
 ///   the server the service actually recovered on, not for whichever row the
 ///   `servers` table happened to return first.
-async fn auto_restart_services(pool: &PgPool, agents: &AgentRegistry) {
+async fn auto_restart_services(pool: &SqlitePool, agents: &AgentRegistry) {
     // Recovery check: if an exhausted service is now running, clear the state.
     // The JOIN is what carries the host: `alert_state` is keyed per server, and
     // the owner and name we resolve here are the ones the alert engine stamped
@@ -537,7 +537,7 @@ async fn auto_restart_services(pool: &PgPool, agents: &AgentRegistry) {
 ///   consumed the firing->ok transition without ever calling `resolve_alert`, so
 ///   the `alerts` row stayed `firing` for ever — and retention only purges
 ///   `status = 'resolved'`, making those rows unpurgeable.
-async fn auto_clean_disk(pool: &PgPool, agents: &AgentRegistry) {
+async fn auto_clean_disk(pool: &SqlitePool, agents: &AgentRegistry) {
     let firing: Vec<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
         "SELECT a.server_id, s.user_id, s.name \
          FROM alert_state a JOIN servers s ON s.id = a.server_id \
@@ -690,7 +690,7 @@ async fn auto_clean_disk(pool: &PgPool, agents: &AgentRegistry) {
 /// `docker system prune -af --volumes` — every stopped container, every image not
 /// held by a running one, every unused volume — on a consent screen that said
 /// "cleans logs".
-async fn reclaim_enabled(pool: &PgPool) -> bool {
+async fn reclaim_enabled(pool: &SqlitePool) -> bool {
     sqlx::query_scalar::<_, String>(
         "SELECT value FROM settings WHERE key = 'auto_heal_docker_reclaim'",
     )
@@ -718,7 +718,7 @@ async fn reclaim_enabled(pool: &PgPool) -> bool {
 /// every two minutes and says nothing anybody reads. The certificate expires on
 /// a working, unattended server. Deduped to one alert per site per twelve hours:
 /// the cause is a configuration problem, not a transient.
-async fn send_weekly_digest(pool: &PgPool) {
+async fn send_weekly_digest(pool: &SqlitePool) {
     let today = chrono::Utc::now().weekday();
     if today != chrono::Weekday::Mon {
         return;
@@ -826,7 +826,7 @@ async fn send_weekly_digest(pool: &PgPool) {
 ///
 /// Returns true when the backup was actually retired.
 async fn prune_policy_backup(
-    pool: &PgPool,
+    pool: &SqlitePool,
     table: &str,
     id: uuid::Uuid,
     filepath: &str,
@@ -873,7 +873,7 @@ async fn prune_policy_backup(
 }
 
 /// Periodic data retention cleanup: removes old records to keep the database lean.
-async fn run_retention_cleanup(pool: &PgPool) {
+async fn run_retention_cleanup(pool: &SqlitePool) {
     tracing::info!("Running data retention cleanup...");
 
     // GAP 33: Weekly digest — send summary email on Mondays during cleanup cycle
@@ -1012,10 +1012,19 @@ async fn run_retention_cleanup(pool: &PgPool) {
     }
 
     // Clean expired terminal shares (older than 1 hour, timestamp stored as prefix in value)
-    let ts_deleted = sqlx::query(
-        "DELETE FROM settings WHERE key LIKE 'terminal_share_%' AND \
-         CAST(SPLIT_PART(value, '|', 1) AS BIGINT) < EXTRACT(EPOCH FROM NOW()) - 3600"
-    ).execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM settings WHERE key LIKE 'terminal_share_%'"
+    ).fetch_all(pool).await.unwrap_or_default();
+    let now_epoch = chrono::Utc::now().timestamp();
+    let mut ts_deleted = 0u64;
+    for (k, v) in rows {
+        let ts: i64 = v.split('|').next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        if ts > 0 && ts < now_epoch - 3600 {
+            if sqlx::query("DELETE FROM settings WHERE key = $1").bind(&k).execute(pool).await.is_ok() {
+                ts_deleted += 1;
+            }
+        }
+    }
     if ts_deleted > 0 {
         tracing::info!("Retention: deleted {ts_deleted} expired terminal shares (>1 hour)");
     }
@@ -1241,7 +1250,7 @@ async fn run_retention_cleanup(pool: &PgPool) {
 /// Ingest suspicious events written by the agent (from JSONL file).
 /// Reads /var/lib/dockpanel/suspicious-events.jsonl, records each event,
 /// then truncates the file. Runs every 2 minutes with auto-healer.
-async fn security_ingest_suspicious_events(pool: &PgPool) {
+async fn security_ingest_suspicious_events(pool: &SqlitePool) {
     let path = "/var/lib/dockpanel/suspicious-events.jsonl";
 
     let content = match std::fs::read_to_string(path) {
@@ -1431,7 +1440,8 @@ pub fn classify_canary(path: &str) -> (CanaryState, Option<std::fs::Metadata>) {
     }
 }
 
-async fn security_check_canary_files(pool: &PgPool) {
+async fn security_check_canary_files(pool: &SqlitePool) {
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
 
     let canary_paths = CANARY_WATCH_PATHS;
@@ -1471,8 +1481,14 @@ async fn security_check_canary_files(pool: &PgPool) {
         };
         examined += 1;
 
+        #[cfg(unix)]
         let atime = meta.atime();
+        #[cfg(not(unix))]
+        let atime = { let _ = &meta; 0i64 };
+        #[cfg(unix)]
         let _mtime = meta.mtime();
+        #[cfg(not(unix))]
+        let _mtime = 0i64;
 
         // If accessed more recently than modified, someone read it
         // (mtime is set when we create it; atime changes on read)
@@ -1602,7 +1618,7 @@ async fn security_check_canary_files(pool: &PgPool) {
 }
 
 /// Check if lockdown should auto-expire (24h max by default).
-async fn security_check_lockdown_expiry(pool: &PgPool) {
+async fn security_check_lockdown_expiry(pool: &SqlitePool) {
     let row: Option<(bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT active, triggered_at FROM lockdown_state WHERE id = 1"
     ).fetch_optional(pool).await.ok().flatten();
@@ -1623,7 +1639,7 @@ async fn security_check_lockdown_expiry(pool: &PgPool) {
 }
 
 /// Auto-sleep: stop containers that have been idle beyond their configured threshold.
-async fn auto_sleep_idle_containers(pool: &PgPool, agents: &AgentRegistry) {
+async fn auto_sleep_idle_containers(pool: &SqlitePool, agents: &AgentRegistry) {
     // Fetch all containers with auto-sleep enabled and not already sleeping.
     //
     // `server_id` was added to this table in v2.80.0 and is what makes the loop

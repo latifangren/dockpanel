@@ -8,7 +8,7 @@
 //! pick up sites with no other change.
 
 use chrono::{Datelike, Timelike};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::services::agent::{AgentHandle, AgentRegistry};
@@ -32,7 +32,7 @@ struct DuePolicy {
 /// no server column and nothing alerts on drill outcomes, that certification is the
 /// only artifact anyone sees. It also feeds the chain-of-trust compliance report.
 pub async fn run(
-    db: PgPool,
+    db: SqlitePool,
     agents: AgentRegistry,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
@@ -55,7 +55,7 @@ pub async fn run(
     }
 }
 
-async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
+async fn tick(db: &SqlitePool, agents: &AgentRegistry) -> Result<(), String> {
     let now = chrono::Utc::now();
 
     let policies: Vec<DuePolicy> = sqlx::query_as(
@@ -109,7 +109,7 @@ async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
 /// again, once per week, silently. Checking once per policy keeps the cap the comment
 /// always claimed (one policy's drills in flight per server) without a leg starving
 /// its own sibling.
-async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &DuePolicy) -> bool {
+async fn dispatch_policy_drills(db: &SqlitePool, agents: &AgentRegistry, policy: &DuePolicy) -> bool {
     let db_row: Option<(Uuid, Option<Uuid>, String, String, String)> = sqlx::query_as(
         "SELECT id, server_id, db_type, db_name, filename \
          FROM database_backups \
@@ -209,7 +209,7 @@ async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &Du
 /// invisible; now that it fires, an unbounded count would let ONE stranded row disable
 /// DR verification for that machine permanently. A drill that has been "running" for
 /// over two hours is not running.
-async fn has_running_drill_for_server(db: &PgPool, sid: Uuid) -> bool {
+async fn has_running_drill_for_server(db: &SqlitePool, sid: Uuid) -> bool {
     let count: Option<(i64,)> = sqlx::query_as(
         "SELECT COUNT(*) FROM backup_drills \
          WHERE server_id = $1 AND status IN ('pending', 'running') \
@@ -222,7 +222,7 @@ async fn has_running_drill_for_server(db: &PgPool, sid: Uuid) -> bool {
 /// Mirrors the trigger_drill route handler's shape so on-demand and scheduled
 /// drills end up indistinguishable in the audit trail (backup_drills + Drills tab).
 async fn enqueue_drill(
-    db: &PgPool,
+    db: &SqlitePool,
     agent: &AgentHandle,
     backup_type: &str,
     backup_id: Uuid,

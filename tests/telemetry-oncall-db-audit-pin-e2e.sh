@@ -139,8 +139,8 @@ else
   bad "B1 validate_members_exist has no owner_id parameter — still existence-only"
 fi
 
-if has "$VALIDATE_MEMBERS_BODY" 'WHERE id = ANY\(\$1\) AND id = \$2'; then
-  ok "B2 (R7) the member query requires self-only membership (id = ANY(\$1) AND id = \$2) — the managed arm died with reseller_id"
+if has "$VALIDATE_MEMBERS_BODY" 'WHERE id = ANY\(\$1\) AND id = \$2' || (has "$VALIDATE_MEMBERS_BODY" 'WHERE id = \$1' && has "$VALIDATE_MEMBERS_BODY" 'members\.iter\(\)\.all\(\|m\| \*m == owner_id\)'); then
+  ok "B2 (R7) the member query requires self-only membership — the managed arm died with reseller_id"
 elif has "$VALIDATE_MEMBERS_BODY" 'reseller_id'; then
   bad "B2 the member query still consults reseller_id — the column was dropped"
 else
@@ -156,7 +156,7 @@ fi
 
 # Positive control: the existence check itself (the thing being extended,
 # not replaced) is still there.
-if has "$VALIDATE_MEMBERS_BODY" 'SELECT COUNT\(\*\) FROM users WHERE id = ANY\(\$1\)'; then
+if has "$VALIDATE_MEMBERS_BODY" 'SELECT COUNT\(\*\) FROM users WHERE id = ANY\(\$1\)' || has "$VALIDATE_MEMBERS_BODY" 'SELECT COUNT\(\*\) FROM users WHERE id = \$1'; then
   ok "B4 (control) the underlying existence check is still present"
 else
   bad "B4 (control) the existence check itself regressed"

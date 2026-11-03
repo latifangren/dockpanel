@@ -791,7 +791,7 @@ fn webhook_client_builder() -> reqwest::ClientBuilder {
         .redirect(reqwest::redirect::Policy::none())
 }
 
-async fn forward_to_route(db: &sqlx::PgPool, route: &WebhookRoute, body: &str, delivery_id: Uuid) {
+async fn forward_to_route(db: &sqlx::SqlitePool, route: &WebhookRoute, body: &str, delivery_id: Uuid) {
     // Re-validate destination URL at forward time to prevent DNS rebinding SSRF.
     // An attacker could register a route pointing to a public IP, then change DNS
     // to resolve to an internal IP before the webhook fires.

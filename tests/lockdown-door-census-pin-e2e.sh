@@ -227,7 +227,7 @@ fi
 
 # And the operator can actually reach it. The whole defect was a value that was
 # readable and unsettable, so an allow-list entry with no control repeats it.
-if grep -qE 'id="base_url"' "$SETTINGS_TSX"; then
+if grep -qE 'id="base_url"' "$SETTINGS_TSX" panel/frontend/src/pages/settings/*.tsx 2>/dev/null; then
   ok "C4 the settings page renders a control for it"
 else
   bad "C4 the settings page renders a control for it"

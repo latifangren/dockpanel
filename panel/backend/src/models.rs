@@ -41,7 +41,7 @@ pub struct User {
 pub struct OnCallSchedule {
     pub id: Uuid,
     pub name: String,
-    pub members: Vec<Uuid>,
+    pub members: sqlx::types::Json<Vec<Uuid>>,
     pub cadence_days: i32,
     pub anchor_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,

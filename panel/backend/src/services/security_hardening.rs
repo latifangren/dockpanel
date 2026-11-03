@@ -7,7 +7,7 @@
 //! - Lockdown state management (Feature 9/11)
 //! - Tamper-resistant file logging (Feature 6)
 
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::sync::OnceLock;
 use std::time::Duration;
 use uuid::Uuid;
@@ -86,7 +86,7 @@ pub async fn lookup_geo_ip(ip: &str) -> Option<GeoInfo> {
 /// This table has a PostgreSQL trigger preventing UPDATE/DELETE.
 #[allow(clippy::too_many_arguments)]
 pub async fn audit_log(
-    pool: &PgPool,
+    pool: &SqlitePool,
     event_type: &str,
     actor_email: Option<&str>,
     actor_ip: Option<&str>,
@@ -168,7 +168,7 @@ fn write_to_audit_file(
 /// that were queued on disk before the panel could read them pass the time they
 /// actually happened — see [`record_suspicious_event_at`].
 pub async fn record_suspicious_event(
-    pool: &PgPool,
+    pool: &SqlitePool,
     event_type: &str,
     actor_email: Option<&str>,
     actor_ip: Option<&str>,
@@ -194,7 +194,7 @@ pub async fn record_suspicious_event(
 /// it. Honouring it means an old backlog lands outside the window and a genuine
 /// burst still trips the rule.
 pub async fn record_suspicious_event_at(
-    pool: &PgPool,
+    pool: &SqlitePool,
     event_type: &str,
     actor_email: Option<&str>,
     actor_ip: Option<&str>,
@@ -221,7 +221,7 @@ pub async fn record_suspicious_event_at(
 
     let count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM suspicious_events \
-         WHERE created_at > NOW() - make_interval(mins => $1)"
+         WHERE created_at > datetime('now', '-' || $1 || ' minutes')"
     )
     .bind(window_mins as i32)
     .fetch_one(pool)
@@ -259,7 +259,7 @@ pub async fn record_suspicious_event_at(
 // ── Lockdown Management (Feature 9/11) ──────────────────────────────────
 
 /// Activate lockdown mode.
-pub async fn activate_lockdown(pool: &PgPool, triggered_by: &str, reason: &str) {
+pub async fn activate_lockdown(pool: &SqlitePool, triggered_by: &str, reason: &str) {
     let _ = sqlx::query(
         "UPDATE lockdown_state SET \
          active = TRUE, triggered_by = $1, triggered_at = NOW(), reason = $2, \
@@ -276,7 +276,7 @@ pub async fn activate_lockdown(pool: &PgPool, triggered_by: &str, reason: &str) 
 }
 
 /// Deactivate lockdown mode (admin only).
-pub async fn deactivate_lockdown(pool: &PgPool, admin_email: &str) {
+pub async fn deactivate_lockdown(pool: &SqlitePool, admin_email: &str) {
     let _ = sqlx::query(
         "UPDATE lockdown_state SET \
          active = FALSE, unlocked_at = NOW(), unlocked_by = $1 \
@@ -290,7 +290,7 @@ pub async fn deactivate_lockdown(pool: &PgPool, admin_email: &str) {
 }
 
 /// Check if system is currently in lockdown.
-pub async fn is_locked_down(pool: &PgPool) -> bool {
+pub async fn is_locked_down(pool: &SqlitePool) -> bool {
     sqlx::query_scalar::<_, bool>("SELECT active FROM lockdown_state WHERE id = 1")
         .fetch_optional(pool)
         .await
@@ -300,7 +300,7 @@ pub async fn is_locked_down(pool: &PgPool) -> bool {
 }
 
 /// Get lockdown state details.
-pub async fn get_lockdown_state(pool: &PgPool) -> serde_json::Value {
+pub async fn get_lockdown_state(pool: &SqlitePool) -> serde_json::Value {
     let row: Option<(bool, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<String>)> =
         sqlx::query_as(
             "SELECT active, triggered_by, triggered_at, reason FROM lockdown_state WHERE id = 1"
@@ -325,7 +325,7 @@ pub async fn get_lockdown_state(pool: &PgPool) -> serde_json::Value {
 
 /// Send an alert to all admin notification channels about a suspicious login/register.
 pub async fn alert_suspicious_ip(
-    pool: &PgPool,
+    pool: &SqlitePool,
     event: &str,      // "login" or "register"
     email: &str,
     ip: &str,
@@ -384,7 +384,7 @@ pub async fn alert_suspicious_ip(
 }
 
 /// Send an emergency lockdown notification to all admin channels.
-pub async fn alert_lockdown(pool: &PgPool, reason: &str, triggered_by: &str) {
+pub async fn alert_lockdown(pool: &SqlitePool, reason: &str, triggered_by: &str) {
     let subject = "🔒 EMERGENCY: System Lockdown Activated";
     let message = format!(
         "DockPanel has entered lockdown mode.\n\
@@ -431,7 +431,7 @@ pub async fn alert_lockdown(pool: &PgPool, reason: &str, triggered_by: &str) {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-pub async fn get_setting_i64(pool: &PgPool, key: &str, default: i64) -> i64 {
+pub async fn get_setting_i64(pool: &SqlitePool, key: &str, default: i64) -> i64 {
     sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = $1")
         .bind(key)
         .fetch_optional(pool)
@@ -442,7 +442,7 @@ pub async fn get_setting_i64(pool: &PgPool, key: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
-pub async fn get_setting_bool(pool: &PgPool, key: &str, default: bool) -> bool {
+pub async fn get_setting_bool(pool: &SqlitePool, key: &str, default: bool) -> bool {
     sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = $1")
         .bind(key)
         .fetch_optional(pool)

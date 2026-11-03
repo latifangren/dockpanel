@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::services::agent::AgentRegistry;
@@ -10,7 +10,7 @@ use crate::services::notifications;
 /// read on the host that wrote it. Verifying a member's backup against the panel's disk
 /// finds nothing, marks a good archive `failed`, and — because the driving queries skip
 /// any backup that already has a verification row — never looks at it again.
-pub async fn run(db: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(db: SqlitePool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Backup verifier started");
 
     // Initial delay: 5 minutes after startup
@@ -39,7 +39,7 @@ pub async fn run(db: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sync
     }
 }
 
-async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
+async fn tick(db: &SqlitePool, agents: &AgentRegistry) -> Result<(), String> {
     // Find policies that have verify_after_backup enabled
     let policies_exist: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM backup_policies WHERE verify_after_backup = TRUE AND enabled = TRUE"
@@ -113,7 +113,7 @@ async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
 }
 
 async fn verify_one(
-    db: &PgPool,
+    db: &SqlitePool,
     agents: &AgentRegistry,
     server_id: Uuid,
     backup_type: &str,

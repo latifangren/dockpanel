@@ -7,6 +7,7 @@ RUN cargo build --release 2>/dev/null || true
 # Copy real source and build
 COPY src/ src/
 COPY migrations/ migrations/
+COPY migrations_sqlite/ migrations_sqlite/
 RUN touch src/main.rs && cargo build --release
 
 FROM debian:bookworm-slim

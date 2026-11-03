@@ -30,9 +30,32 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
+
+#[derive(sqlx::FromRow)]
+struct AlertRuleDriftRow {
+    server_id: Uuid,
+    cpu_threshold: Option<i32>,
+    cpu_duration: Option<i32>,
+    memory_threshold: Option<i32>,
+    memory_duration: Option<i32>,
+    disk_threshold: Option<i32>,
+    alert_cpu: bool,
+    alert_memory: bool,
+    alert_disk: bool,
+    alert_offline: bool,
+    alert_backup_failure: bool,
+    alert_ssl_expiry: bool,
+    alert_service_health: bool,
+    ssl_warning_days: Option<i32>,
+    notify_email: Option<String>,
+    notify_slack_url: Option<String>,
+    notify_discord_url: Option<String>,
+    cooldown_minutes: Option<i32>,
+    escalation_policy_id: Option<Uuid>,
+}
 
 const NULL: Value = Value::Null;
 
@@ -278,16 +301,22 @@ struct ServerMeta {
 }
 
 async fn fetch_server_meta(
-    pool: &PgPool,
+    pool: &SqlitePool,
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, ServerMeta>, sqlx::Error> {
-    let rows: Vec<(Uuid, String, bool, String, Option<DateTime<Utc>>)> = sqlx::query_as(
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
         "SELECT id, name, is_local, status, last_seen_at \
-         FROM servers WHERE id = ANY($1)",
-    )
-    .bind(ids)
-    .fetch_all(pool)
-    .await?;
+         FROM servers WHERE id IN ({placeholders})"
+    );
+    let mut q = sqlx::query_as(&sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    let rows: Vec<(Uuid, String, bool, String, Option<DateTime<Utc>>)> = q.fetch_all(pool).await?;
     Ok(rows
         .into_iter()
         .map(|(id, name, is_local, status, last_seen_at)| {
@@ -297,7 +326,7 @@ async fn fetch_server_meta(
 }
 
 async fn fetch_alert_rules(
-    pool: &PgPool,
+    pool: &SqlitePool,
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Value>, sqlx::Error> {
     // NULL server_id (the user's default rule) is excluded by `= ANY`.
@@ -315,20 +344,38 @@ async fn fetch_alert_rules(
     // exists. The join below restores "one row per server_id" by resolving
     // to the row that belongs to the server's actual registering owner,
     // rather than depending on the stray-row bug being absent.
-    let rows: Vec<(Uuid, Value)> = sqlx::query_as(
-        "SELECT server_id, (to_jsonb(c) - 'server_id') AS config FROM ( \
-           SELECT ar.server_id, ar.cpu_threshold, ar.cpu_duration, ar.memory_threshold, ar.memory_duration, \
-                  ar.disk_threshold, ar.alert_cpu, ar.alert_memory, ar.alert_disk, ar.alert_offline, \
-                  ar.alert_backup_failure, ar.alert_ssl_expiry, ar.alert_service_health, ar.ssl_warning_days, \
-                  ar.notify_email, ar.notify_slack_url, ar.notify_discord_url, ar.cooldown_minutes, ar.escalation_policy_id \
-           FROM alert_rules ar JOIN servers s ON s.id = ar.server_id AND s.user_id = ar.user_id \
-           WHERE ar.server_id = ANY($1) \
-         ) c",
-    )
-    .bind(ids)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.into_iter().collect())
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT ar.server_id, ar.cpu_threshold, ar.cpu_duration, ar.memory_threshold, ar.memory_duration, \
+               ar.disk_threshold, ar.alert_cpu, ar.alert_memory, ar.alert_disk, ar.alert_offline, \
+               ar.alert_backup_failure, ar.alert_ssl_expiry, ar.alert_service_health, ar.ssl_warning_days, \
+               ar.notify_email, ar.notify_slack_url, ar.notify_discord_url, ar.cooldown_minutes, ar.escalation_policy_id \
+        FROM alert_rules ar JOIN servers s ON s.id = ar.server_id AND s.user_id = ar.user_id \
+        WHERE ar.server_id IN ({placeholders})"
+    );
+    let mut q = sqlx::query_as::<_, AlertRuleDriftRow>(&sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    let mut out = HashMap::new();
+    for r in rows {
+        out.insert(r.server_id, serde_json::json!({
+            "cpu_threshold": r.cpu_threshold, "cpu_duration": r.cpu_duration,
+            "memory_threshold": r.memory_threshold, "memory_duration": r.memory_duration,
+            "disk_threshold": r.disk_threshold, "alert_cpu": r.alert_cpu,
+            "alert_memory": r.alert_memory, "alert_disk": r.alert_disk,
+            "alert_offline": r.alert_offline, "alert_backup_failure": r.alert_backup_failure,
+            "alert_ssl_expiry": r.alert_ssl_expiry, "alert_service_health": r.alert_service_health,
+            "ssl_warning_days": r.ssl_warning_days, "notify_email": r.notify_email,
+            "notify_slack_url": r.notify_slack_url, "notify_discord_url": r.notify_discord_url,
+            "cooldown_minutes": r.cooldown_minutes, "escalation_policy_id": r.escalation_policy_id
+        }));
+    }
+    Ok(out)
 }
 
 // ─── Report assembly ───────────────────────────────────────────────────────
@@ -346,7 +393,7 @@ async fn fetch_alert_rules(
 /// `all_ids` was already validated against the fleet-wide server list by that
 /// caller, and the fetchers below simply resolve whatever ids they're given.
 pub async fn build_report(
-    pool: &PgPool,
+    pool: &SqlitePool,
     reference_id: Uuid,
     targets: &[Uuid],
 ) -> Result<DriftReport, sqlx::Error> {

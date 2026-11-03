@@ -653,9 +653,9 @@ pub async fn uptime(
     const TOTAL_BUCKETS: i64 = 144;
 
     let rows: Vec<(i64,)> = sqlx::query_as(
-        "SELECT DISTINCT FLOOR(EXTRACT(EPOCH FROM created_at) / 600)::bigint AS bucket \
+        "SELECT DISTINCT CAST((strftime('%s', created_at) / 600) AS INTEGER) AS bucket \
          FROM metrics_history \
-         WHERE server_id = $1 AND created_at >= NOW() - INTERVAL '24 hours'",
+         WHERE server_id = $1 AND created_at >= datetime('now', '-24 hours')",
     )
     .bind(id)
     .fetch_all(&state.db)

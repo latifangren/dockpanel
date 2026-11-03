@@ -6,12 +6,12 @@ use lettre::{
     },
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 /// Read SMTP settings from DB and send an email.
 /// Returns Ok(()) if sent, Err(message) if SMTP not configured or send failed.
 pub async fn send_email(
-    pool: &PgPool,
+    pool: &SqlitePool,
     to: &str,
     subject: &str,
     body_html: &str,
@@ -92,7 +92,7 @@ pub async fn send_email(
 
 /// Send email verification link.
 pub async fn send_verification_email(
-    pool: &PgPool,
+    pool: &SqlitePool,
     to: &str,
     token: &str,
     base_url: &str,
@@ -117,7 +117,7 @@ pub async fn send_verification_email(
 
 /// Send password reset link.
 pub async fn send_reset_email(
-    pool: &PgPool,
+    pool: &SqlitePool,
     to: &str,
     token: &str,
     base_url: &str,

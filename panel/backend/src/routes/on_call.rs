@@ -52,17 +52,18 @@ pub struct ScheduleInput {
     pub anchor_at: Option<DateTime<Utc>>,
 }
 
-async fn load_member_emails(pool: &sqlx::PgPool, ids: &[Uuid]) -> Vec<MemberInfo> {
+async fn load_member_emails(pool: &sqlx::SqlitePool, ids: &[Uuid]) -> Vec<MemberInfo> {
     if ids.is_empty() {
         return Vec::new();
     }
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, email FROM users WHERE id = ANY($1)",
-    )
-    .bind(ids)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let all_users: Vec<(Uuid, String)> = sqlx::query_as("SELECT id, email FROM users")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    let rows: Vec<(Uuid, String)> = all_users
+        .into_iter()
+        .filter(|(uid, _)| ids.contains(uid))
+        .collect();
 
     // Preserve the schedule's stored ordering rather than DB row order.
     ids.iter()
@@ -78,7 +79,7 @@ async fn load_member_emails(pool: &sqlx::PgPool, ids: &[Uuid]) -> Vec<MemberInfo
 }
 
 async fn schedule_to_dto(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     id: Uuid,
     name: String,
     members: Vec<Uuid>,
@@ -157,7 +158,7 @@ fn validate_input(input: &ScheduleInput) -> Result<(), ApiError> {
 /// missed here because this table's own member list is a different path
 /// into the same sink.
 async fn validate_members_exist(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     members: &[Uuid],
     owner_id: Uuid,
 ) -> Result<(), ApiError> {
@@ -165,15 +166,18 @@ async fn validate_members_exist(
     // (dropped by the terminal migration with the reseller tables).
     // Membership is self-only; the count check below rejects any other
     // member instead of paging them.
-    let found: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE id = ANY($1) AND id = $2",
-    )
-    .bind(members)
-    .bind(owner_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| internal_error("validate members", e))?;
-    if (found as usize) != members.len() {
+    if !members.iter().all(|m| *m == owner_id) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "one or more member IDs do not match existing users",
+        ));
+    }
+    let found: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = $1")
+        .bind(owner_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| internal_error("validate members", e))?;
+    if found != 1 {
         return Err(err(
             StatusCode::BAD_REQUEST,
             "one or more member IDs do not match existing users",
@@ -193,7 +197,7 @@ pub async fn list_schedules(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
 ) -> Result<Json<Vec<OnCallScheduleDto>>, ApiError> {
-    let rows: Vec<(Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
+    let rows: Vec<(Uuid, String, sqlx::types::Json<Vec<Uuid>>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
         sqlx::query_as(
             "SELECT id, name, members, cadence_days, anchor_at, created_at, updated_at \
              FROM on_call_schedules WHERE user_id = $1 ORDER BY name ASC",
@@ -206,7 +210,7 @@ pub async fn list_schedules(
     let mut out = Vec::with_capacity(rows.len());
     for (id, name, members, cadence, anchor, created, updated) in rows {
         out.push(
-            schedule_to_dto(&state.db, id, name, members, cadence, anchor, created, updated)
+            schedule_to_dto(&state.db, id, name, members.0, cadence, anchor, created, updated)
                 .await,
         );
     }
@@ -220,7 +224,7 @@ pub async fn get_schedule(
     AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<OnCallScheduleDto>, ApiError> {
-    let row: Option<(Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
+    let row: Option<(Uuid, String, sqlx::types::Json<Vec<Uuid>>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
         sqlx::query_as(
             "SELECT id, name, members, cadence_days, anchor_at, created_at, updated_at \
              FROM on_call_schedules WHERE id = $1 AND user_id = $2",
@@ -236,7 +240,7 @@ pub async fn get_schedule(
     };
 
     Ok(Json(
-        schedule_to_dto(&state.db, id, name, members, cadence, anchor, created, updated).await,
+        schedule_to_dto(&state.db, id, name, members.0, cadence, anchor, created, updated).await,
     ))
 }
 
@@ -251,7 +255,7 @@ pub async fn create_schedule(
     validate_members_exist(&state.db, &input.members, claims.sub).await?;
 
     let anchor = input.anchor_at.unwrap_or_else(Utc::now);
-    let row: (Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>) =
+    let row: (Uuid, String, sqlx::types::Json<Vec<Uuid>>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>) =
         sqlx::query_as(
             "INSERT INTO on_call_schedules (user_id, name, members, cadence_days, anchor_at) \
              VALUES ($1, $2, $3, $4, $5) \
@@ -259,7 +263,7 @@ pub async fn create_schedule(
         )
         .bind(claims.sub)
         .bind(input.name.trim())
-        .bind(&input.members)
+        .bind(sqlx::types::Json(&input.members))
         .bind(input.cadence_days)
         .bind(anchor)
         .fetch_one(&state.db)
@@ -267,7 +271,7 @@ pub async fn create_schedule(
         .map_err(|e| internal_error("create schedule", e))?;
 
     Ok(Json(
-        schedule_to_dto(&state.db, row.0, row.1, row.2, row.3, row.4, row.5, row.6).await,
+        schedule_to_dto(&state.db, row.0, row.1, row.2.0, row.3, row.4, row.5, row.6).await,
     ))
 }
 
@@ -282,7 +286,7 @@ pub async fn update_schedule(
     validate_input(&input)?;
     validate_members_exist(&state.db, &input.members, claims.sub).await?;
 
-    let row: Option<(Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
+    let row: Option<(Uuid, String, sqlx::types::Json<Vec<Uuid>>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
         if let Some(anchor) = input.anchor_at {
             sqlx::query_as(
                 "UPDATE on_call_schedules \
@@ -292,7 +296,7 @@ pub async fn update_schedule(
             )
             .bind(id)
             .bind(input.name.trim())
-            .bind(&input.members)
+            .bind(sqlx::types::Json(&input.members))
             .bind(input.cadence_days)
             .bind(anchor)
             .bind(claims.sub)
@@ -309,7 +313,7 @@ pub async fn update_schedule(
             )
             .bind(id)
             .bind(input.name.trim())
-            .bind(&input.members)
+            .bind(sqlx::types::Json(&input.members))
             .bind(input.cadence_days)
             .bind(claims.sub)
             .fetch_optional(&state.db)
@@ -322,7 +326,7 @@ pub async fn update_schedule(
     };
 
     Ok(Json(
-        schedule_to_dto(&state.db, id, name, members, cadence, anchor, created, updated).await,
+        schedule_to_dto(&state.db, id, name, members.0, cadence, anchor, created, updated).await,
     ))
 }
 
@@ -446,23 +450,28 @@ pub async fn delete_schedule(
 /// the stale reference is strictly less harmful than a half-deleted user. Any
 /// route that ends up unroutable still degrades to the alert owner in
 /// `dispatch_escalation_step`.
-pub async fn scrub_deleted_user(db: &sqlx::PgPool, user_id: Uuid) {
-    match sqlx::query(
-        "UPDATE on_call_schedules SET members = array_remove(members, $1), updated_at = NOW() \
-         WHERE $1 = ANY(members)",
+pub async fn scrub_deleted_user(db: &sqlx::SqlitePool, user_id: Uuid) {
+    let schedules: Vec<(Uuid, sqlx::types::Json<Vec<Uuid>>)> = sqlx::query_as(
+        "SELECT id, members FROM on_call_schedules",
     )
-    .bind(user_id)
-    .execute(db)
+    .fetch_all(db)
     .await
-    {
-        Ok(r) if r.rows_affected() > 0 => {
-            tracing::info!(
-                "Removed deleted user {user_id} from {} on-call schedule(s)",
-                r.rows_affected()
-            );
+    .unwrap_or_default();
+
+    for (id, sqlx::types::Json(mut members)) in schedules {
+        if members.contains(&user_id) {
+            let initial_len = members.len();
+            members.retain(|u| *u != user_id);
+            if members.len() != initial_len {
+                let _ = sqlx::query(
+                    "UPDATE on_call_schedules SET members = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                )
+                .bind(sqlx::types::Json(members))
+                .bind(id)
+                .execute(db)
+                .await;
+            }
         }
-        Ok(_) => {}
-        Err(e) => tracing::warn!("Could not scrub deleted user {user_id} from on-call rotas: {e}"),
     }
 
     let dead_route = format!("user:{user_id}");
@@ -522,7 +531,7 @@ pub async fn whoami(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    let schedules: Vec<(Uuid, String, Vec<Uuid>, i32, DateTime<Utc>)> = sqlx::query_as(
+    let schedules: Vec<(Uuid, String, sqlx::types::Json<Vec<Uuid>>, i32, DateTime<Utc>)> = sqlx::query_as(
         "SELECT id, name, members, cadence_days, anchor_at FROM on_call_schedules",
     )
     .fetch_all(&state.db)

@@ -64,6 +64,12 @@ rm -f /usr/local/bin/alist
 
 command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload 2>/dev/null || true
 
+# Remove SQLite database
+if [ -d "/var/lib/dockpanel" ]; then
+    echo -e "${GREEN}[+]${NC} Removing SQLite database..."
+    rm -rf /var/lib/dockpanel
+fi
+
 # Remove PostgreSQL container and volume
 if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -c "^dockpanel-postgres$" >/dev/null; then
     echo -e "${GREEN}[+]${NC} Removing PostgreSQL container..."

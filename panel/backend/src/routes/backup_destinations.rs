@@ -550,13 +550,17 @@ async fn test_from_whole_fleet(
     // predicate to drift away from `online_fleet`'s. A registered server that was
     // never asked is not a pass: it is the one host whose answer is still unknown.
     let asked: Vec<Uuid> = fleet.iter().map(|m| m.id).collect();
-    let not_asked: Vec<(String, String)> = sqlx::query_as(
-        "SELECT name, status FROM servers WHERE NOT (id = ANY($1)) ORDER BY name",
+    let all_servers: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, name, status FROM servers ORDER BY name",
     )
-    .bind(asked.as_slice())
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
+    let not_asked: Vec<(String, String)> = all_servers
+        .into_iter()
+        .filter(|(id, _, _)| !asked.contains(id))
+        .map(|(_, name, status)| (name, status))
+        .collect();
 
     let listed = |v: &[(String, String)]| {
         v.iter()

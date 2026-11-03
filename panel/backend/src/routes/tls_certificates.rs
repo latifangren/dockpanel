@@ -117,7 +117,7 @@ struct TlsCertificate {
     user_id: Uuid,
     server_id: Uuid,
     alias: String,
-    dns_names: Vec<String>,
+    dns_names: sqlx::types::Json<Vec<String>>,
     issuer: Option<String>,
     not_before: Option<chrono::DateTime<chrono::Utc>>,
     not_after: Option<chrono::DateTime<chrono::Utc>>,
@@ -165,7 +165,7 @@ fn read_agent_metadata(v: &serde_json::Value) -> AgentCertMetadata {
 
 /// The stacks that point at a registered certificate: `(id, name, domain)`.
 async fn referencing_stacks(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     cert_id: Uuid,
 ) -> Result<Vec<(Uuid, String, Option<String>)>, ApiError> {
     sqlx::query_as(
@@ -197,7 +197,7 @@ fn cert_json(row: &TlsCertificate, in_use_by: &[(Uuid, String, Option<String>)])
         "user_id": row.user_id,
         "server_id": row.server_id,
         "alias": row.alias,
-        "dns_names": row.dns_names,
+        "dns_names": &row.dns_names.0,
         "issuer": row.issuer,
         "not_before": row.not_before,
         "not_after": row.not_after,
@@ -232,7 +232,7 @@ fn check_pem_sizes(certificate: &str, private_key: &str) -> Result<(), ApiError>
 
 /// Load one certificate the caller owns, by id.
 async fn owned_certificate(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     id: Uuid,
     user_id: Uuid,
 ) -> Result<TlsCertificate, ApiError> {
@@ -252,7 +252,7 @@ async fn owned_certificate(
 /// only — the same name may be registered on two fleet members with different
 /// certificates behind it, and a stack must resolve the one on its own host.
 pub(crate) async fn certificate_id_for_alias(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     alias: &str,
     user_id: Uuid,
     server_id: Uuid,
@@ -383,7 +383,7 @@ pub async fn create(
     .bind(claims.sub)
     .bind(server_id)
     .bind(&alias)
-    .bind(&meta.dns_names)
+    .bind(sqlx::types::Json(&meta.dns_names))
     .bind(&meta.issuer)
     .bind(meta.not_before)
     .bind(meta.not_after)
@@ -495,7 +495,7 @@ pub async fn replace(
          RETURNING id, user_id, server_id, alias, dns_names, issuer, not_before, not_after, \
          fingerprint_sha256, cert_path, key_path, created_at, updated_at",
     )
-    .bind(&meta.dns_names)
+    .bind(sqlx::types::Json(&meta.dns_names))
     .bind(&meta.issuer)
     .bind(meta.not_before)
     .bind(meta.not_after)

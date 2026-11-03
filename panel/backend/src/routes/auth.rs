@@ -511,7 +511,7 @@ fn issue_session(
 /// Fails CLOSED when the proxy sends no `X-Real-IP` — an allowlist that cannot
 /// identify the caller must not admit them (`helpers::panel_ip_allowed`).
 pub async fn enforce_panel_ip_allowlist(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     headers: &HeaderMap,
 ) -> Result<(), ApiError> {
     let whitelist: Option<(String,)> = sqlx::query_as(
@@ -1622,7 +1622,7 @@ pub async fn twofa_verify(
 
 /// Try to use a recovery code. Returns true if a code matched and was consumed.
 async fn try_recovery_code(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     user: &User,
     code: &str,
 ) -> Result<bool, ApiError> {

@@ -110,7 +110,7 @@ pub fn image_allowed_by(allowed: &str, image: &str) -> bool {
 /// that receive an image reference directly — change-image, compose, stacks —
 /// call this so a restriction the operator set is not simply absent there.
 pub async fn enforce_allowed_images(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     user_id: Uuid,
     images: &[String],
 ) -> Result<(), ApiError> {
@@ -723,7 +723,7 @@ pub struct AppPreflightQuery {
 /// Gather everything the app checks need, in as few agent round-trips as
 /// possible, and never let a missing fact become a refusal.
 async fn gather_app_facts(
-    _db: &sqlx::PgPool,
+    _db: &sqlx::SqlitePool,
     agent: &crate::services::agent::AgentHandle,
     _server_id: uuid::Uuid,
     port: u16,
@@ -2472,7 +2472,7 @@ pub async fn policy_usage(
 /// Best-effort: the container recreate has already succeeded by the time
 /// this runs, so a failure here logs loudly rather than turning an
 /// otherwise-successful update into an error response.
-async fn rekey_sleep_config(db: &sqlx::PgPool, old_container_id: &str, new_container_id: &str) {
+async fn rekey_sleep_config(db: &sqlx::SqlitePool, old_container_id: &str, new_container_id: &str) {
     if old_container_id == new_container_id || new_container_id.is_empty() {
         return;
     }

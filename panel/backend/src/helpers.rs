@@ -978,7 +978,7 @@ pub async fn detect_public_ip_cached() -> String {
 /// result, so the callers skip the record and say so instead — the same
 /// refuse-rather-than-substitute rule [`agent_for_site_server`] applies to agents.
 pub async fn public_ip_for_server(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     server_id: Option<uuid::Uuid>,
 ) -> Option<String> {
     let Some(server_id) = server_id else {

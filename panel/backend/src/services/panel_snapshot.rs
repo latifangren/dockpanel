@@ -17,7 +17,7 @@
 //! coupling.
 
 use chrono::Utc;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
@@ -122,7 +122,7 @@ impl From<sqlx::Error> for SnapshotError {
 /// inserts the DB row. The DB row + file are consistent: if any earlier
 /// step fails, no row is written and the .tmp file is cleaned up.
 pub async fn create_snapshot(
-    pool: &PgPool,
+    pool: &SqlitePool,
     trigger: SnapshotTrigger,
     operator: Option<String>,
 ) -> Result<SnapshotMeta, SnapshotError> {
@@ -376,7 +376,7 @@ const RESTORE_SCRIPT_PATH: &str = "/var/lib/dockpanel/restore-snapshot.sh";
 /// mid-restore, which broke the `gunzip | psql` pipe; psql read that as a clean
 /// end of input and exited 0, and the code recorded success while the database
 /// had been reduced to 1 of its 92 tables. See `scripts/restore-snapshot.sh`.
-pub async fn spawn_restore(pool: &PgPool, snapshot_id: Uuid) -> Result<(), SnapshotError> {
+pub async fn spawn_restore(pool: &SqlitePool, snapshot_id: Uuid) -> Result<(), SnapshotError> {
     let row: Option<PanelSnapshot> =
         sqlx::query_as("SELECT * FROM panel_snapshots WHERE id = $1")
             .bind(snapshot_id)
@@ -465,7 +465,7 @@ pub async fn last_restore_result() -> Option<serde_json::Value> {
 }
 
 /// List snapshots newest-first. Operator-facing read; raw model rows.
-pub async fn list_snapshots(pool: &PgPool) -> Result<Vec<PanelSnapshot>, SnapshotError> {
+pub async fn list_snapshots(pool: &SqlitePool) -> Result<Vec<PanelSnapshot>, SnapshotError> {
     let rows = sqlx::query_as::<_, PanelSnapshot>(
         "SELECT * FROM panel_snapshots ORDER BY created_at DESC",
     )
@@ -476,7 +476,7 @@ pub async fn list_snapshots(pool: &PgPool) -> Result<Vec<PanelSnapshot>, Snapsho
 
 /// Delete one snapshot — removes file then DB row. File-first so the row
 /// always reflects on-disk reality (no row-without-file states linger).
-pub async fn delete_snapshot(pool: &PgPool, snapshot_id: Uuid) -> Result<(), SnapshotError> {
+pub async fn delete_snapshot(pool: &SqlitePool, snapshot_id: Uuid) -> Result<(), SnapshotError> {
     let row: Option<PanelSnapshot> =
         sqlx::query_as("SELECT * FROM panel_snapshots WHERE id = $1")
             .bind(snapshot_id)
@@ -495,7 +495,7 @@ pub async fn delete_snapshot(pool: &PgPool, snapshot_id: Uuid) -> Result<(), Sna
 /// Retention sweep: keep most-recent `RETENTION_MIN` regardless of age;
 /// delete older than `RETENTION_DAYS` beyond that floor.
 /// Returns count of snapshots removed.
-pub async fn retention_sweep(pool: &PgPool) -> Result<u32, SnapshotError> {
+pub async fn retention_sweep(pool: &SqlitePool) -> Result<u32, SnapshotError> {
     let rows: Vec<PanelSnapshot> = sqlx::query_as(
         "SELECT * FROM panel_snapshots ORDER BY created_at DESC",
     )
@@ -604,26 +604,15 @@ async fn check_free_disk(path: &str, required: u64) -> Result<(), SnapshotError>
 }
 
 async fn sha256_of(path: &Path) -> Result<String, SnapshotError> {
-    let output = Command::new("sha256sum")
-        .arg(path)
-        .output()
-        .await
-        .map_err(SnapshotError::Io)?;
-    if !output.status.success() {
-        return Err(SnapshotError::Subprocess {
-            cmd: "sha256sum".into(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
+    use sha2::{Digest, Sha256};
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            Ok(format!("{:x}", hasher.finalize()))
+        }
+        Err(e) => Err(SnapshotError::Io(e)),
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let digest = stdout
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| SnapshotError::Subprocess {
-            cmd: "sha256sum".into(),
-            stderr: "no digest in stdout".into(),
-        })?;
-    Ok(digest.to_string())
 }
 
 async fn run_cmd_with_timeout(

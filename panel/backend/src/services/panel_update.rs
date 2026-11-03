@@ -29,7 +29,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -252,7 +252,7 @@ impl From<sqlx::Error> for OrchestratorError {
 /// Resolve the current state. In-memory `Idle` may be a lie if a prior
 /// process died mid-update; we cross-check the DB for an in-flight row
 /// before returning Idle.
-pub async fn current_state(handle: &UpdateStateHandle, pool: &PgPool) -> UpdateState {
+pub async fn current_state(handle: &UpdateStateHandle, pool: &SqlitePool) -> UpdateState {
     {
         let s = handle.read().await;
         if !matches!(*s, UpdateState::Idle) {
@@ -348,7 +348,7 @@ pub async fn current_state(handle: &UpdateStateHandle, pool: &PgPool) -> UpdateS
 /// observed via `current_state` polling.
 pub async fn start_panel_update(
     handle: UpdateStateHandle,
-    pool: PgPool,
+    pool: SqlitePool,
     target_version: String,
     operator: Option<String>,
 ) -> Result<UpdateState, OrchestratorError> {
@@ -582,7 +582,7 @@ pub async fn start_panel_update(
 /// update until the 15-minute window lapsed, with the real error only in the
 /// transient unit's journal.
 async fn finalize_failed_update(
-    pool: &PgPool,
+    pool: &SqlitePool,
     handle: &UpdateStateHandle,
     snapshot_id: Uuid,
 ) {
@@ -680,7 +680,7 @@ fn parse_target_from_trigger(trigger: &str) -> Option<String> {
 /// the database stage is atomic and verified (so it cannot half-apply).
 pub async fn rollback_to_snapshot(
     handle: UpdateStateHandle,
-    pool: PgPool,
+    pool: SqlitePool,
     snapshot_id: Uuid,
 ) -> Result<(), OrchestratorError> {
     // Concurrent-apply guard (v2.216.0 audit): rollback used to carry NO check
@@ -721,7 +721,7 @@ pub async fn rollback_to_snapshot(
 /// `to_version = CARGO_PKG_VERSION`. Equal `from_version`/`to_version`
 /// indicates an in-flight rollback by `update.sh`; differing values are a
 /// successful apply.
-pub async fn finalize_pending_on_startup(pool: &PgPool) {
+pub async fn finalize_pending_on_startup(pool: &SqlitePool) {
     let cutoff = Utc::now() - chrono::Duration::minutes(IN_FLIGHT_WINDOW_MIN);
     let pending: Result<Vec<PanelSnapshot>, _> = sqlx::query_as(
         "SELECT * FROM panel_snapshots \
@@ -829,7 +829,7 @@ pub struct FleetProgressRow {
 /// silently skipped every server a DIFFERENT admin had registered, with
 /// nothing in the response indicating the plan was incomplete.
 pub async fn build_fleet_plan(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     is_admin: bool,
     target_version: &str,
@@ -894,7 +894,7 @@ pub(crate) fn semver_key(v: Option<&str>) -> (u8, u64, u64, u64) {
 /// then spawns a background task that walks the plan via
 /// [`execute_fleet_plan`].
 pub async fn create_fleet_run(
-    pool: &PgPool,
+    pool: &SqlitePool,
     target_version: &str,
     plan: &[FleetPlanRow],
     halt_on_failure: bool,
@@ -935,7 +935,7 @@ pub async fn create_fleet_run(
 /// on completion. Long-running — spawn as a tokio task.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_fleet_plan(
-    pool: PgPool,
+    pool: SqlitePool,
     agents: crate::services::agent::AgentRegistry,
     run_id: Uuid,
     plan: Vec<FleetPlanRow>,
@@ -1028,7 +1028,7 @@ pub async fn execute_fleet_plan(
 }
 
 async fn persist_progress(
-    pool: &PgPool,
+    pool: &SqlitePool,
     run_id: Uuid,
     progress: &[FleetProgressRow],
 ) -> Result<(), sqlx::Error> {

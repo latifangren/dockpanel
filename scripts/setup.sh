@@ -895,169 +895,22 @@ generate_secrets() {
 
 # ── PostgreSQL ───────────────────────────────────────────────────────────
 setup_database() {
-    header "PostgreSQL Database"
+    header "Embedded SQLite Database"
 
-    if docker ps --format '{{.Names}}' | grep -c "^${DB_CONTAINER}$" >/dev/null; then
-        log "PostgreSQL container already running"
-    elif docker ps -a --format '{{.Names}}' | grep -c "^${DB_CONTAINER}$" >/dev/null; then
-        log "Starting existing PostgreSQL container..."
-        docker start "$DB_CONTAINER" > /dev/null 2>&1
-    else
-        # Remove stale volume from previous failed install (PostgreSQL ignores
-        # POSTGRES_PASSWORD when an existing data directory is found, causing
-        # password mismatch if the password was regenerated)
-        if docker volume inspect dockpanel-pgdata > /dev/null 2>&1; then
-            warn "Removing stale database volume from previous install..."
-            docker volume rm dockpanel-pgdata > /dev/null 2>&1 || true
-        fi
-
-        # POSTGRES_PASSWORD is passed via the environment (bare `-e` inherits),
-        # so the secret never appears in the logged command line.
-        # Lite mode caps the container: a 3.5 GiB phone cannot give
-        # Postgres an unbounded cgroup, and the panel itself is capped
-        # separately by its own unit (MemoryMax=1G systemd / openrc).
-        local pg_mem_args=()
-        if [ "$DOCKPANEL_LITE" = "1" ]; then
-            pg_mem_args=(--memory=256m --memory-swap=512m)
-            log "Lite mode: capping PostgreSQL container at 256 MiB RAM / 512 MiB swap"
-        fi
-        POSTGRES_PASSWORD="$DB_PASSWORD" \
-        run "Creating PostgreSQL 16 container (pulls the image on first install)" \
-            docker run -d \
-            --name "$DB_CONTAINER" \
-            --restart unless-stopped \
-            "${pg_mem_args[@]}" \
-            -e POSTGRES_DB=dockpanel \
-            -e POSTGRES_USER=dockpanel \
-            -e POSTGRES_PASSWORD \
-            -p "127.0.0.1:${DB_PORT}:5432" \
-            -v dockpanel-pgdata:/var/lib/postgresql/data \
-            postgres:16-alpine
-        log "PostgreSQL container created (port $DB_PORT)"
+    log "Setting up SQLite storage at /var/lib/dockpanel/dockpanel.db..."
+    mkdir -p /var/lib/dockpanel
+    chmod 750 /var/lib/dockpanel
+    if id dockpanel >/dev/null 2>&1; then
+        chown -R dockpanel:dockpanel /var/lib/dockpanel
     fi
 
-    # Wait for PostgreSQL to be ready — ON THE TRANSPORT THE PROBE BELOW USES.
-    #
-    # ⚠ A readiness poll that omits the host answers over the container's own
-    # unix socket, and the official image runs a SOCKET-ONLY temporary server
-    # for the duration of initdb (started with an empty listen_addresses) before
-    # it execs the real one. So a socket poll reports the database ready while
-    # nothing is listening on TCP yet — measured at ~1.0-1.1s on an idle box and
-    # over 20s on a loaded one, against a 2s poll grid — and the password probe
-    # directly below, which MUST use the bridge address to land on the
-    # scram-sha-256 rule, is then refused at the transport layer.
-    #
-    # The installer cannot tell a refused connection from a rejected password, so
-    # it reads that as a mismatch and takes one of two wrong branches on a
-    # database that is perfectly healthy: it prints "Database rejects this
-    # install's password" and reconciles for no reason, or the ALTER lands in the
-    # same window, fails, and the whole install aborts telling a brand-new
-    # operator to destroy their volume. Polling the same transport the consumer
-    # uses closes the window by construction — the temporary server cannot answer
-    # over TCP at all.
-    #
-    # The trailing socket check is the no-bridge-address escape hatch: a
-    # container on host networking has no address for the loop to poll, and the
-    # password probe below cannot run against it either (it degrades to the
-    # reconcile). Reaching it costs a full minute of waiting, which is why it is
-    # placed AFTER the loop rather than inside it — an in-loop fallback would
-    # fire on any box where the address is momentarily absent and silently
-    # restore the very race this closes.
-    if run "Waiting for PostgreSQL to accept connections" bash -c \
-        "for i in \$(seq 1 30); do
-             h=\$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $DB_CONTAINER 2>/dev/null | awk '{print \$1}')
-             [ -n \"\$h\" ] && docker exec $DB_CONTAINER pg_isready -h \"\$h\" -U dockpanel && exit 0
-             sleep 2
-         done
-         echo 'no TCP listener after 60s — falling back to a socket check (container has no bridge address?)'
-         docker exec $DB_CONTAINER pg_isready -U dockpanel && exit 0
-         exit 1"; then
-        log "PostgreSQL ready"
-    else
-        error "PostgreSQL did not become ready within 60s"
-        exit 1
+    # Cleanup legacy postgres container if present to free RAM on upgrade
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${DB_CONTAINER}$"; then
+        log "Stopping and removing legacy ${DB_CONTAINER} to save RAM..."
+        docker stop "$DB_CONTAINER" >/dev/null 2>&1 || true
+        docker rm -f "$DB_CONTAINER" >/dev/null 2>&1 || true
     fi
-
-    # Make the database agree with the password this install is about to write.
-    #
-    # The container is created ONCE, here, with whatever password this run holds;
-    # api.env is not written until several steps later. So an install that dies
-    # in between — a transient download failure is enough, and the failure
-    # message tells the operator "re-running the installer is safe" — leaves a
-    # container holding password A and no api.env at all. The next run finds no
-    # api.env, generates password B, finds the container already present, starts
-    # it unchanged, and writes B. The panel then crash-loops for ever on
-    # `password authentication failed for user "dockpanel"`, and re-running never
-    # helps because each run only mints another password the container has never
-    # heard of. The reuse branch above cannot catch it: it keys on api.env
-    # existing, which in this window it does not.
-    #
-    # Probe first with the target password, so a healthy install does no work and
-    # an operator who has already fixed this by hand is not second-guessed. Only
-    # when the database genuinely refuses it do we recover the password the
-    # container was created with — the one value guaranteed to still work — and
-    # ALTER the role. Both values are hex, from `openssl rand -hex`, so neither
-    # can carry a quote into the SQL.
-    # ⚠ THE PROBE MUST ACTUALLY AUTHENTICATE, and the obvious way of writing it
-    # does not. The official Postgres image ships a pg_hba that trusts BOTH
-    # `local` and `host 127.0.0.1/32`, so `docker exec … psql -U dockpanel`
-    # connects over the container's own socket and succeeds with ANY password —
-    # including the wrong one this check exists to detect. Written that way, the
-    # branch below never ran, and a box left with mismatched credentials by an
-    # interrupted install stayed broken exactly as it did before this check was
-    # added: the API crash-looping on "password authentication failed".
-    #
-    # Only the trailing `host all all all scram-sha-256` rule demands a password,
-    # and the way to land on it from here is the container's own BRIDGE address —
-    # the same rule the API's TCP connection to the published port lands on.
-    # Verified as a two-cell experiment on a real box: over the local socket a
-    # deliberately wrong password is ACCEPTED; over the bridge address it is
-    # REJECTED while the right one succeeds.
-    local db_probe_host
-    db_probe_host=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-        "$DB_CONTAINER" 2>/dev/null | awk '{print $1}')
-    # No bridge address ⇒ we cannot verify, so fall through to the reconcile
-    # rather than assume health. Re-setting the role to the password we are about
-    # to write is idempotent when it already matches.
-    if [ -z "$db_probe_host" ] || ! docker exec -e PGPASSWORD="$DB_PASSWORD" "$DB_CONTAINER" \
-            psql -h "$db_probe_host" -U dockpanel -d dockpanel -c 'SELECT 1' >/dev/null 2>&1; then
-        warn "Database rejects this install's password — reconciling"
-        local container_pw
-        container_pw=$(docker inspect "$DB_CONTAINER" \
-            --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-            | sed -n 's/^POSTGRES_PASSWORD=//p' | head -1)
-        if [ -n "$container_pw" ] && docker exec -e PGPASSWORD="$container_pw" "$DB_CONTAINER" \
-                psql -U dockpanel -d dockpanel \
-                -c "ALTER USER dockpanel WITH PASSWORD '${DB_PASSWORD}';" >/dev/null 2>&1; then
-            log "Database password reconciled with $CONFIG_DIR/api.env"
-        else
-            error "The database will not accept this install's password, and the password"
-            error "it was created with could not be recovered. The panel cannot start."
-            error ""
-            error "TRY THIS FIRST — re-run the installer. It is safe, it keeps your data,"
-            error "and it resolves this on its own in the common case:"
-            error "  bash $0"
-            error ""
-            # ⚠ The by-hand recovery is only actionable once api.env EXISTS, and it
-            # is written by create_services — several steps AFTER this function. On a
-            # first install that aborts here the file is absent, so printing it
-            # unconditionally left "destroy your volume" as the only instruction a
-            # brand-new operator could actually follow.
-            if [ -f "$CONFIG_DIR/api.env" ]; then
-                error "Or set the role's password by hand to the one the panel expects:"
-                error "  docker exec -it $DB_CONTAINER psql -U dockpanel -d dockpanel"
-                error "  ALTER USER dockpanel WITH PASSWORD '<the DATABASE_URL password in $CONFIG_DIR/api.env>';"
-                error ""
-                error "Only if neither works, and it LOSES ALL DATABASE DATA:"
-            else
-                error "This install had not yet written $CONFIG_DIR/api.env, so there is no"
-                error "stored password to match by hand. If re-running does not help — and"
-                error "this LOSES ALL DATABASE DATA, which on a first install is none:"
-            fi
-            error "  docker rm -f $DB_CONTAINER && docker volume rm dockpanel-pgdata"
-            exit 1
-        fi
-    fi
+    log "SQLite database ready (embedded in dockpanel-api)"
 }
 
 # ── Download Pre-built Binaries ──────────────────────────────────────────
@@ -1546,7 +1399,7 @@ EOF
     fi
 
     cat > "$CONFIG_DIR/api.env" << EOF
-DATABASE_URL=postgresql://dockpanel:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/dockpanel
+DATABASE_URL=sqlite:///var/lib/dockpanel/dockpanel.db?mode=rwc
 JWT_SECRET=${JWT_SECRET}
 AGENT_SOCKET=/var/run/dockpanel/agent.sock
 AGENT_TOKEN=${AGENT_TOKEN}
@@ -1609,7 +1462,7 @@ create_services_openrc() {
     fi
 
     cat > "$CONFIG_DIR/api.env" << EOF
-DATABASE_URL=postgres://dockpanel:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/dockpanel
+DATABASE_URL=sqlite:///var/lib/dockpanel/dockpanel.db?mode=rwc
 JWT_SECRET=${JWT_SECRET}
 AGENT_SOCKET=/var/run/dockpanel/agent.sock
 AGENT_TOKEN=${AGENT_TOKEN}
@@ -2501,8 +2354,8 @@ print_summary() {
     echo -e "    Install log:    ${INSTALL_LOG}"
     echo ""
     echo -e "  ${BOLD}Database:${NC}"
-    echo -e "    Container:      ${DB_CONTAINER} (port ${DB_PORT})"
-    echo -e "    Connect:        docker exec -it ${DB_CONTAINER} psql -U dockpanel -d dockpanel"
+    echo -e "    Engine:         Embedded SQLite 3 (WAL mode)"
+    echo -e "    File:           /var/lib/dockpanel/dockpanel.db"
     echo ""
     # What ACTUALLY installed — never a hardcoded wishlist.
     if [ ${#SVC_OK[@]} -gt 0 ]; then

@@ -548,7 +548,7 @@ pub async fn uptime_stats(
 
     // Average response time (24h)
     let avg_rt: Option<(Option<f64>,)> = sqlx::query_as(
-        "SELECT AVG(response_time)::float8 FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours' AND status_code IS NOT NULL"
+        "SELECT AVG(response_time) FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours' AND status_code IS NOT NULL"
     ).bind(id).fetch_optional(&state.db).await
         .map_err(|e| internal_error("uptime stats avg response", e))?;
 
@@ -717,7 +717,7 @@ pub(crate) fn expiry_status(days_left: Option<i64>, renewal_failing: bool) -> &'
 /// firing), so it is the correct scope for "does THIS caller's own stack have
 /// a firing renewal failure" with no server in hand to ask.
 async fn renewal_failing_stacks_for_user(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     user_id: Uuid,
     domains: &[String],
 ) -> Result<std::collections::HashSet<String>, ApiError> {
@@ -733,15 +733,14 @@ async fn renewal_failing_stacks_for_user(
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT state_key FROM alerts \
          WHERE alert_type = 'ssl_renewal_failure' AND status = 'firing' \
-           AND user_id = $1 AND state_key = ANY($2)",
+           AND user_id = $1",
     )
     .bind(user_id)
-    .bind(&keys)
     .fetch_all(pool)
     .await
     .map_err(|e| internal_error("stack renewal failure lookup", e))?;
 
-    Ok(rows.into_iter().map(|(k,)| k).collect())
+    Ok(rows.into_iter().map(|(k,)| k).filter(|k| keys.contains(k)).collect())
 }
 
 /// GET /api/monitors/certificates — List all SSL certificates with expiry status.
@@ -894,14 +893,13 @@ pub async fn certificate_dashboard_for_admin(
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT DISTINCT state_key FROM alerts \
              WHERE alert_type = 'ssl_renewal_failure' AND status = 'firing' \
-               AND server_id = $1 AND state_key = ANY($2)",
+               AND server_id = $1",
         )
         .bind(server_id)
-        .bind(&stack_keys)
         .fetch_all(&state.db)
         .await
         .map_err(|e| internal_error("stack renewal failure lookup", e))?;
-        rows.into_iter().map(|(k,)| k).collect()
+        rows.into_iter().map(|(k,)| k).filter(|k| stack_keys.contains(k)).collect()
     };
 
     // ⛔ Only an ACME stack is ours. A `provided` stack serves its certificate from

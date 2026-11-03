@@ -32,6 +32,7 @@ depend() {
 
 start_pre() {
     checkpath -d -m 0755 /var/run/dockpanel
+    checkpath -d -m 0750 /var/lib/dockpanel
     checkpath -f -m 0644 /var/log/dockpanel-api.log
     if [ ! -f /etc/dockpanel/api.env ]; then
         eerror "Missing /etc/dockpanel/api.env — run setup.sh first"

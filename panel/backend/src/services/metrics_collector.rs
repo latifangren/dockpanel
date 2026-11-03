@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::time::Duration;
 use crate::services::agent::{AgentRegistry, FleetMember};
 
@@ -44,7 +44,7 @@ use crate::services::agent::{AgentRegistry, FleetMember};
 /// engine and the auto-healer simultaneously. `server_monitor` now states that
 /// exemption explicitly rather than relying on the NULL that produced it by
 /// accident.
-pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(pool: SqlitePool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Metrics collector started (30s interval, fleet-wide)");
 
     let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -106,7 +106,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
 
 /// Take one server's readings from that server's own agent. Returns whether the
 /// system-info read succeeded.
-async fn collect_one(pool: &PgPool, member: &FleetMember) -> bool {
+async fn collect_one(pool: &SqlitePool, member: &FleetMember) -> bool {
     let (sys_res, gpu_res) = tokio::join!(
         member.agent.get("/system/info"),
         member.agent.get("/apps/gpu-info"),

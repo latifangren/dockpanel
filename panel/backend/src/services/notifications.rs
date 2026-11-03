@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -107,7 +107,7 @@ pub struct NotifyChannels {
 }
 
 /// Gap #70: Load a custom notification template from settings, or use default formatting.
-async fn format_message(pool: &PgPool, channel: &str, subject: &str, message: &str, severity: &str) -> String {
+async fn format_message(pool: &SqlitePool, channel: &str, subject: &str, message: &str, severity: &str) -> String {
     let key = format!("notif_template_{channel}");
     let template: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = $1"
@@ -165,7 +165,7 @@ pub fn severity_color(severity: &str) -> &'static str {
 
 /// Send a notification via all configured channels.
 pub async fn send_notification(
-    pool: &PgPool,
+    pool: &SqlitePool,
     channels: &NotifyChannels,
     subject: &str,
     message: &str,
@@ -266,7 +266,7 @@ pub async fn send_notification(
 
 /// Resolve panel base URL from settings → env → fallback.
 /// Used to build "Open runbook" links in notification payloads.
-async fn panel_base_url(pool: &PgPool) -> String {
+async fn panel_base_url(pool: &SqlitePool) -> String {
     if let Ok(Some((url,))) = sqlx::query_as::<_, (String,)>(
         "SELECT value FROM settings WHERE key = 'base_url'",
     )
@@ -296,7 +296,7 @@ async fn panel_base_url(pool: &PgPool) -> String {
 /// so escalation notifications carry the same runbook payload as the
 /// original fire (W2 consistency repair).
 pub async fn load_runbook_payload(
-    pool: &PgPool,
+    pool: &SqlitePool,
     alert_type: &str,
 ) -> (Option<String>, Option<String>) {
     let runbook = crate::services::alert_runbooks::get_runbook(pool, alert_type).await;
@@ -333,7 +333,7 @@ pub async fn load_runbook_payload(
 /// - pagerduty: runbook_url + runbook_excerpt added to custom_details
 /// - webhook: runbook_url + runbook_excerpt as top-level keys
 pub async fn send_notification_with_runbook(
-    pool: &PgPool,
+    pool: &SqlitePool,
     channels: &NotifyChannels,
     subject: &str,
     message: &str,
@@ -522,7 +522,7 @@ fn append_runbook_to_html(body_html: &str, runbook_html: &str, runbook_url: &str
 /// Get notification channels for a user from their alert_rules.
 /// Checks server-specific rules first, falls back to global (server_id IS NULL).
 pub async fn get_user_channels(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
 ) -> Option<NotifyChannels> {
@@ -567,7 +567,7 @@ pub async fn get_user_channels(
     let (notify_email, slack_url, discord_url, pagerduty_key, webhook_url, muted_types) = rule?;
 
     // These four are encrypted at rest (alerts.rs::upsert_rules). This function
-    // takes only a PgPool (no AppState/jwt_secret), matching the exact context
+    // takes only a SqlitePool (no AppState/jwt_secret), matching the exact context
     // `decrypt_credential_from_env` documents itself for.
     let slack_url = slack_url
         .as_deref()
@@ -608,7 +608,7 @@ pub async fn get_user_channels(
 /// Mirrors `get_user_channels` row-resolution: server-specific row wins,
 /// global (server_id IS NULL) row is the fallback, no row at all → None.
 pub async fn get_user_policy_id(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
 ) -> Option<Uuid> {
@@ -647,7 +647,7 @@ pub async fn get_user_policy_id(
 /// Phase 4 W3: load + decode an `escalation_policies` row's `steps` array.
 /// Returns the parsed `Vec<EscalationStep>` or empty vec on any failure.
 pub async fn load_escalation_steps(
-    pool: &PgPool,
+    pool: &SqlitePool,
     policy_id: Uuid,
 ) -> Vec<crate::models::EscalationStep> {
     let row: Option<(serde_json::Value,)> = sqlx::query_as(
@@ -673,7 +673,7 @@ pub async fn load_escalation_steps(
 /// used as the fallback "channels of record" for `all_channels` routes
 /// and synthetic-webhook routes.
 pub async fn dispatch_escalation_step(
-    pool: &PgPool,
+    pool: &SqlitePool,
     alert_owner_id: Uuid,
     alert_owner_server_id: Option<Uuid>,
     alert_type: &str,
@@ -905,7 +905,7 @@ fn is_type_muted(channels: &NotifyChannels, alert_type: &str) -> bool {
 /// override it); only "this user has no notification configuration at all"
 /// returns false, so a caller can degrade to someone who does.
 async fn fanout_to_user(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     alert_type: &str,
@@ -947,7 +947,7 @@ async fn fanout_to_user(
 
 /// Check if an alert type is enabled for a user.
 pub async fn is_alert_enabled(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     alert_type: &str,
@@ -1012,7 +1012,7 @@ pub async fn is_alert_enabled(
 
 /// Get threshold settings for a user/server.
 pub async fn get_thresholds(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
 ) -> (i32, i32, i32, i32, i32, i32, String) {
@@ -1049,7 +1049,7 @@ pub async fn get_thresholds(
 
 /// The user's server-independent `alert_rules` row (`server_id IS NULL`).
 async fn global_thresholds(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
 ) -> Option<(i32, i32, i32, i32, i32, i32, String)> {
     sqlx::query_as(
@@ -1067,7 +1067,7 @@ async fn global_thresholds(
 /// Get GPU-specific threshold settings for a user/server.
 /// Returns (gpu_util_threshold, gpu_util_duration, gpu_temp_threshold, gpu_vram_threshold, cooldown).
 pub async fn get_gpu_thresholds(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
 ) -> (i32, i32, i32, i32, i32) {
@@ -1116,7 +1116,7 @@ pub async fn get_gpu_thresholds(
 /// the unscoped behaviour by saying nothing: see `resolve_alert`, where the
 /// absence of this key resolved every sibling alert on the server.
 pub async fn fire_alert(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     alert_type: &str,
@@ -1236,7 +1236,7 @@ pub fn renewal_success_clears(key: &str) -> bool {
 /// `state_key` now share a bucket; surviving callers use entity-specific
 /// keys (domain / container / monitor id), so no two live subjects collide.
 pub async fn fire_alert_deduped(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     alert_type: &str,
@@ -1296,7 +1296,7 @@ pub async fn fire_alert_deduped(
 ///     names in so many words as the reason suppression is applied at each
 ///     check's SOURCE and never at the fire.
 pub async fn try_fire_alert(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     alert_type: &str,
@@ -1399,7 +1399,7 @@ pub async fn try_fire_alert(
 /// Pass user_id = None to notify all admins.
 /// Also broadcasts via SSE for real-time delivery.
 pub async fn notify_panel(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     user_id: Option<uuid::Uuid>,
     title: &str,
     message: &str,
@@ -1436,7 +1436,7 @@ pub async fn notify_panel(
 /// identity and the payload carries it, so a live list can prepend what arrives
 /// instead of asking the server what it just sent.
 async fn insert_and_broadcast(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     user_id: uuid::Uuid,
     title: &str,
     message: &str,
@@ -1493,7 +1493,7 @@ async fn insert_and_broadcast(
 /// two live callers (`auto_healer`'s service and disk heals) reach here without
 /// checking first.
 pub async fn resolve_alert(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     alert_type: &str,

@@ -36,7 +36,7 @@
 //! deliberately left alone.
 
 use axum::http::StatusCode;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::error::{err, ApiError};
@@ -46,7 +46,7 @@ use crate::error::{err, ApiError};
 /// Absent, unreadable, or any value other than the literal `"true"` is **off**.
 /// A decision to publish operational state to the internet is never made by a
 /// default, and never by a query that failed.
-pub async fn is_enabled(pool: &PgPool) -> bool {
+pub async fn is_enabled(pool: &SqlitePool) -> bool {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'status_page_enabled'",
     )
@@ -72,7 +72,7 @@ fn means_enabled(value: Option<&str>) -> bool {
 /// Answers 404 rather than 403 so a disabled status page is indistinguishable
 /// from an install that never had one — the same answer the documented
 /// endpoint has always given, and the one the guide promises.
-pub async fn require_enabled(pool: &PgPool) -> Result<(), ApiError> {
+pub async fn require_enabled(pool: &SqlitePool) -> Result<(), ApiError> {
     if is_enabled(pool).await {
         Ok(())
     } else {
@@ -91,7 +91,7 @@ pub async fn require_enabled(pool: &PgPool) -> Result<(), ApiError> {
 /// `status_page_config`, so a visitor can reach `/subscribe` before an admin
 /// has ever touched status-page settings. `None` only if `users` itself is
 /// empty, which cannot happen on a running install.
-pub async fn resolve_current_status_page_owner(pool: &PgPool) -> Option<Uuid> {
+pub async fn resolve_current_status_page_owner(pool: &SqlitePool) -> Option<Uuid> {
     let from_config: Option<(Uuid,)> = sqlx::query_as(
         "SELECT user_id FROM status_page_config ORDER BY created_at ASC, id ASC LIMIT 1",
     )

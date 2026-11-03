@@ -4,7 +4,7 @@
 // configured interval. Distinct from services::security_scanner which
 // runs the full-server scan.
 
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ const STARTUP_DELAY: Duration = Duration::from_secs(10 * 60);  // 10 minutes
 /// and its images never scanned, while the Apps page badged them with whatever
 /// the panel happened to have found for an image of the same name.
 pub async fn run(
-    pool: PgPool,
+    pool: SqlitePool,
     agents: AgentRegistry,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
@@ -53,7 +53,7 @@ pub async fn run(
     }
 }
 
-async fn sweep_once(pool: &PgPool, member: &FleetMember) -> Result<(), String> {
+async fn sweep_once(pool: &SqlitePool, member: &FleetMember) -> Result<(), String> {
     let agent = &member.agent;
     let (enabled, _on_deploy, _gate, interval_hours) = image_scans::read_settings(pool)
         .await

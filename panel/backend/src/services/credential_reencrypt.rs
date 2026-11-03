@@ -25,7 +25,7 @@
 //! name `tests/credential-key-survival-pin-e2e.sh` §D, a file that has never
 //! existed in any commit — the guarantee was real, its cited enforcer was not.)
 
-use sqlx::{PgPool, Row};
+use sqlx::{SqlitePool, Row};
 
 use crate::routes::backup_destinations::CONFIG_SENSITIVE_KEYS as DESTINATION_SECRET_KEYS;
 use crate::services::secrets_crypto;
@@ -122,7 +122,7 @@ pub fn swept_subjects() -> Vec<String> {
 /// below now imports its source of truth. `sensitive_settings_sql_covers_settings_keys`
 /// in this file's own test module asserts the two haven't drifted instead.
 const SENSITIVE_SETTINGS_SQL: &str =
-    "SELECT key::text AS id, value FROM settings \
+    "SELECT key AS id, value FROM settings \
      WHERE (key IN ('smtp_password', 'pdns_api_key', 'ai_diagnosis_api_key') OR key LIKE '%\\_client\\_secret') \
        AND value IS NOT NULL AND value <> ''";
 
@@ -162,7 +162,7 @@ impl SubjectReport {
 /// Sweep every subject. Never fails the whole run because one subject failed —
 /// a missing optional table must not stop the rest, and a partially-completed
 /// sweep is safe to re-run.
-pub async fn reencrypt_all(pool: &PgPool, jwt_secret: &str) -> Vec<SubjectReport> {
+pub async fn reencrypt_all(pool: &SqlitePool, jwt_secret: &str) -> Vec<SubjectReport> {
     let mut reports = Vec::new();
 
     for (table, id_col, value_col) in SIMPLE_SUBJECTS {
@@ -176,7 +176,7 @@ pub async fn reencrypt_all(pool: &PgPool, jwt_secret: &str) -> Vec<SubjectReport
 }
 
 async fn reencrypt_column(
-    pool: &PgPool,
+    pool: &SqlitePool,
     jwt_secret: &str,
     table: &str,
     id_col: &str,
@@ -186,7 +186,7 @@ async fn reencrypt_column(
 
     // Table/column names come from the const registry above, never from input.
     let select = format!(
-        "SELECT {id_col}::text AS id, {value_col} AS value FROM {table} \
+        "SELECT {id_col} AS id, {value_col} AS value FROM {table} \
          WHERE {value_col} IS NOT NULL AND {value_col} <> ''"
     );
     let rows = match sqlx::query(&select).fetch_all(pool).await {
@@ -202,7 +202,7 @@ async fn reencrypt_column(
     // instead of clobbering the newer plaintext's ciphertext with a
     // re-encrypted copy of what we read.
     let update = format!(
-        "UPDATE {table} SET {value_col} = $1 WHERE {id_col}::text = $2 AND {value_col} = $3"
+        "UPDATE {table} SET {value_col} = $1 WHERE {id_col} = $2 AND {value_col} = $3"
     );
     for row in rows {
         let id: String = row.get("id");
@@ -244,7 +244,7 @@ async fn reencrypt_column(
     report
 }
 
-async fn reencrypt_settings(pool: &PgPool, jwt_secret: &str) -> SubjectReport {
+async fn reencrypt_settings(pool: &SqlitePool, jwt_secret: &str) -> SubjectReport {
     let mut report = SubjectReport::new("settings.value");
 
     let rows = match sqlx::query(SENSITIVE_SETTINGS_SQL).fetch_all(pool).await {
@@ -298,10 +298,10 @@ async fn reencrypt_settings(pool: &PgPool, jwt_secret: &str) -> SubjectReport {
 
 /// `backup_destinations.config` is JSON with ciphertext at known keys, so the
 /// unit of work is a key inside a document rather than a column.
-async fn reencrypt_destinations(pool: &PgPool, jwt_secret: &str) -> SubjectReport {
+async fn reencrypt_destinations(pool: &SqlitePool, jwt_secret: &str) -> SubjectReport {
     let mut report = SubjectReport::new("backup_destinations.config");
 
-    let rows = match sqlx::query("SELECT id::text AS id, config FROM backup_destinations")
+    let rows = match sqlx::query("SELECT id AS id, config FROM backup_destinations")
         .fetch_all(pool)
         .await
     {
@@ -362,7 +362,7 @@ async fn reencrypt_destinations(pool: &PgPool, jwt_secret: &str) -> SubjectRepor
         // renaming it or changing an unrelated field) between our SELECT and
         // this UPDATE makes the guard fail instead of clobbering it.
         match sqlx::query(
-            "UPDATE backup_destinations SET config = $1 WHERE id::text = $2 AND config = $3",
+            "UPDATE backup_destinations SET config = $1 WHERE id = $2 AND config = $3",
         )
             .bind(&config)
             .bind(&id)
@@ -390,11 +390,11 @@ async fn reencrypt_destinations(pool: &PgPool, jwt_secret: &str) -> SubjectRepor
 /// The Secrets Manager vault. Different key ladder from the credential path —
 /// see `secrets_crypto::vault_key_sources` — so it needs its own arm rather
 /// than sharing `reencrypt_credential`.
-async fn reencrypt_vault_secrets(pool: &PgPool, jwt_secret: &str) -> SubjectReport {
+async fn reencrypt_vault_secrets(pool: &SqlitePool, jwt_secret: &str) -> SubjectReport {
     let mut report = SubjectReport::new("secrets.encrypted_value");
 
     let rows = match sqlx::query(
-        "SELECT id::text AS id, encrypted_value FROM secrets \
+        "SELECT id AS id, encrypted_value FROM secrets \
          WHERE encrypted_value IS NOT NULL AND encrypted_value <> ''",
     )
     .fetch_all(pool)
@@ -425,7 +425,7 @@ async fn reencrypt_vault_secrets(pool: &PgPool, jwt_secret: &str) -> SubjectRepo
                 // other three sweeps do.
                 let res = sqlx::query(
                     "UPDATE secrets SET encrypted_value = $1, updated_at = NOW() \
-                     WHERE id::text = $2 AND encrypted_value = $3",
+                     WHERE id = $2 AND encrypted_value = $3",
                 )
                 .bind(&fresh)
                 .bind(&id)

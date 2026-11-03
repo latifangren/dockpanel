@@ -224,7 +224,7 @@ async fn resolve_app_image(
 }
 
 async fn generate_and_store(
-    pool: &sqlx::PgPool,
+    pool: &sqlx::SqlitePool,
     server_id: uuid::Uuid,
     agent: &crate::services::agent::AgentHandle,
     image: &str,

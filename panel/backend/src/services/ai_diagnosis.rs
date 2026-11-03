@@ -9,7 +9,7 @@
 
 use crate::error::{err, internal_error, ApiError};
 use axum::http::StatusCode;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use std::time::Duration;
 
 /// Failure output is truncated to this many *characters from the end* before
@@ -29,7 +29,7 @@ pub struct AiDiagnosisConfig {
 }
 
 pub async fn load_config(
-    pool: &PgPool,
+    pool: &SqlitePool,
     jwt_secret: &str,
 ) -> Result<Option<AiDiagnosisConfig>, ApiError> {
     let rows: Vec<(String, String)> = sqlx::query_as(
