@@ -4,6 +4,22 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.242.1-lite.2]
+
+### Rebuild database layer: Embedded SQLite (Tahap 8)
+
+Replaced PostgreSQL container with an embedded SQLite 3 engine:
+- **Zero-container database**: Eliminated `dockpanel-postgres` Docker container, saving ~150–250MB RAM and avoiding disk wear on eMMC/flash storage.
+- **Single baseline SQLite schema**: Unified 104 legacy PostgreSQL migrations into `migrations_sqlite/20261001000000_init_sqlite.sql` (72 tables, 221 indexes, pure-SQL UUID v4 generator).
+- **WAL mode & foreign keys**: Configured `SqlitePool` with WAL journal mode, NORMAL synchronous mode, 5000ms busy timeout, and active foreign key enforcement.
+- **Dialect refactoring**: Adapted SQL queries across all backend routes and services (`NOW()`, `INTERVAL`, `ANY`, `PERCENTILE_CONT`, `SPLIT_PART`).
+- **Array types**: Replaced PostgreSQL native arrays with `sqlx::types::Json` serialization.
+- **Installer & Service cleanup**: Updated `scripts/setup.sh`, `scripts/uninstall.sh`, and OpenRC init scripts to manage `/var/lib/dockpanel/dockpanel.db` directly.
+
+### Frontend UI Fixes
+
+- Fixed sidebar clipping on Files page (`Files.tsx`) by removing negative margins.
+
 ## [2.242.1-lite.1]
 
 ### Fork release: DockPanel Lite for postmarketOS (first fork release)
