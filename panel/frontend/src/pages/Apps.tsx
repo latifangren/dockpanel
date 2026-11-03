@@ -1,7 +1,7 @@
 import { useAuth } from "../context/AuthContext";
 import { useServer } from "../context/ServerContext";
 import { Navigate } from "react-router-dom";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { api, ApiError } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
 import { usePrereqs } from "../components/Prerequisite";
@@ -46,6 +46,7 @@ export interface AppTemplate {
   container_port: string;
   env_vars: EnvVar[];
   gpu_recommended?: boolean;
+  arm64_supported?: boolean;
   // Ported from the AI Studio v2 catalogue: the agent now derives these
   // (see docker_apps.rs template_icon/template_available_tags) instead of
   // v2's hand-edited fixture, so they survive fixture regeneration.
@@ -235,7 +236,33 @@ export default function Apps() {
     ? window.location.hostname
     : activeServer.ip_address;
   const [templates, setTemplates] = useState<AppTemplate[]>([]);
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [arm64Only, setArm64Only] = useState(false);
   const [apps, setApps] = useState<DeployedApp[]>([]);
+
+  const allCategories = useMemo(() => {
+    const cats = new Set<string>();
+    templates.forEach(t => { if (t.category) cats.add(t.category); });
+    return Array.from(cats).sort();
+  }, [templates]);
+
+  const filteredTemplates = useMemo(() => {
+    return templates.filter((t) => {
+      if (arm64Only && t.arm64_supported === false) return false;
+      if (selectedCategory !== "all" && t.category !== selectedCategory) return false;
+      if (templateSearch.trim()) {
+        const q = templateSearch.toLowerCase();
+        return (
+          t.name.toLowerCase().includes(q) ||
+          t.description.toLowerCase().includes(q) ||
+          t.image.toLowerCase().includes(q) ||
+          t.category.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [templates, arm64Only, selectedCategory, templateSearch]);
   const [loading, setLoading] = useState(true);
   const [deploying, setDeploying] = useState(false);
   const [deployId, setDeployId] = useState<string | null>(null);
@@ -1890,9 +1917,58 @@ volumes:
       )}
 
       {/* Template Gallery */}
-      <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest mb-3">
-        App Templates
-      </h2>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+        <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest">
+          App Templates {templates.length > 0 && `(${filteredTemplates.length} / ${templates.length})`}
+        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={templateSearch}
+            onChange={(e) => setTemplateSearch(e.target.value)}
+            placeholder="Search templates..."
+            className="px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-100 placeholder-dark-400 focus:outline-hidden focus:border-rust-500 w-44 sm:w-56"
+          />
+          <button
+            onClick={() => setArm64Only(!arm64Only)}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors border ${
+              arm64Only
+                ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50"
+                : "bg-dark-800 text-dark-300 border-dark-600 hover:text-dark-100"
+            }`}
+          >
+            ARM64 Only
+          </button>
+        </div>
+      </div>
+
+      {allCategories.length > 0 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-4 scrollbar-none">
+          <button
+            onClick={() => setSelectedCategory("all")}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              selectedCategory === "all"
+                ? "bg-rust-500 text-white"
+                : "bg-dark-800 text-dark-300 hover:text-dark-100 border border-dark-600"
+            }`}
+          >
+            All
+          </button>
+          {allCategories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                selectedCategory === cat
+                  ? "bg-rust-500 text-white"
+                  : "bg-dark-800 text-dark-300 hover:text-dark-100 border border-dark-600"
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      )}
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {[...Array(8)].map((_, i) => (
@@ -1913,7 +1989,13 @@ volumes:
               <p className="text-dark-300 text-xs mt-1">Check that the agent is running and accessible</p>
             </div>
           )}
-          {templates.map((tmpl) => (
+          {templates.length > 0 && filteredTemplates.length === 0 && (
+            <div className="col-span-full py-12 text-center">
+              <p className="text-dark-300 font-medium">No templates match your filter</p>
+              <p className="text-dark-400 text-xs mt-1">Try relaxing the search query or category filter</p>
+            </div>
+          )}
+          {filteredTemplates.map((tmpl) => (
             <button
               key={tmpl.id}
               onClick={() => openDeploy(tmpl)}
@@ -1934,6 +2016,21 @@ volumes:
                         className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-rust-500/15 text-rust-400 border border-rust-500/30"
                       >
                         GPU
+                      </span>
+                    )}
+                    {tmpl.arm64_supported !== false ? (
+                      <span
+                        title="ARM64 / aarch64 ready"
+                        className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                      >
+                        ARM64
+                      </span>
+                    ) : (
+                      <span
+                        title="x86_64 only — may fail on ARM devices"
+                        className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                      >
+                        x86
                       </span>
                     )}
                   </div>

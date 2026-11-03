@@ -1879,6 +1879,14 @@ configure_nginx() {
         NGINX_GROUP="root"
     fi
 
+    # Ensure nginx temp/cache directories are owned by nginx user/group (Alpine proxy buffering fix)
+    for ndir in /var/lib/nginx /var/lib/nginx/tmp /var/lib/nginx/tmp/proxy; do
+        if [ -d "$ndir" ]; then
+            chown -R "nginx:${NGINX_GROUP}" "$ndir" 2>/dev/null || true
+            chmod 755 "$ndir" 2>/dev/null || true
+        fi
+    done
+
     # Determine config directory. Alpine ships nginx with http.d/ as the
     # only included vhost directory, so it wins there; sites-enabled
     # (Debian) and conf.d (RHEL) keep their existing order after it.
@@ -1939,7 +1947,8 @@ configure_nginx() {
             # Same binding as before, now with TLS. Deliberately NOT adding an
             # [::] listen here: this is the default install path, and a box with
             # IPv6 disabled would fail to bind and come up with no panel at all.
-            LISTEN_DIRECTIVE="listen ${PANEL_PORT} ssl;"
+            LISTEN_DIRECTIVE="listen 80;
+    listen ${PANEL_PORT} ssl;"
             PANEL_TLS_BLOCK="
     ssl_certificate ${CONFIG_DIR}/ssl/panel.crt;
     ssl_certificate_key ${CONFIG_DIR}/ssl/panel.key;
@@ -2020,6 +2029,14 @@ ${PANEL_TLS_BLOCK}
         proxy_set_header Range \$http_range;
         proxy_set_header If-Range \$http_if_range;
         client_max_body_size 20000m;
+
+        # Disable disk temp buffering to avoid eMMC flash wear and permission denied on /var/lib/nginx/tmp
+        proxy_buffering off;
+        proxy_max_temp_file_size 0;
+
+        # Allow iframe embedding from same origin for the /files page
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Content-Security-Policy "frame-ancestors 'self';" always;
     }
 
     # API

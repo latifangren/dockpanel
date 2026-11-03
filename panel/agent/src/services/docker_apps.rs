@@ -314,6 +314,8 @@ pub struct AppTemplate {
     /// (LLM/diffusion/ASR inference). Frontend uses this to badge the
     /// template card and pre-tick the GPU toggle on the deploy form.
     pub gpu_recommended: bool,
+    /// True when the template supports ARM64 / aarch64 (postmarketOS / Alpine devices).
+    pub arm64_supported: bool,
 }
 
 /// Template IDs whose container materially benefits from GPU passthrough.
@@ -326,6 +328,12 @@ static GPU_RECOMMENDED_TEMPLATES: &[&str] = &[
     "stable-diffusion-webui",
     "text-generation-webui",
     "whisper",
+];
+
+/// Templates that currently lack ARM64 / aarch64 container images (x86_64 only).
+static X86_ONLY_TEMPLATES: &[&str] = &[
+    "vllm",
+    "text-generation-webui",
 ];
 
 /// Startup arguments for the templates whose image default `CMD` does not start a
@@ -2969,6 +2977,7 @@ fn to_app_template(def: &AppTemplateDef) -> AppTemplate {
         icon: template_icon(def.id),
         available_tags: template_available_tags(def.image),
         gpu_recommended: GPU_RECOMMENDED_TEMPLATES.contains(&def.id),
+        arm64_supported: !X86_ONLY_TEMPLATES.contains(&def.id),
     }
 }
 

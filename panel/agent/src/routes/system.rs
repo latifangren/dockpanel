@@ -6,6 +6,27 @@ use sysinfo::{Components, Networks, System};
 
 use super::{AppState, NetworkSnapshot};
 
+#[derive(Serialize, Clone, Debug)]
+pub struct DiskMountInfo {
+    pub name: String,
+    pub mount_point: String,
+    pub file_system: String,
+    pub total_gb: f64,
+    pub used_gb: f64,
+    pub free_gb: f64,
+    pub usage_pct: f32,
+    pub is_removable: bool,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct BatteryInfo {
+    pub present: bool,
+    pub capacity_pct: Option<u8>,
+    pub status: Option<String>,
+    pub plugged_in: Option<bool>,
+    pub temp_c: Option<f32>,
+}
+
 #[derive(Serialize)]
 struct SystemInfo {
     hostname: String,
@@ -28,6 +49,8 @@ struct SystemInfo {
     load_avg_5: f64,
     load_avg_15: f64,
     process_count: usize,
+    disks: Vec<DiskMountInfo>,
+    battery: Option<BatteryInfo>,
 }
 
 #[derive(Serialize)]
@@ -47,6 +70,77 @@ struct NetworkInfo {
     tx_rate: u64,
 }
 
+fn read_battery_info() -> Option<BatteryInfo> {
+    let power_supply = std::path::Path::new("/sys/class/power_supply");
+    if !power_supply.is_dir() {
+        return None;
+    }
+
+    let mut capacity = None;
+    let mut status = None;
+    let mut temp_c = None;
+    let mut plugged_in = None;
+    let mut found_battery = false;
+
+    if let Ok(entries) = std::fs::read_dir(power_supply) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            let ps_type = std::fs::read_to_string(path.join("type"))
+                .unwrap_or_default()
+                .trim()
+                .to_lowercase();
+
+            if ps_type == "battery" || name.contains("bat") || name.contains("bms") {
+                found_battery = true;
+                if let Ok(cap) = std::fs::read_to_string(path.join("capacity")) {
+                    if let Ok(val) = cap.trim().parse::<u8>() {
+                        capacity = Some(val.min(100));
+                    }
+                }
+                if let Ok(st) = std::fs::read_to_string(path.join("status")) {
+                    let s = st.trim().to_string();
+                    if !s.is_empty() {
+                        status = Some(s);
+                    }
+                }
+                if let Ok(t) = std::fs::read_to_string(path.join("temp")) {
+                    if let Ok(val) = t.trim().parse::<f32>() {
+                        let c = if val > 1000.0 {
+                            val / 1000.0
+                        } else if val > 100.0 {
+                            val / 10.0
+                        } else {
+                            val
+                        };
+                        temp_c = Some((c * 10.0).round() / 10.0);
+                    }
+                }
+            } else if ps_type == "mains" || ps_type == "usb" || ps_type == "usb_pd" || name.contains("usb") || name.contains("ac") || name.contains("charger") {
+                if let Ok(online) = std::fs::read_to_string(path.join("online")) {
+                    if online.trim() == "1" {
+                        plugged_in = Some(true);
+                    } else if online.trim() == "0" && plugged_in.is_none() {
+                        plugged_in = Some(false);
+                    }
+                }
+            }
+        }
+    }
+
+    if found_battery || capacity.is_some() {
+        Some(BatteryInfo {
+            present: true,
+            capacity_pct: capacity,
+            status,
+            plugged_in,
+            temp_c,
+        })
+    } else {
+        None
+    }
+}
+
 async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
     let mut sys = state.system.lock().await;
     sys.refresh_memory();
@@ -59,13 +153,37 @@ async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
     let mem_total = sys.total_memory();
     let mem_used = sys.used_memory();
 
-    // Disk info for root partition
+    // Disk info: root partition + multi-disk list (MicroSD, external, USB)
     let disks = sysinfo::Disks::new_with_refreshed_list();
     let (disk_total, disk_used) = disks
         .iter()
         .find(|d| d.mount_point() == std::path::Path::new("/"))
         .map(|d| (d.total_space(), d.total_space() - d.available_space()))
         .unwrap_or((0, 0));
+
+    let disks_list: Vec<DiskMountInfo> = disks
+        .iter()
+        .filter(|d| {
+            let mp = d.mount_point().to_string_lossy();
+            !mp.starts_with("/proc") && !mp.starts_with("/sys") && !mp.starts_with("/dev")
+        })
+        .map(|d| {
+            let total = d.total_space() as f64 / 1_073_741_824.0;
+            let free = d.available_space() as f64 / 1_073_741_824.0;
+            let used = (total - free).max(0.0);
+            let usage_pct = if total > 0.0 { ((used / total) * 100.0) as f32 } else { 0.0 };
+            DiskMountInfo {
+                name: d.name().to_string_lossy().to_string(),
+                mount_point: d.mount_point().to_string_lossy().to_string(),
+                file_system: d.file_system().to_string_lossy().to_string(),
+                total_gb: (total * 10.0).round() / 10.0,
+                used_gb: (used * 10.0).round() / 10.0,
+                free_gb: (free * 10.0).round() / 10.0,
+                usage_pct,
+                is_removable: d.is_removable(),
+            }
+        })
+        .collect();
 
     let load_avg = System::load_average();
 
@@ -128,6 +246,8 @@ async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
         load_avg_5: load_avg.five,
         load_avg_15: load_avg.fifteen,
         process_count,
+        disks: disks_list,
+        battery: read_battery_info(),
     })
 }
 

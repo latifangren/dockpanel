@@ -49,10 +49,23 @@ def detect_soc_name():
         return soc_family
     return None
 
+def detect_battery():
+    ps = "/sys/class/power_supply"
+    if not os.path.exists(ps):
+        return None
+    try:
+        for name in os.listdir(ps):
+            if "bat" in name.lower() or "bms" in name.lower():
+                return name
+    except Exception:
+        pass
+    return None
+
 def main():
     data = {
         "device_model": detect_device_model(),
         "soc_name": detect_soc_name(),
+        "has_battery": detect_battery() is not None,
     }
     print(json.dumps(data, indent=2))
 

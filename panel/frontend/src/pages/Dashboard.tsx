@@ -100,6 +100,31 @@ interface OnboardingStep {
 }
 
 
+export interface DiskMount {
+  name: string;
+  mount_point: string;
+  file_system: string;
+  total_gb: number;
+  used_gb: number;
+  free_gb: number;
+  usage_pct: number;
+  is_removable: boolean;
+}
+
+export interface BatteryState {
+  present: boolean;
+  capacity_pct: number | null;
+  status: string | null;
+  plugged_in: boolean | null;
+  temp_c: number | null;
+}
+
+export interface CustomShortcut {
+  id: string;
+  label: string;
+  url: string;
+}
+
 interface SystemInfo {
   cpu_count: number;
   cpu_usage: number;
@@ -121,6 +146,8 @@ interface SystemInfo {
   load_avg_5?: number;
   load_avg_15?: number;
   process_count: number;
+  disks?: DiskMount[];
+  battery?: BatteryState | null;
 }
 
 interface DockerContainerStat {
@@ -143,7 +170,7 @@ interface DockerLiveStats {
   updated_at?: number;
 }
 
-function LiveClock() {
+function LiveClock({ battery }: { battery?: BatteryState | null }) {
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
@@ -153,11 +180,38 @@ function LiveClock() {
 
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   const dateStr = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  const isCharging = battery?.plugged_in || (battery?.status && battery.status.toLowerCase().includes("charg"));
 
   return (
-    <div className="mb-4">
-      <div className="text-3xl md:text-4xl font-extrabold tracking-tight font-mono text-dark-100">{timeStr}</div>
-      <div className="text-xs md:text-sm font-medium text-dark-400 mt-0.5">{dateStr}</div>
+    <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div>
+        <div className="text-3xl md:text-4xl font-extrabold tracking-tight font-mono text-dark-100">{timeStr}</div>
+        <div className="text-xs md:text-sm font-medium text-dark-400 mt-0.5">{dateStr}</div>
+      </div>
+      {battery?.present && (
+        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-dark-800/80 border border-dark-600 text-xs font-mono self-start sm:self-auto shadow-xs">
+          <span
+            className={`inline-block w-2.5 h-2.5 rounded-full ${
+              battery.capacity_pct != null && battery.capacity_pct <= 20
+                ? "bg-red-500 animate-pulse"
+                : isCharging
+                ? "bg-emerald-400"
+                : "bg-amber-400"
+            }`}
+          />
+          <span className="text-dark-100 font-semibold">
+            {battery.capacity_pct != null ? `${battery.capacity_pct}%` : "Battery"}
+          </span>
+          <span className="text-dark-400 text-[11px]">
+            {isCharging ? "Charging" : battery.status || "On Battery"}
+          </span>
+          {battery.temp_c != null && (
+            <span className="text-dark-400 text-[11px] border-l border-dark-600 pl-2">
+              {battery.temp_c}°C
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -412,6 +466,27 @@ export default function Dashboard() {
   // the count below already reads), and client-side samples for the tab charts.
   const [monTab, setMonTab] = useState<"network" | "disk">("network");
   const [appsList, setAppsList] = useState<DeployedAppLite[]>([]);
+  const [customShortcuts, setCustomShortcuts] = useState<CustomShortcut[]>(() => {
+    try {
+      const saved = localStorage.getItem("dp-dashboard-shortcuts");
+      if (saved) return JSON.parse(saved);
+      const legacy = localStorage.getItem("dp-dashboard-bookmarks");
+      if (legacy) {
+        const bms = JSON.parse(legacy);
+        return bms.map((b: { label: string; url: string }, idx: number) => ({
+          id: `legacy-${idx}`,
+          label: b.label,
+          url: b.url,
+        }));
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
+  const [showAddShortcut, setShowAddShortcut] = useState(false);
+  const [newScLabel, setNewScLabel] = useState("");
+  const [newScUrl, setNewScUrl] = useState("");
   const [hardware, setHardware] = useState<{ device_model?: string | null; soc_name?: string | null } | null>(null);
   const [dockerStats, setDockerStats] = useState<DockerLiveStats | null>(null);
   const [dockerTab, setDockerTab] = useState<"cpu" | "ram">("cpu");
@@ -1220,7 +1295,7 @@ export default function Dashboard() {
               processes) is unchanged. Counts use only fields this page
               already fetches; the prototype's Cron/Backup counts have no
               Dashboard field, so they are not shown as counts. */}
-          <LiveClock />
+          <LiveClock battery={system?.battery} />
 
           <div className="flex flex-col xl:flex-row gap-4 mb-6 items-start">
             <div className="flex-1 min-w-0 flex flex-col gap-4">
@@ -1375,6 +1450,12 @@ export default function Dashboard() {
                         : system.cpu_model,
                     ],
                     ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
+                    ...(system.battery?.present ? [[
+                      "Battery",
+                      `${system.battery.capacity_pct != null ? `${system.battery.capacity_pct}%` : "Detected"} (${
+                        system.battery.plugged_in ? "Plugged in" : system.battery.status || "On battery"
+                      }${system.battery.temp_c != null ? `, ${system.battery.temp_c}°C` : ""})`
+                    ]] : []),
                     ["Processes", system.process_count.toLocaleString()],
                     ["Uptime", formatUptime(system.uptime_secs)],
                     ["Disk", `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB`],
@@ -1384,6 +1465,40 @@ export default function Dashboard() {
                       <span className="font-medium text-right truncate" title={String(value)}>{value}</span>
                     </div>
                   ))}
+                  {/* Multi-Disk / External Storage List (MicroSD, USB, extra mounts) */}
+                  {system.disks && system.disks.length > 1 && (
+                    <div className="mt-4 pt-3 border-t border-dark-700">
+                      <div className="text-xs font-semibold text-dark-300 uppercase tracking-wider mb-2 font-mono">
+                        Drives & Partitions
+                      </div>
+                      <div className="space-y-2">
+                        {system.disks.map((d) => (
+                          <div key={d.mount_point} className="p-2.5 rounded-lg bg-dark-900/60 border border-dark-700/60 text-xs">
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="font-semibold text-dark-100 flex items-center gap-1.5 font-mono">
+                                <span>{d.is_removable ? "💾" : "💽"}</span>
+                                <span>{d.mount_point}</span>
+                                {d.name && d.name !== d.mount_point && (
+                                  <span className="text-[10px] text-dark-400">({d.name})</span>
+                                )}
+                              </span>
+                              <span className="text-dark-300 font-mono">
+                                {d.free_gb.toFixed(1)} GB free / {d.total_gb.toFixed(1)} GB
+                              </span>
+                            </div>
+                            <div className="w-full bg-dark-700 rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  d.usage_pct > 90 ? "bg-red-500" : d.usage_pct > 75 ? "bg-amber-400" : "bg-rust-500"
+                                }`}
+                                style={{ width: `${Math.min(100, Math.max(0, d.usage_pct))}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {/* No architecture or IP row: SystemInfo carries neither
                       field, and inventing them would be a lie the old grid
                       never told either. */}
@@ -1400,15 +1515,60 @@ export default function Dashboard() {
               <div className="bg-dark-800 rounded-xl border border-dark-600 p-5 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold">Installed Apps</h3>
+                    <h3 className="text-sm font-semibold">Installed Apps & Shortcuts</h3>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-dark-700 text-dark-300 font-mono">
-                      {appsList.length}
+                      {appsList.length + customShortcuts.length}
                     </span>
                   </div>
-                  <Link to="/apps" className="text-xs text-rust-500 font-semibold hover:underline flex items-center gap-1">
-                    App Store &rarr;
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setShowAddShortcut(!showAddShortcut)}
+                      className="text-xs text-rust-500 font-semibold hover:underline flex items-center gap-1"
+                    >
+                      {showAddShortcut ? "Cancel" : "+ Shortcut"}
+                    </button>
+                    <Link to="/apps" className="text-xs text-rust-500 font-semibold hover:underline flex items-center gap-1">
+                      App Store &rarr;
+                    </Link>
+                  </div>
                 </div>
+
+                {showAddShortcut && (
+                  <div className="mb-4 p-3 bg-dark-900/80 rounded-xl border border-dark-600 flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={newScLabel}
+                      onChange={(e) => setNewScLabel(e.target.value)}
+                      placeholder="Name (e.g. Pi-hole, Jellyfin, Router)"
+                      className="flex-1 px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-100 placeholder-dark-400 focus:outline-hidden focus:border-rust-500"
+                    />
+                    <input
+                      type="text"
+                      value={newScUrl}
+                      onChange={(e) => setNewScUrl(e.target.value)}
+                      placeholder="URL (http://... or /fs/)"
+                      className="flex-1 px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-100 placeholder-dark-400 focus:outline-hidden focus:border-rust-500"
+                    />
+                    <button
+                      onClick={() => {
+                        if (newScLabel.trim() && newScUrl.trim()) {
+                          const next = [
+                            ...customShortcuts,
+                            { id: `sc-${Date.now()}`, label: newScLabel.trim(), url: newScUrl.trim() },
+                          ];
+                          setCustomShortcuts(next);
+                          localStorage.setItem("dp-dashboard-shortcuts", JSON.stringify(next));
+                          setNewScLabel("");
+                          setNewScUrl("");
+                          setShowAddShortcut(false);
+                        }
+                      }}
+                      className="px-4 py-1.5 bg-rust-500 hover:bg-rust-600 text-white rounded-lg text-xs font-medium transition-colors"
+                    >
+                      Add
+                    </button>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-3">
                   {appsList.length === 0 && (
@@ -1457,6 +1617,50 @@ export default function Dashboard() {
                           )}
                           <button onClick={() => handleAppAction(app, "restart")} className="text-[11px] px-2 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-dark-200">
                             Restart
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {customShortcuts.map((sc) => {
+                    const validUrl = /^https?:\/\//i.test(sc.url) ? sc.url : /^\/[^/]/.test(sc.url) ? sc.url : '#';
+                    return (
+                      <div
+                        key={sc.id}
+                        className="group flex flex-col items-center p-3.5 rounded-xl bg-dark-900/60 hover:bg-dark-700/60 border border-dark-700/70 hover:border-rust-500/50 transition-all text-center relative"
+                      >
+                        <div className="relative mb-2.5">
+                          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-700/60 to-dark-800 border border-indigo-500/40 flex items-center justify-center text-indigo-300 font-bold text-xl shadow-xs group-hover:scale-105 transition-transform">
+                            {sc.label.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-dark-800 bg-indigo-400" />
+                        </div>
+                        <span className="text-xs font-semibold text-dark-100 truncate w-full font-mono">
+                          {sc.label}
+                        </span>
+                        <span className="text-[10px] text-dark-400 truncate w-full mt-0.5 font-mono">
+                          Web Shortcut
+                        </span>
+                        <div className="flex items-center gap-1.5 mt-2">
+                          <a
+                            href={validUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[11px] px-2 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-dark-200"
+                          >
+                            Open
+                          </a>
+                          <button
+                            onClick={() => {
+                              const next = customShortcuts.filter((s) => s.id !== sc.id);
+                              setCustomShortcuts(next);
+                              localStorage.setItem("dp-dashboard-shortcuts", JSON.stringify(next));
+                            }}
+                            className="text-[11px] px-2 py-1 rounded-md bg-dark-700 hover:bg-danger-900/40 text-dark-400 hover:text-danger-300 transition-colors"
+                            title="Remove shortcut"
+                          >
+                            Delete
                           </button>
                         </div>
                       </div>
