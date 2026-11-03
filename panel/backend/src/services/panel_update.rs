@@ -443,6 +443,22 @@ pub async fn start_panel_update(
         // self-update died at the first `curl -sfL` with exit 22, before any
         // binary was swapped. Re-add the prefix at this boundary.
         .env("DOCKPANEL_VERSION", format!("v{}", target_version.trim_start_matches('v')))
+        // Pin the release repo to this fork explicitly. update.sh defaults
+        // its release repo to the fork, but the orchestrator must not rely
+        // on the on-disk script's default: an older update.sh on the box
+        // still hardcodes the upstream repo, and in release mode it
+        // self-refreshes and downloads from that repo. Both variables are
+        // set so the value survives whichever one a given script version
+        // reads (setup.sh uses the same pair). This does NOT rescue an
+        // already-deployed old script's hardcoded `git fetch origin main`
+        // sync — env cannot override a literal in the file — so the fix
+        // only takes full effect once the new script is on disk; the first
+        // update run from an old script still carries that hazard.
+        // DOCKPANEL_UPDATE_REF is deliberately not set here: the release
+        // path does not choose a branch, and the git sync inside update.sh
+        // resolves the installed ref from the clone itself.
+        .env("DOCKPANEL_RELEASE_REPO", "latifangren/dockpanel")
+        .env("GITHUB_REPO", "latifangren/dockpanel")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());

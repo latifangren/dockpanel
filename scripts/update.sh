@@ -34,6 +34,9 @@ if [ -z "${DOCKPANEL_UPDATE_DETACHED:-}" ] && command -v systemd-run >/dev/null 
             --setenv=INSTALL_FROM_RELEASE="${INSTALL_FROM_RELEASE:-}" \
             --setenv=DOCKPANEL_VERSION="${DOCKPANEL_VERSION:-}" \
             --setenv=DOCKPANEL_NO_SELF_REFRESH="${DOCKPANEL_NO_SELF_REFRESH:-}" \
+            --setenv=GITHUB_REPO="${GITHUB_REPO:-}" \
+            --setenv=DOCKPANEL_RELEASE_REPO="${DOCKPANEL_RELEASE_REPO:-}" \
+            --setenv=DOCKPANEL_UPDATE_REF="${DOCKPANEL_UPDATE_REF:-}" \
             bash "$0" "$@"
     fi
 fi
@@ -171,7 +174,17 @@ API_BIN="/usr/local/bin/dockpanel-api"
 CLI_BIN="/usr/local/bin/dockpanel"
 MCP_BIN="/usr/local/bin/dockpanel-mcp"
 INSTALL_FROM_RELEASE="${INSTALL_FROM_RELEASE:-0}"
-GITHUB_REPO="ovexro/dockpanel"
+# Fork default: release binaries and the frontend tarball are fetched from
+# THIS fork's releases, never upstream's — the same pattern setup.sh uses
+# (GITHUB_REPO + DOCKPANEL_RELEASE_REPO, fork default). Upstream binaries
+# do not carry the fork's backend fields (e.g. the `lite` branding flag),
+# so an update from upstream releases silently restores the full hosting UI.
+# DOCKPANEL_RELEASE_REPO overrides the release source explicitly — setting
+# it to ovexro/dockpanel knowingly accepts upstream binaries, with that
+# caveat. GITHUB_REPO is kept as the base the release repo defaults from,
+# exactly as in setup.sh.
+GITHUB_REPO="${GITHUB_REPO:-latifangren/dockpanel}"
+DOCKPANEL_RELEASE_REPO="${DOCKPANEL_RELEASE_REPO:-$GITHUB_REPO}"
 
 # ── Mode detection (must run BEFORE self-refresh) ─────────────────────────
 # Self-refresh is gated on INSTALL_FROM_RELEASE=1, so the auto-detect that
@@ -218,10 +231,10 @@ fi
 # SSH-operator flow keeps self-refresh on by default.
 if [ "${SELF_REFRESHED:-0}" != "1" ] && [ "$INSTALL_FROM_RELEASE" = "1" ] \
    && [ "${DOCKPANEL_NO_SELF_REFRESH:-0}" != "1" ]; then
-    LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null \
+    LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${DOCKPANEL_RELEASE_REPO}/releases/latest" 2>/dev/null \
         | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)
     if [ -n "$LATEST_TAG" ]; then
-        REMOTE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${LATEST_TAG}/scripts/update.sh"
+        REMOTE_URL="https://raw.githubusercontent.com/${DOCKPANEL_RELEASE_REPO}/${LATEST_TAG}/scripts/update.sh"
         TMP=$(mktemp)
         if curl -fsSL "$REMOTE_URL" -o "$TMP" 2>/dev/null && [ -s "$TMP" ]; then
             # Compare to current to avoid an unnecessary re-exec on every run
@@ -249,7 +262,7 @@ echo ""
 echo -e "${GREEN}${BOLD}DockPanel Updater${NC}"
 echo ""
 
-# ── Sync repo to origin/main ──────────────────────────────────────────────
+# ── Sync repo to the installed ref ────────────────────────────────────────
 _dockpanel_stage="sync-repo"
 # Both modes need a fresh tree: the canonical systemd unit
 # (panel/agent/dockpanel-agent.service), nginx templates, install-agent.sh,
@@ -259,17 +272,30 @@ _dockpanel_stage="sync-repo"
 # v2.8.14 upgrade-path test (RuntimeDirectory=dockpanel and /var/cache/nginx
 # in ReadWritePaths never reached the deployed unit). v2.8.15.
 #
-# `git pull --ff-only` doesn't cover installs cloned with `-b vX.Y.Z` (those
-# end up on a detached HEAD with no `main` known locally), so the sync uses
-# `git fetch origin main` + `git reset --hard FETCH_HEAD` to forcibly track
-# main. Local edits to /opt/dockpanel are unsupported (it's a deploy
+# The sync tracks the ref this install actually runs on, never `main` by
+# default: every fork change lives on dev-muse-alpine, and resetting a fork
+# install to origin/main would redeploy upstream units, templates and
+# frontend from the wrong tree. The installed ref is read from the clone's
+# own HEAD; DOCKPANEL_UPDATE_REF overrides it explicitly (e.g. to pin an
+# update to a release branch). A detached HEAD with no override is a hard
+# stop — falling back to main would silently do exactly the wrong thing.
+# Local edits to /opt/dockpanel are unsupported (it's a deploy
 # artifact, not a working tree) — `git stash` captures any incidental drift
 # in case anyone wants to inspect it post-upgrade.
 if [ -d "$REPO_DIR/.git" ]; then
-    log "Syncing repo to latest origin/main..."
+    if [ -n "${DOCKPANEL_UPDATE_REF:-}" ]; then
+        SYNC_REF="$DOCKPANEL_UPDATE_REF"
+    else
+        SYNC_REF="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    fi
+    if [ -z "$SYNC_REF" ] || [ "$SYNC_REF" = "HEAD" ]; then
+        error "Cannot determine the installed branch (detached HEAD) and DOCKPANEL_UPDATE_REF is unset — refusing to sync; will not fall back to main. Set DOCKPANEL_UPDATE_REF=<branch> to update explicitly."
+        exit 1
+    fi
+    log "Syncing repo to latest origin/$SYNC_REF (installed ref; DOCKPANEL_UPDATE_REF overrides)..."
     (cd "$REPO_DIR" && {
         git stash -q 2>/dev/null || true
-        if git fetch --depth=1 origin main 2>/dev/null; then
+        if git fetch --depth=1 origin "$SYNC_REF" 2>/dev/null; then
             git reset --hard FETCH_HEAD 2>&1 | tail -1 >/dev/null || true
         else
             log "Warning: git fetch failed — deploying from existing on-disk source"
@@ -361,17 +387,38 @@ if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
         case "$RELEASE_TAG" in
             [0-9]*) RELEASE_TAG="v$RELEASE_TAG" ;;
         esac
-        log "Pinned release: $RELEASE_TAG (DOCKPANEL_VERSION)"
+        # Fail closed on a pinned tag that does not exist in the fork repo
+        # (setup.sh:resolve_release_tag does the same check): the panel's
+        # "available version" snapshot may name an upstream release the fork
+        # has never published, and downloading it would install upstream
+        # binaries. Check the tag before any download, with the remedy.
+        if ! curl --retry 2 --retry-delay 2 -sf "https://api.github.com/repos/${DOCKPANEL_RELEASE_REPO}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            error "Release ${RELEASE_TAG} does not exist in ${DOCKPANEL_RELEASE_REPO}."
+            if [ "$DOCKPANEL_RELEASE_REPO" != "ovexro/dockpanel" ]; then
+                error "Publish a fork release first: add a CHANGELOG.md entry, then push a v* tag — .github/workflows/release.yml builds the musl binaries + frontend tarball."
+                error "Or, knowingly install upstream binaries: DOCKPANEL_RELEASE_REPO=ovexro/dockpanel (the panel will lack fork backend fields such as the lite branding flag)."
+            else
+                error "Check https://github.com/${DOCKPANEL_RELEASE_REPO}/releases"
+            fi
+            exit 1
+        fi
+        log "Pinned release: $RELEASE_TAG (DOCKPANEL_VERSION, from ${DOCKPANEL_RELEASE_REPO})"
     else
-        log "Fetching latest release..."
-        RELEASE_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+        log "Fetching latest release from ${DOCKPANEL_RELEASE_REPO}..."
+        RELEASE_TAG=$(curl -sf "https://api.github.com/repos/${DOCKPANEL_RELEASE_REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
         if [ -z "$RELEASE_TAG" ]; then
-            error "Could not determine latest release. Check https://github.com/${GITHUB_REPO}/releases"
+            error "No releases found in ${DOCKPANEL_RELEASE_REPO}."
+            if [ "$DOCKPANEL_RELEASE_REPO" != "ovexro/dockpanel" ]; then
+                error "Publish a fork release first: add a CHANGELOG.md entry, then push a v* tag — .github/workflows/release.yml builds the musl binaries + frontend tarball."
+                error "Or, knowingly install upstream binaries: DOCKPANEL_RELEASE_REPO=ovexro/dockpanel (the panel will lack fork backend fields such as the lite branding flag)."
+            else
+                error "Check https://github.com/${DOCKPANEL_RELEASE_REPO}/releases"
+            fi
             exit 1
         fi
         log "Latest release: $RELEASE_TAG"
     fi
-    BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
+    BASE_URL="https://github.com/${DOCKPANEL_RELEASE_REPO}/releases/download/${RELEASE_TAG}"
 
     # Verify every downloaded asset against the release's checksums.txt before
     # installing it — parity with scripts/agent-self-update.sh. The release ships
@@ -645,6 +692,130 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# ── Refresh monitoring scripts + monitor/AList units ─────────────────────
+# setup.sh installs these (install_monitoring_scripts + install_alist), but
+# update.sh never refreshed them: after an update the monitor scripts in
+# /usr/local/bin and the monitor/AList unit files stayed at whatever the
+# install-time versions were, so monitoring/AList fixes never reached an
+# existing install. This refresh runs after the git sync above, so it reads
+# the freshly synced tree, and beside the unit redeploy above, so the
+# daemon-reload in the deploy stage picks the refreshed units up.
+#
+# Scope is deliberately narrow, mirroring setup.sh file for file:
+#   * the two monitoring scripts (dockpanel-hwinfo.py,
+#     dockpanel-docker-monitor.py) copied to /usr/local/bin;
+#   * the docker-monitor + AList unit files for this box's init system.
+# It never enables or starts a service that was not already there, never
+# downloads the AList binary, and never touches the AList admin password
+# or its storage bootstrap (install_alist owns those; re-running them on
+# every update could rotate the password or disturb storage config).
+# A unit file is refreshed only if it already exists on disk; a missing
+# source file in the tree warns loudly and keeps the installed copy, the
+# same way setup.sh's install_monitoring_scripts does. On a release
+# install with no repo tree the sources are simply absent, so the same
+# warn-and-keep path applies. Nothing here is fatal: a stale monitor must
+# never abort an update.
+refresh_monitoring_and_alist() {
+    local init="unknown"
+    if [ -d /run/systemd/system ]; then
+        init="systemd"
+    elif command -v rc-service >/dev/null 2>&1; then
+        init="openrc"
+    fi
+
+    # Monitoring scripts — both init systems, same two files setup.sh installs.
+    if [ -f "$SCRIPT_DIR/dockpanel-hwinfo.py" ]; then
+        cp "$SCRIPT_DIR/dockpanel-hwinfo.py" /usr/local/bin/dockpanel-hwinfo
+        chmod 755 /usr/local/bin/dockpanel-hwinfo
+    else
+        warn "dockpanel-hwinfo.py not found in $SCRIPT_DIR — keeping installed hardware-info script"
+    fi
+    if [ -f "$SCRIPT_DIR/dockpanel-docker-monitor.py" ]; then
+        cp "$SCRIPT_DIR/dockpanel-docker-monitor.py" /usr/local/bin/dockpanel-docker-monitor
+        chmod 755 /usr/local/bin/dockpanel-docker-monitor
+    else
+        warn "dockpanel-docker-monitor.py not found in $SCRIPT_DIR — keeping installed monitor script"
+    fi
+
+    case "$init" in
+        systemd)
+            # The docker-monitor unit has no repo file: setup.sh writes it
+            # from a heredoc in create_services_systemd. The same text is
+            # reproduced here so an update refreshes it too; keep the two
+            # in sync when the unit changes.
+            if [ -f /etc/systemd/system/dockpanel-docker-monitor.service ]; then
+                cat > /etc/systemd/system/dockpanel-docker-monitor.service << 'DOCKER_MON_EOF'
+[Unit]
+Description=DockPanel Docker Container Metrics Monitor
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dockpanel-docker-monitor
+Restart=always
+RestartSec=5
+MemoryMax=64M
+# /run/dockpanel must exist before the first poll: the script creates it
+# itself, but only after a successful Docker call, so a box whose Docker
+# is slow to start served 404s until the first success for no good reason.
+RuntimeDirectory=dockpanel
+RuntimeDirectoryMode=0755
+# No User= on purpose: the script must read /var/run/docker.sock, whose
+# group varies by distribution, and a process that can talk to the Docker
+# socket is root-equivalent anyway (container mounts); a dedicated user
+# would buy no isolation and would break the monitor on boxes where the
+# socket group is not what the installer guessed. The agent runs as root too.
+
+[Install]
+WantedBy=multi-user.target
+DOCKER_MON_EOF
+                chmod 644 /etc/systemd/system/dockpanel-docker-monitor.service
+                log "Refreshed dockpanel-docker-monitor.service"
+            fi
+            if [ -f /etc/systemd/system/alist.service ] && [ -f "$SCRIPT_DIR/systemd/alist.service" ]; then
+                cp "$SCRIPT_DIR/systemd/alist.service" /etc/systemd/system/alist.service
+                chmod 644 /etc/systemd/system/alist.service
+                log "Refreshed alist.service"
+            fi
+            # Restart only services already running, so the refreshed
+            # script/unit actually takes effect; never start a stopped one.
+            if systemctl is-active --quiet dockpanel-docker-monitor.service 2>/dev/null; then
+                systemctl restart dockpanel-docker-monitor.service 2>/dev/null \
+                    || warn "dockpanel-docker-monitor restart failed — refreshed script/unit applies at next start"
+            fi
+            if systemctl is-active --quiet alist.service 2>/dev/null; then
+                systemctl restart alist.service 2>/dev/null \
+                    || warn "alist restart failed — refreshed unit applies at next start"
+            fi
+            ;;
+        openrc)
+            if [ -f /etc/init.d/dockpanel-docker-monitor ] && [ -f "$SCRIPT_DIR/openrc/dockpanel-docker-monitor" ]; then
+                cp "$SCRIPT_DIR/openrc/dockpanel-docker-monitor" /etc/init.d/dockpanel-docker-monitor
+                chmod 755 /etc/init.d/dockpanel-docker-monitor
+                log "Refreshed /etc/init.d/dockpanel-docker-monitor"
+            fi
+            if [ -f /etc/init.d/alist ] && [ -f "$SCRIPT_DIR/openrc/alist" ]; then
+                cp "$SCRIPT_DIR/openrc/alist" /etc/init.d/alist
+                chmod 755 /etc/init.d/alist
+                log "Refreshed /etc/init.d/alist"
+            fi
+            if rc-service dockpanel-docker-monitor status >/dev/null 2>&1; then
+                rc-service dockpanel-docker-monitor restart >/dev/null 2>&1 \
+                    || warn "dockpanel-docker-monitor restart failed — refreshed script applies at next start"
+            fi
+            if rc-service alist status >/dev/null 2>&1; then
+                rc-service alist restart >/dev/null 2>&1 || rc-service alist start >/dev/null 2>&1 \
+                    || warn "alist restart failed — refreshed init script applies at next start"
+            fi
+            ;;
+        *)
+            warn "Init system not recognised (no systemd, no OpenRC) — monitoring scripts refreshed, unit files left untouched"
+            ;;
+    esac
+}
+refresh_monitoring_and_alist
 
 # ── Update nginx frontend path if needed ──────────────────────────────────
 if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
