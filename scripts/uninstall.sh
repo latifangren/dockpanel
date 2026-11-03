@@ -40,21 +40,29 @@ fi
 
 echo ""
 
-# Stop and remove agent service
-echo -e "${GREEN}[+]${NC} Removing agent service..."
-systemctl stop dockpanel-agent 2>/dev/null || true
-systemctl disable dockpanel-agent 2>/dev/null || true
-rm -f /etc/systemd/system/dockpanel-agent.service
+# Stop and remove services (systemd and OpenRC)
+echo -e "${GREEN}[+]${NC} Stopping and removing services..."
+for svc in dockpanel-agent dockpanel-api dockpanel-docker-monitor alist; do
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop "$svc" 2>/dev/null || true
+        systemctl disable "$svc" 2>/dev/null || true
+    fi
+    if command -v rc-service >/dev/null 2>&1; then
+        rc-service "$svc" stop 2>/dev/null || true
+        rc-update del "$svc" default 2>/dev/null || true
+    fi
+    rm -f "/etc/systemd/system/${svc}.service"
+    rm -f "/etc/init.d/${svc}"
+done
+
+# Remove binaries
 rm -f /usr/local/bin/dockpanel-agent
-
-# Stop and remove API service
-echo -e "${GREEN}[+]${NC} Removing API service..."
-systemctl stop dockpanel-api 2>/dev/null || true
-systemctl disable dockpanel-api 2>/dev/null || true
-rm -f /etc/systemd/system/dockpanel-api.service
 rm -f /usr/local/bin/dockpanel-api
+rm -f /usr/local/bin/dockpanel-docker-monitor
+rm -f /usr/local/bin/dockpanel-hwinfo
+rm -f /usr/local/bin/alist
 
-systemctl daemon-reload 2>/dev/null || true
+command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload 2>/dev/null || true
 
 # Remove PostgreSQL container and volume
 if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -c "^dockpanel-postgres$" >/dev/null; then
@@ -79,21 +87,25 @@ done
 
 # Remove nginx config
 echo -e "${GREEN}[+]${NC} Removing nginx config..."
+rm -f /etc/nginx/http.d/dockpanel-panel.conf
 rm -f /etc/nginx/sites-enabled/dockpanel-panel.conf
 rm -f /etc/nginx/conf.d/dockpanel-panel.conf
-nginx -t > /dev/null 2>&1 && (nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null) || true
+nginx -t > /dev/null 2>&1 && (nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null || rc-service nginx reload 2>/dev/null) || true
 
 # Remove CLI binary
 echo -e "${GREEN}[+]${NC} Removing CLI binary..."
 rm -f /usr/local/bin/dockpanel
 
-# Remove directories
+# Remove directories and data
 echo -e "${GREEN}[+]${NC} Removing data directories..."
 rm -rf /etc/dockpanel
 rm -rf /var/run/dockpanel
 rm -rf /var/backups/dockpanel
 rm -rf /var/lib/dockpanel
+rm -rf /var/lib/alist
 rm -rf /var/www/acme
+rm -f /var/log/dockpanel-*.log
+rm -f /var/log/alist.log
 
 # Remove tmpfiles.d config
 rm -f /etc/tmpfiles.d/dockpanel.conf

@@ -11,8 +11,16 @@ echo "=== Post-deploy health check ==="
 
 # Check services are active
 echo -n "Services: "
-AGENT=$(systemctl is-active dockpanel-agent 2>/dev/null)
-API=$(systemctl is-active dockpanel-api 2>/dev/null)
+if command -v systemctl >/dev/null 2>&1; then
+  AGENT=$(systemctl is-active dockpanel-agent 2>/dev/null || echo "inactive")
+  API=$(systemctl is-active dockpanel-api 2>/dev/null || echo "inactive")
+elif command -v rc-service >/dev/null 2>&1; then
+  AGENT=$(rc-service dockpanel-agent status 2>/dev/null | grep -qi "started" && echo "active" || echo "inactive")
+  API=$(rc-service dockpanel-api status 2>/dev/null | grep -qi "started" && echo "active" || echo "inactive")
+else
+  AGENT="unknown"
+  API="unknown"
+fi
 
 if [ "$AGENT" = "active" ] && [ "$API" = "active" ]; then
   echo -e "${GREEN}agent=active api=active${NC}"
@@ -26,7 +34,11 @@ sleep 2
 
 # Check for errors/panics in logs
 echo -n "Runtime errors: "
-ERRORS=$(journalctl -u dockpanel-agent -u dockpanel-api --since "30 sec ago" 2>/dev/null | grep -ciE "error|panic|fatal" || true)
+if command -v journalctl >/dev/null 2>&1; then
+  ERRORS=$(journalctl -u dockpanel-agent -u dockpanel-api --since "30 sec ago" 2>/dev/null | grep -ciE "error|panic|fatal" || true)
+else
+  ERRORS=$(tail -n 100 /var/log/dockpanel-agent.log /var/log/dockpanel-api.log 2>/dev/null | grep -ciE "panic|fatal" || true)
+fi
 
 if [ "$ERRORS" -eq 0 ]; then
   echo -e "${GREEN}none${NC}"

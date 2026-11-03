@@ -1,6 +1,8 @@
 #!/bin/bash
 # DockPanel Release Script
-# Builds x86_64 + ARM64 binaries, packages, creates GitHub Release
+# DEPRECATED: Releases for DockPanel Lite are automated via GitHub Actions (.github/workflows/release.yml),
+# which builds static musl binaries (x86_64-unknown-linux-musl and aarch64-unknown-linux-musl) and signs them.
+# To publish a release, tag and push: `git tag -a vX.Y.Z-lite.N -m "..." && git push origin vX.Y.Z-lite.N`
 set -euo pipefail
 
 RED='\033[0;31m'

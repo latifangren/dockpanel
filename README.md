@@ -35,12 +35,13 @@ Proyek ini merupakan fork dari `ovexro/dockpanel` yang dirombak total: membuang 
 - Terminal berbasis browser yang terhubung langsung ke sistem host. Agent berjalan dengan sandbox systemd yang dikembalikan (Fase 1); operasi istimewa memakai jalur `systemd-run` yang disediakan agent, bukan dengan mematikan sandbox.
 
 ### 5. Dirancang Hemat Resource
-- Layanan host (PHP-FPM, Postfix, PowerDNS) tidak diinstall, dan sejak
-  R4/R6 kode backend hosting-nya (sites, mail, DNS, git deploy, PHP,
-  WordPress) sudah dihapus — R1–R7 + perbaikan CLI di-push di HEAD
-  `4fcec629`; R8 (frontend mati + docs) masih working tree saat README
-  ini ditulis dan belum dirilis. Postgres tetap berjalan sebagai
-  container (cap 256 MiB).
+- Layanan host (PHP-FPM, Postfix, PowerDNS) tidak diinstall, dan seluruh kode
+  backend hosting (sites, mail, DNS, git deploy, PHP, WordPress) telah dihapus
+  secara tuntas (R1–R8) pada rilis `v2.242.1-lite.1`. Postgres tetap berjalan
+  sebagai container ringan (cap 256 MiB).
+- Dilengkapi monitor baterai & charger hardware untuk smartphone/edge device,
+  dukungan partisi multi-disk (MicroSD/USB OTG), custom web shortcuts, serta
+  kurasi template katalog ARM64.
 - Sangat ramah untuk perangkat dengan RAM 3 GB – 4 GB.
 
 ---
