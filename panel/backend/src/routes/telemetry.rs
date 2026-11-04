@@ -121,7 +121,7 @@ pub async fn stats(
     AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let by_category: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT category, COUNT(*) FROM telemetry_events \
+        "SELECT category, COUNT(*) AS count FROM telemetry_events \
          GROUP BY category ORDER BY count DESC",
     )
     .fetch_all(&state.db)
@@ -129,7 +129,7 @@ pub async fn stats(
     .map_err(|e| internal_error("telemetry stats", e))?;
 
     let by_type: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT event_type, COUNT(*) FROM telemetry_events \
+        "SELECT event_type, COUNT(*) AS count FROM telemetry_events \
          GROUP BY event_type ORDER BY count DESC",
     )
     .fetch_all(&state.db)
