@@ -1532,9 +1532,10 @@ pub async fn ensure_local_server(db: &sqlx::SqlitePool, agent_token: &str, jwt_s
     let token_hash = crate::helpers::hash_agent_token(agent_token);
     let row: (Uuid,) = sqlx::query_as(
         "INSERT INTO servers (id, user_id, name, agent_token, agent_token_hash, status, is_local) \
-         VALUES (gen_random_uuid(), $1, 'This Server', $2, $3, 'online', true) \
+         VALUES ($1, $2, 'This Server', $3, $4, 'online', true) \
          RETURNING id",
     )
+    .bind(Uuid::new_v4())
     .bind(user_id)
     .bind(&agent_token_enc)
     .bind(&token_hash)

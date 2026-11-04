@@ -313,7 +313,7 @@ pub async fn list_all_backups(
     //   written without joining that table.
     // - Database backups: server_id nullable on table; falls through to local via LEFT JOIN.
     // - Volume backups: server_id nullable on table.
-    let cte = "WITH unified AS ( \
+    let cte = "WITH unified(id, kind, resource_id, resource_name, filename, size_bytes, created_at, server_id, encrypted, uploaded, extra_type) AS ( \
          SELECT db.id, 'database', db.database_id, db.db_name, \
                 db.filename, db.size_bytes, db.created_at, db.server_id, \
                 db.encrypted, db.uploaded, db.db_type \
@@ -485,16 +485,18 @@ pub async fn health(
     let mut sla_unavailable = false;
     let (sla_verified, sla_failed, sla_pending): (i64, i64, i64) = sqlx::query_as(
         "WITH all_backups AS ( \
-            SELECT id, created_at, server_id, 'database' FROM database_backups \
+            SELECT id, created_at, server_id, 'database' AS kind FROM database_backups \
             UNION ALL \
-            SELECT id, created_at, server_id, 'volume' FROM volume_backups \
+            SELECT id, created_at, server_id, 'volume' AS kind FROM volume_backups \
          ), recent AS ( \
             SELECT * FROM all_backups ORDER BY created_at DESC LIMIT $1 \
          ), latest_verif AS ( \
-            SELECT DISTINCT ON (bv.backup_type, bv.backup_id) bv.backup_type, bv.backup_id, bv.status \
-            FROM backup_verifications bv \
-            JOIN recent r ON r.id = bv.backup_id AND r.kind = bv.backup_type \
-            ORDER BY bv.backup_type, bv.backup_id, bv.created_at DESC \
+            SELECT backup_type, backup_id, status FROM ( \
+                SELECT bv.backup_type, bv.backup_id, bv.status, \
+                       ROW_NUMBER() OVER (PARTITION BY bv.backup_type, bv.backup_id ORDER BY bv.created_at DESC) AS rn \
+                FROM backup_verifications bv \
+                JOIN recent r ON r.id = bv.backup_id AND r.kind = bv.backup_type \
+            ) WHERE rn = 1 \
          ) \
          SELECT \
             COUNT(*) FILTER (WHERE lv.status = 'passed') AS verified, \
@@ -1596,7 +1598,7 @@ pub async fn storage_history(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     // Query system_logs for 'backup_storage' entries, aggregate daily totals over last 30 days
     let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DATE(created_at)::TEXT as day, message \
+        "SELECT DATE(created_at) AS day, message \
          FROM system_logs \
          WHERE source = 'backup_storage' AND created_at > datetime('now', '-30 days') \
          ORDER BY created_at ASC"

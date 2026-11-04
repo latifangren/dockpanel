@@ -570,14 +570,13 @@ pub async fn fleet_overview(
     // latest metrics still aggregate per server.
     let rows: Vec<(uuid::Uuid, String, Option<String>, i64, i64, i64, Option<f32>, Option<f32>, Option<f32>)> = sqlx::query_as(
         "SELECT s.id, s.name, s.ip_address, \
-         COALESCE(a.firing, 0) AS firing_alerts, \
+         COALESCE((SELECT COUNT(*) FROM alerts WHERE server_id = s.id AND status = 'firing'), 0) AS firing_alerts, \
          0 AS site_count, \
-         COALESCE(d.db_count, 0) AS db_count, \
-         m.cpu_pct, m.mem_pct, m.disk_pct \
+         COALESCE((SELECT COUNT(*) FROM databases WHERE server_id = s.id), 0) AS db_count, \
+         (SELECT cpu_pct FROM metrics_history WHERE server_id = s.id ORDER BY created_at DESC LIMIT 1) AS cpu_pct, \
+         (SELECT mem_pct FROM metrics_history WHERE server_id = s.id ORDER BY created_at DESC LIMIT 1) AS mem_pct, \
+         (SELECT disk_pct FROM metrics_history WHERE server_id = s.id ORDER BY created_at DESC LIMIT 1) AS disk_pct \
          FROM servers s \
-         LEFT JOIN LATERAL (SELECT COUNT(*) AS firing FROM alerts WHERE server_id = s.id AND status = 'firing') a ON true \
-         LEFT JOIN LATERAL (SELECT COUNT(*) AS db_count FROM databases WHERE server_id = s.id) d ON true \
-         LEFT JOIN LATERAL (SELECT cpu_pct, mem_pct, disk_pct FROM metrics_history WHERE server_id = s.id ORDER BY created_at DESC LIMIT 1) m ON true \
          ORDER BY s.name",
     )
     .fetch_all(&state.db)

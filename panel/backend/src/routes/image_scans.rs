@@ -289,12 +289,15 @@ pub async fn list_recent(
 
     let rows: Vec<(String, String, i32, i32, i32, i32, i32, serde_json::Value, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
-            "SELECT DISTINCT ON (image) \
-                image, scanner, critical_count, high_count, medium_count, low_count, \
+            "SELECT image, scanner, critical_count, high_count, medium_count, low_count, \
                 unknown_count, vulnerabilities, scanned_at \
-             FROM image_scan_findings \
-             WHERE server_id = $1 \
-             ORDER BY image, scanned_at DESC",
+             FROM ( \
+                SELECT image, scanner, critical_count, high_count, medium_count, low_count, \
+                       unknown_count, vulnerabilities, scanned_at, \
+                       ROW_NUMBER() OVER (PARTITION BY image ORDER BY scanned_at DESC) AS rn \
+                FROM image_scan_findings WHERE server_id = $1 \
+             ) WHERE rn = 1 \
+             ORDER BY image",
         )
         .bind(server_id)
         .fetch_all(&state.db)

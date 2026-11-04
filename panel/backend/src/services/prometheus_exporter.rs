@@ -32,12 +32,14 @@ fn render_info(out: &mut String) {
 
 async fn render_system(out: &mut String, pool: &SqlitePool) {
     let rows: Vec<(uuid::Uuid, String, f32, f32, f32)> = sqlx::query_as(
-        "SELECT DISTINCT ON (m.server_id) m.server_id, s.name, \
-                m.cpu_pct, m.mem_pct, m.disk_pct \
-         FROM metrics_history m \
-         JOIN servers s ON s.id = m.server_id \
-         WHERE m.server_id IS NOT NULL \
-         ORDER BY m.server_id, m.created_at DESC",
+        "SELECT server_id, name, cpu_pct, mem_pct, disk_pct FROM ( \
+            SELECT m.server_id, s.name, m.cpu_pct, m.mem_pct, m.disk_pct, \
+                   ROW_NUMBER() OVER (PARTITION BY m.server_id ORDER BY m.created_at DESC) AS rn \
+            FROM metrics_history m \
+            JOIN servers s ON s.id = m.server_id \
+            WHERE m.server_id IS NOT NULL \
+         ) WHERE rn = 1 \
+         ORDER BY server_id",
     )
     .fetch_all(pool)
     .await
@@ -67,14 +69,17 @@ async fn render_system(out: &mut String, pool: &SqlitePool) {
 async fn render_gpu(out: &mut String, pool: &SqlitePool) {
     let rows: Vec<(uuid::Uuid, String, i16, f32, f32, f32, Option<f32>, Option<f32>)> =
         sqlx::query_as(
-            "SELECT DISTINCT ON (g.server_id, g.gpu_index) \
-                    g.server_id, s.name, g.gpu_index, \
-                    g.utilization_pct, g.memory_used_mb, g.memory_total_mb, \
-                    g.temperature_c, g.power_draw_w \
-             FROM gpu_metrics_history g \
-             JOIN servers s ON s.id = g.server_id \
-             WHERE g.server_id IS NOT NULL \
-             ORDER BY g.server_id, g.gpu_index, g.created_at DESC",
+            "SELECT server_id, name, gpu_index, utilization_pct, memory_used_mb, memory_total_mb, \
+                    temperature_c, power_draw_w FROM ( \
+                SELECT g.server_id, s.name, g.gpu_index, \
+                       g.utilization_pct, g.memory_used_mb, g.memory_total_mb, \
+                       g.temperature_c, g.power_draw_w, \
+                       ROW_NUMBER() OVER (PARTITION BY g.server_id, g.gpu_index ORDER BY g.created_at DESC) AS rn \
+                FROM gpu_metrics_history g \
+                JOIN servers s ON s.id = g.server_id \
+                WHERE g.server_id IS NOT NULL \
+             ) WHERE rn = 1 \
+             ORDER BY server_id, gpu_index",
         )
         .fetch_all(pool)
         .await

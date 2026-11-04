@@ -153,7 +153,7 @@ pub async fn migration_status(
 
     let mig: Option<(String, String, String, i32, Option<String>)> = sqlx::query_as(
         "SELECT container_name, status, COALESCE(error_message, ''), progress_pct, \
-         CASE WHEN completed_at IS NOT NULL THEN to_char(completed_at, 'YYYY-MM-DD HH24:MI:SS') END \
+         CASE WHEN completed_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M:%S', completed_at) END \
          FROM app_migrations WHERE id = $1"
     )
     .bind(id)
