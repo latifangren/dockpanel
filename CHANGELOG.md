@@ -4,6 +4,19 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.242.1-lite.4]
+
+### Fix runtime errors on SQLite: purge remaining PostgreSQL-specific SQL (Issue #3)
+
+- **Fix admin setup panic (`services/agent.rs`)**: Replaced PostgreSQL `gen_random_uuid()` with Rust-generated `Uuid::new_v4()` parameter binding, eliminating the panic during local server registration on initial setup.
+- **Fix dashboard fleet overview 500 error (`routes/dashboard.rs`)**: Replaced 3 PostgreSQL `LEFT JOIN LATERAL (...)` subqueries with SQLite-compatible scalar subqueries, resolving `near "SELECT": syntax error`.
+- **Fix backup manager list failure (`routes/backup_orchestrator.rs`)**: Added explicit column signature `WITH unified(id, kind, ...)` to the unified CTE, fixing `no such column: u.kind` (ref `6b824c6a`).
+- **Fix SLA window query (`routes/backup_orchestrator.rs`)**: Rewrote `DISTINCT ON (backup_type, backup_id)` using SQLite-supported `ROW_NUMBER() OVER (...)` window function.
+- **Fix storage history query (`routes/backup_orchestrator.rs`)**: Removed PostgreSQL `DATE(created_at)::TEXT` cast, fixing `unrecognized token: ":"`.
+- **Fix image scan findings query (`routes/image_scans.rs`)**: Rewrote `DISTINCT ON (image)` using `ROW_NUMBER() OVER (...)`.
+- **Fix Prometheus exporter queries (`services/prometheus_exporter.rs`)**: Rewrote 2 `DISTINCT ON` queries (server & GPU metrics) using `ROW_NUMBER() OVER (...)`.
+- **Fix migration timestamp formatting (`routes/app_migrations.rs`)**: Replaced `to_char(...)` with SQLite `strftime(...)`.
+
 ## [2.242.1-lite.3]
 
 ### Fix runtime errors on SQLite: purge PostgreSQL leftovers (Issue #2)
